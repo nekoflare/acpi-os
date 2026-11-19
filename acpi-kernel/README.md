@@ -235,6 +235,13 @@ It preserves the PID and open descriptors except those marked
 `O_CLOEXEC`. The initial exec stack accepts up to 64 argument and
 environment strings sharing 3,488 bytes including terminators.
 
+When a Limine framebuffer is available in 32-bit mode, the kernel exposes
+`/dev/fb0` as a minimal fbdev-compatible device. Programs can open it for
+writing, stream packed XRGB8888 pixels with `write()`, and query fixed
+screen information with `FBIOGET_VSCREENINFO` (`0x4600`) or
+`FBIOGET_FSCREENINFO` (`0x4602`). Writes may be short and advance the open
+file offset. Framebuffer `mmap()` and mode changes are not implemented.
+
 At boot, the kernel starts one
 interactive copy of `hello.elf`. Type your name in the QEMU display window
 and press Enter. The prompt, echoed input, and greeting appear in that

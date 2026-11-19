@@ -91,6 +91,14 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (FBRS, Zero)
     Name (FBCX, Zero)
     Name (FBCY, Zero)
+    Name (FBWD, Zero)
+    Name (FBHT, Zero)
+    Name (FBSZ, Zero)
+    Name (FBIO, Buffer (4096) {})
+    Name (FBVS, Buffer (160) {})
+    Name (FBFS, Buffer (80) {})
+    Name (DEVN, Buffer () {0x64, 0x65, 0x76})
+    Name (FBNM, Buffer () {0x66, 0x62, 0x30})
 
     Method (FINI, 0, NotSerialized)
     {
@@ -101,6 +109,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         FBRS = Local0 / 16
         FBPT = XFBQ (3)
         FBPP = XFBQ (4)
+        FBWD = XFBQ (One)
+        FBHT = XFBQ (2)
+        FBSZ = FBPT * FBHT
         FBCL = XFBQ (5)
         XFBL (FBAD, Zero, Local0 * FBPT)
         Return (One)
@@ -1964,9 +1975,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Method (SYOP, 4, NotSerialized)
     {
-        If (Arg3 & 0x643) { Return (Zero - 30) } // EROFS: write, create, truncate, append
         Local0 = UENT (Arg0, Arg2, Arg1)
         If (Local0 >= Zero - 4095) { Return (Local0) }
+        If ((Arg3 & 3) && XVWD (Local0 + VNTY, Ones) != 12)
+        {
+            Return (Zero - 30) // EROFS
+        }
+        If (Arg3 & 0x640) { Return (Zero - 30) } // create, truncate, append
         If (XVWD (Local0 + VNTY, Ones) != 4 && (Arg3 & 0x10000)) { Return (Zero - 20) } // ENOTDIR
         Local1 = 3
         While (Local1 < FDLM)
@@ -2156,6 +2171,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 Local1 = 0x8124 // regular file, 0444
                 If (VFEX (Local0)) { Local1 = 0x816D } // executable ELF, 0555
                 Local2 = XVWD (Local0 + VNSZ, Ones)
+            If (XVWD (Local0 + VNTY, Ones) == 12)
+            {
+                Local1 = 0x21B6 // framebuffer character device, 0666
+                Local2 = FBSZ
+            }
             }
         }
         Local4 = XADR (USTA)
@@ -2171,6 +2191,24 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Method (SYWR, 4, NotSerialized)
     {
+        If (Arg1 >= 3)
+        {
+            If (!FBAD || FBPP != 4) { Return (Zero - 19) } // ENODEV
+            Local0 = UFDL (Arg0, Arg1)
+            If (!Local0) { Return (Zero - 9) }
+            Local1 = XVWD (Local0, Ones)
+            If (XVWD (Local1 + VNTY, Ones) != 12) { Return (Zero - 9) }
+            Local2 = Arg3
+            If (Local2 > PGSZ) { Local2 = PGSZ }
+            Local3 = XVWD (Local0 + 8, Ones)
+            If (Local3 >= FBSZ) { Return (Zero) }
+            If (Local2 > FBSZ - Local3) { Local2 = FBSZ - Local3 }
+            If (!URNG (Arg0, Arg2, Local2, Zero)) { Return (Zero - 14) }
+            If (!UCOP (Arg0, XADR (FBIO), Arg2, Local2)) { Return (Zero - 14) }
+            XFBL (FBAD + Local3, XADR (FBIO), Local2)
+            XSTQ (Local0 + 8, Local3 + Local2)
+            Return (Local2)
+        }
         If (Arg1 != One && Arg1 != 2) { Return (Zero - 9) } // EBADF
         Local0 = Arg3
         If (Local0 > PGSZ) { Local0 = PGSZ }
@@ -2315,22 +2353,60 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Method (SYIO, 4, NotSerialized)
     {
-        If ((Arg1 & 0xFFFFFFFF) > 2) { Return (Zero - 9) } // EBADF
-        If (Arg2 != 0x5413) { Return (Zero - 25) } // ENOTTY
-        If (!URNG (Arg0, Arg3, 8, WRIT)) { Return (Zero - 14) } // EFAULT
-
-        // TIOCGWINSZ uses four consecutive 16-bit fields. A serial-only
-        // console reports 25 rows and 80 columns with zero pixel dimensions.
-        Local0 = 25 | (80 << 16)
-        If (FBAD) { Local0 = FBRS | (FBCS << 16) }
-        Local1 = Zero
-        While (Local1 < 8)
+        If (Arg1 >= FDLM || (Arg1 >= 3 && !UFDL (Arg0, Arg1)))
         {
-            XSTB (UPHY (Arg0, Arg3 + Local1, WRIT), Local0 & 0xFF)
-            Local0 >>= 8
-            Increment (Local1)
+            Return (Zero - 9) // EBADF
         }
-        Return (Zero)
+        If (Arg2 == 0x5413)
+        {
+            If (!URNG (Arg0, Arg3, 8, WRIT)) { Return (Zero - 14) }
+            Local0 = 25 | (80 << 16)
+            If (FBAD) { Local0 = FBRS | (FBCS << 16) }
+            Local1 = Zero
+            While (Local1 < 8)
+            {
+                XSTB (UPHY (Arg0, Arg3 + Local1, WRIT), Local0 & 0xFF)
+                Local0 >>= 8
+                Increment (Local1)
+            }
+            Return (Zero)
+        }
+        If (Arg1 < 3) { Return (Zero - 25) } // ENOTTY
+        Local0 = UFDL (Arg0, Arg1)
+        If (!Local0 || XVWD (XVWD (Local0, Ones) + VNTY, Ones) != 12)
+        {
+            Return (Zero - 25) // ENOTTY
+        }
+        If (Arg2 == 0x4600)
+        {
+            If (!FBAD || FBPP != 4) { Return (Zero - 19) } // ENODEV
+            If (!URNG (Arg0, Arg3, SizeOf (FBVS), WRIT)) { Return (Zero - 14) }
+            XCLR (XADR (FBVS))
+            XSTQ (XADR (FBVS), FBWD)
+            XSTQ (XADR (FBVS) + 4, FBHT)
+            XSTQ (XADR (FBVS) + 8, FBWD)
+            XSTQ (XADR (FBVS) + 12, FBHT)
+            XSTQ (XADR (FBVS) + 24, 32)
+            XSTQ (XADR (FBVS) + 32, 16 | (8 << 32))
+            XSTQ (XADR (FBVS) + 44, 8 | (8 << 32))
+            XSTQ (XADR (FBVS) + 56, 8 | (8 << 32))
+            If (!UCOP (Arg0, Arg3, XADR (FBVS), SizeOf (FBVS))) { Return (Zero - 14) }
+            Return (Zero)
+        }
+        If (Arg2 == 0x4602)
+        {
+            If (!FBAD || FBPP != 4) { Return (Zero - 19) } // ENODEV
+            If (!URNG (Arg0, Arg3, SizeOf (FBFS), WRIT)) { Return (Zero - 14) }
+            XCLR (XADR (FBFS))
+            XMOV (XADR (FBFS), XADR (FBNM), SizeOf (FBNM))
+            XSTQ (XADR (FBFS) + 24, FBSZ)
+            XSTQ (XADR (FBFS) + 28, 0)
+            XSTQ (XADR (FBFS) + 36, 2)
+            XSTQ (XADR (FBFS) + 48, FBPT)
+            If (!UCOP (Arg0, Arg3, XADR (FBFS), SizeOf (FBFS))) { Return (Zero - 14) }
+            Return (Zero)
+        }
+        Return (Zero - 25) // ENOTTY
     }
 
     // SYSCALL frames use the same register order as the timer frame.
@@ -3411,6 +3487,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             VROT = VNOD (Zero, Zero, Zero, 4)
             If (!VROT) { Return (Zero) }
             If (!RFIN (Arg1, Arg2)) { PUTS ("Invalid initramfs") }
+            Local0 = VNOD (VROT, XADR (DEVN), SizeOf (DEVN), 4)
+            If (Local0) { VNOD (Local0, XADR (FBNM), SizeOf (FBNM), 12) }
             Local0 = VNOD (VROT, XADR (PRNM), SizeOf (PRNM), 4)
             If (!Local0 || !VNOD (Local0, XADR (MINM), SizeOf (MINM), Zero))
             {
