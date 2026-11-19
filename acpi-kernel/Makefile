@@ -73,7 +73,7 @@ copy-aml: $(BUILD)/kernel.aml
 	cp -- "$<" ./kernel.aml
 
 $(BUILD)/linked.ll: $(BUILD)/kernel.aml ../Cargo.toml ../Cargo.lock $(wildcard ../src/*)
-	AMLAOT_CLANG="$(CLANG)" cargo run --quiet --locked --manifest-path ../Cargo.toml -- --emit-llvm --freestanding $< > $@
+	AMLAOT_CLANG="$(CLANG)" cargo run --locked --manifest-path ../Cargo.toml -- --emit-llvm --freestanding $< > $@
 
 $(BUILD)/kernel.bc: $(BUILD)/linked.ll Makefile
 	$(OPT) -force-attribute=noredzone -internalize-public-api-list=aml_context_create_with_host,aml_KERN,aml_interrupt_BRKP \
@@ -251,11 +251,13 @@ $(BASH_BUILD)/doom: $(DOOM_BUILD)/doom.elf
 
 $(DOOM_SHAREWARE_ARCHIVE):
 	mkdir -p "$(DOOM_BUILD)"
-	curl -fL --retry 2 "https://www.gamers.org/pub/idgames/idstuff/doom/doom-1.8.wad.gz" -o "$@.tmp"
+	@printf 'Downloading the Doom shareware WAD\n'
+	curl -fL --progress-bar --retry 2 "https://www.gamers.org/pub/idgames/idstuff/doom/doom-1.8.wad.gz" -o "$@.tmp"
 	printf '%s  %s\n' 58cf6a563b631a47561630afa6276d853c27079342f7969ec3006965da8557a1 "$@.tmp" | sha256sum -c -
 	mv "$@.tmp" "$@"
 
 $(DOOM_SHAREWARE_WAD): $(DOOM_SHAREWARE_ARCHIVE)
+	@printf 'Extracting the Doom shareware WAD\n'
 	gzip -dc "$<" > "$@"
 
 $(DOOM_BUILD)/doom.elf: scripts/build-doom.sh userspace/doomgeneric-asl.c $(MLIBC_SYSROOT)/lib/libc.a Makefile

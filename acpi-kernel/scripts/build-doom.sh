@@ -15,7 +15,8 @@ if [ ! -d "$source/.git" ]; then
     git init -q "$source"
 fi
 if ! git -C "$source" cat-file -e "$revision^{commit}" 2>/dev/null; then
-    git -C "$source" fetch https://github.com/ozkl/doomgeneric.git refs/heads/master
+    printf 'Fetching DoomGeneric source\n'
+    git -C "$source" fetch --progress https://github.com/ozkl/doomgeneric.git refs/heads/master
 fi
 git -C "$source" checkout -q --detach "$revision"
 
@@ -31,7 +32,8 @@ for object in $objects; do
     esac
 done
 
-"$clang" -O2 -march=x86-64 -fno-pie -fno-strict-aliasing -fwrapv \
+printf 'Compiling and linking DoomGeneric\n'
+"$clang" -v -O2 -march=x86-64 -fno-pie -fno-strict-aliasing -fwrapv \
     -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 \
     -Wno-incompatible-pointer-types -Wno-int-conversion \
     -nostdinc -isystem "$sysroot/include" -isystem "$resource/include" \

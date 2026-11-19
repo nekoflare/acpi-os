@@ -33,11 +33,13 @@ archive="$build/bash-$version.tar.gz"
 checksum=9599b22ecd1d5787ad7d3b7bf0c59f312b3396d1e281175dd1f8a4014da621ff
 mkdir -p "$build/obj"
 if [ ! -f "$archive" ]; then
-    curl -fLsS "https://ftp.gnu.org/gnu/bash/bash-$version.tar.gz" -o "$archive.tmp"
+    printf 'Downloading GNU Bash %s\n' "$version"
+    curl -fL --progress-bar "https://ftp.gnu.org/gnu/bash/bash-$version.tar.gz" -o "$archive.tmp"
     printf '%s  %s\n' "$checksum" "$archive.tmp" | sha256sum -c -
     mv "$archive.tmp" "$archive"
 fi
 printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
+printf 'Extracting GNU Bash %s\n' "$version"
 tar -xf "$archive" -C "$build"
 
 # Give the bundled interactive shell the same identity shown by Fastfetch.
@@ -47,10 +49,12 @@ sed -i 's|set_if_not ("PS1", current_user.euid == 0 ? "# " : primary_prompt);|se
     "$build/bash-$version/variables.c"
 
 cd "$build/obj"
+printf 'Configuring GNU Bash %s\n' "$version"
 CC="sh $script --cc" CFLAGS="-O2 -march=x86-64 -fno-pie -std=gnu17" \
     "../bash-$version/configure" --enable-minimal-config --disable-nls \
     --without-bash-malloc --disable-readline --disable-job-control --enable-static-link
 sed -i 's|^#  define PPROMPT .*|#  define PPROMPT "root@localhost:~# "|' \
     "$build/bash-$version/config-bot.h"
+printf 'Compiling GNU Bash %s\n' "$version"
 make bash
 cp bash "$build/bash.elf"

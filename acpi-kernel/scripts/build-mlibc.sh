@@ -34,12 +34,16 @@ if [ ! -d "$src/.git" ]; then
     git -C "$src" remote add origin https://github.com/managarm/mlibc.git
 fi
 if ! git -C "$src" cat-file -e "$revision^{commit}" 2>/dev/null; then
-    git -C "$src" fetch -q --depth 1 origin "$revision"
+    printf 'Fetching mlibc source\n'
+    git -C "$src" fetch --progress --depth 1 origin "$revision"
 fi
 git -C "$src" checkout -q --detach "$revision"
 
+printf 'Configuring mlibc\n'
 CC="$clang" CXX="$clangxx" "$meson" setup --reconfigure "$build/mlibc-build" "$src" \
     --prefix=/usr --libdir=lib -Ddefault_library=static -Dlinux_kernel_headers="$uapi" \
     -Dc_args=-march=x86-64 -Dcpp_args=-march=x86-64
+printf 'Compiling mlibc\n'
 "$meson" compile -C "$build/mlibc-build" -j "$jobs"
+printf 'Installing mlibc into the guest sysroot\n'
 DESTDIR="$build/sysroot" "$meson" install -C "$build/mlibc-build" --no-rebuild

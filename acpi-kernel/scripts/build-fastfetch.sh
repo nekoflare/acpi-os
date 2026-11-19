@@ -14,7 +14,8 @@ revision=8c9d9c0449dd515e0088c4a60a38d2dc40c5ccd0
 
 mkdir -p "$build"
 if [ ! -d "$build/source/.git" ]; then
-    git clone --depth 1 --branch "$version" https://github.com/fastfetch-cli/fastfetch.git "$build/source"
+    printf 'Cloning Fastfetch %s\n' "$version"
+    git clone --progress --depth 1 --branch "$version" https://github.com/fastfetch-cli/fastfetch.git "$build/source"
 fi
 test "$(git -C "$build/source" rev-parse HEAD)" = "$revision"
 patch_dir=$(dirname "$(realpath "$0")")/patches
@@ -44,9 +45,11 @@ for feature in VULKAN WAYLAND XCB_RANDR XRANDR DRM VADRM VAX11 VDPAU GIO DCONF E
     set -- "$@" "-DENABLE_$feature=OFF"
 done
 
+printf 'Configuring Fastfetch %s\n' "$version"
 cmake -S "$build/source" -B "$build/obj" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$build/toolchain.cmake" -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_DISABLE_FIND_PACKAGE_PkgConfig=ON -DBUILD_FLASHFETCH=OFF -DSET_TWEAK=OFF \
     -DMODULE_DISABLE_LOCALIP=ON -DDEFAULT_STRUCTURE=Title:Version:Kernel:CPU:Memory "$@"
+printf 'Compiling Fastfetch %s\n' "$version"
 cmake --build "$build/obj" --target fastfetch --parallel "$jobs"
 cp "$build/obj/fastfetch" "$build/fastfetch.elf"
