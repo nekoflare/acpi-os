@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 static int write_all(int fd, const void *data, size_t size)
@@ -62,6 +63,12 @@ int main(void)
         row[x] = ((rgb >> 16 & 0xFF) << var.red.offset) |
                  ((rgb >> 8 & 0xFF) << var.green.offset) |
                  ((rgb & 0xFF) << var.blue.offset);
+    }
+    if (lseek(fd, (off_t)(var.yres / 2) * fix.line_length, SEEK_SET) < 0) {
+        perror("fbtest: seek to test row");
+        free(row);
+        close(fd);
+        return 1;
     }
     if (write_all(fd, row, (size_t)var.xres * sizeof(*row)) < 0) {
         perror("fbtest: write framebuffer pixels");
