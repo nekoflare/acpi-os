@@ -1,0 +1,11 @@
+--- a/Xtranssock.c
++++ b/Xtranssock.c
+@@ -986,7 +986,7 @@
+ 
+     oldUmask = umask (0);
+ 
+-#ifdef UNIX_DIR
++#if defined(UNIX_DIR) && !defined(AMLAOT_GUEST)
+ #ifdef HAS_STICKY_DIR_BIT
+     mode = 01777;
+ #else

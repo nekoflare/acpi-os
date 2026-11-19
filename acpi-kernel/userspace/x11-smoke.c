@@ -12,7 +12,10 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
+
+#include "x11-cursor-font.h"
 
 enum {
     ROOT_WINDOW = 0x100,
@@ -23,9 +26,17 @@ enum {
     CREATE_WINDOW = 1,
     CHANGE_WINDOW_ATTRIBUTES = 2,
     GET_WINDOW_ATTRIBUTES = 3,
+    DESTROY_WINDOW = 4,
     MAP_WINDOW = 8,
     MAP_SUBWINDOWS = 9,
+    UNMAP_WINDOW = 10,
     CONFIGURE_WINDOW = 12,
+    SEND_EVENT = 25,
+    GRAB_BUTTON = 28,
+    UNGRAB_BUTTON = 29,
+    ALLOW_EVENTS = 35,
+    GRAB_SERVER = 36,
+    UNGRAB_SERVER = 37,
     BACKGROUND_PIXMAP = 1,
     BACKGROUND_PIXEL = 1 << 1,
     BORDER_PIXEL = 1 << 3,
@@ -35,6 +46,7 @@ enum {
     CURSOR_ATTRIBUTE = 1 << 14,
     EXPOSURE_MASK = 1 << 15,
     EVENT_MASK_ATTRIBUTE = 1 << 11,
+    STRUCTURE_NOTIFY = 1 << 17,
     SUBSTRUCTURE_NOTIFY = 1 << 19,
     SUBSTRUCTURE_REDIRECT = 1 << 20,
     ALL_EVENT_BITS = (1 << 25) - 1,
@@ -54,8 +66,8 @@ enum {
     CHANGE_PROPERTY = 18,
     DELETE_PROPERTY = 19,
     GET_PROPERTY = 20,
-    MAX_PROPERTIES = 16,
-    MAX_PROPERTY_BYTES = 256,
+    MAX_PROPERTIES = 256,
+    MAX_PROPERTY_BYTES = 4096,
     GRAB_KEY = 33,
     UNGRAB_KEY = 34,
     QUERY_POINTER = 38,
@@ -68,12 +80,12 @@ enum {
     ALLOC_COLOR = 84,
     CREATE_GLYPH_CURSOR = 94,
     FREE_CURSOR = 95,
-    CURSOR_FONT_GLYPHS = 154,
+    CURSOR_FONT_GLYPHS = sizeof(cursor_glyphs) / sizeof(cursor_glyphs[0]),
     MAX_CURSOR_RESOURCES = 16,
     CREATE_PIXMAP = 53,
     FREE_PIXMAP = 54,
-    MAX_PIXMAPS = 16,
-    MAX_WINDOWS = 8,
+    MAX_PIXMAPS = 64,
+    MAX_WINDOWS = 64,
     CREATE_GC = 55,
     CHANGE_GC = 56,
     CLEAR_AREA = 61,
@@ -85,7 +97,7 @@ enum {
     NO_EXPOSURE = 14,
     FREE_GC = 60,
     LAST_PREDEFINED_ATOM = 68,
-    MAX_DYNAMIC_ATOMS = 64,
+    MAX_DYNAMIC_ATOMS = 256,
     MAX_ATOM_NAME = 255,
     QUERY_EXTENSION = 98,
     LIST_EXTENSIONS = 99,
@@ -115,12 +127,24 @@ struct framebuffer {
     struct fb_fix_screeninfo layout;
 };
 
+enum cursor_resource_type { CURSOR_FONT, GLYPH_CURSOR };
+
+struct cursor_resource {
+    uint32_t id;
+    enum cursor_resource_type type;
+    uint16_t source_glyph, mask_glyph;
+    bool has_mask;
+    uint16_t foreground[3], background[3];
+};
+
 struct window {
     uint32_t id, parent;
     int x, y;
-    uint16_t width, height;
-    uint32_t background, border, events, cursor;
+    uint16_t width, height, border_width;
+    uint32_t background, border, events;
+    struct cursor_resource cursor;
     uint8_t bit_gravity;
+    uint8_t owner;
     bool has_background;
     bool mapped, override_redirect;
 };
@@ -167,7 +191,7 @@ static bool window_view(struct window windows[MAX_WINDOWS], const struct window 
 
 static int open_framebuffer(struct framebuffer *fb)
 {
-    fb->fd = open("/dev/fb0", O_WRONLY);
+    fb->fd = open("/dev/fb0", O_RDWR);
     if (fb->fd < 0)
         return -1;
     if (ioctl(fb->fd, FBIOGET_VSCREENINFO, &fb->mode) ||
@@ -382,7 +406,7 @@ static uint8_t create_window(struct window *window, struct window windows[MAX_WI
     uint32_t class = get_field(request + 22, 2, little_endian);
     uint32_t visual = get_field(request + 24, 4, little_endian);
     if ((request[1] && request[1] != ROOT_DEPTH) || class > 1 ||
-        (visual && visual != ROOT_VISUAL) || get_field(request + 20, 2, little_endian))
+        (visual && visual != ROOT_VISUAL))
         return BAD_MATCH;
 
     uint16_t width = get_field(request + 16, 2, little_endian);
@@ -398,6 +422,7 @@ static uint8_t create_window(struct window *window, struct window windows[MAX_WI
         .y = (int16_t)get_field(request + 14, 2, little_endian),
         .width = width,
         .height = height,
+        .border_width = get_field(request + 20, 2, little_endian),
     };
     return 0;
 }
@@ -916,6 +941,7 @@ static int send_window_notice(int fd, uint8_t type, uint16_t sequence,
         put_field(event + 14, 2, (uint16_t)window->y, little_endian);
         put_field(event + 16, 2, window->width, little_endian);
         put_field(event + 18, 2, window->height, little_endian);
+        put_field(event + 20, 2, window->border_width, little_endian);
         event[22] = window->override_redirect;
     } else {
         event[12] = window->override_redirect;
@@ -923,15 +949,22 @@ static int send_window_notice(int fd, uint8_t type, uint16_t sequence,
     return write_exact(fd, event, sizeof(event));
 }
 
-enum cursor_resource_type { CURSOR_FONT, GLYPH_CURSOR };
-
-struct cursor_resource {
-    uint32_t id;
-    enum cursor_resource_type type;
-    uint16_t source_glyph, mask_glyph;
-    bool has_mask;
-    uint16_t foreground[3], background[3];
-};
+static int send_configure_notify(int fd, uint16_t sequence,
+                                 const struct window *window, bool little_endian)
+{
+    uint8_t event[32] = {22};
+    put_field(event + 2, 2, sequence, little_endian);
+    put_field(event + 4, 4, window->id, little_endian);
+    put_field(event + 8, 4, window->id, little_endian);
+    put_field(event + 12, 4, window->parent, little_endian);
+    put_field(event + 16, 2, (uint16_t)window->x, little_endian);
+    put_field(event + 18, 2, (uint16_t)window->y, little_endian);
+    put_field(event + 20, 2, window->width, little_endian);
+    put_field(event + 22, 2, window->height, little_endian);
+    put_field(event + 24, 2, window->border_width, little_endian);
+    event[26] = window->override_redirect;
+    return write_exact(fd, event, sizeof(event));
+}
 
 static struct cursor_resource *find_cursor_resource(
     struct cursor_resource resources[MAX_CURSOR_RESOURCES], uint32_t id)
@@ -1077,14 +1110,17 @@ static uint8_t apply_window_attributes(struct window *window, uint32_t attribute
             updated.events = value;
             break;
         case CURSOR_ATTRIBUTE:
-            if (value) {
+            if (!value) {
+                updated.cursor = (struct cursor_resource){0};
+            } else {
                 struct cursor_resource *cursor = find_cursor_resource(cursors, value);
                 if (!cursor || cursor->type != GLYPH_CURSOR) {
                     *bad_value = value;
                     return BAD_CURSOR;
                 }
+                // The window keeps the cursor after the client frees its resource ID.
+                updated.cursor = *cursor;
             }
-            updated.cursor = value;
             break;
         }
     }
@@ -1242,26 +1278,243 @@ static int start_x11_client(struct x11_client *client, const struct framebuffer 
     return send_setup(fd, little_endian, fb, client->base);
 }
 
-static int wait_for_x11_input(const struct x11_client clients[2], int keyboard, int listener)
+enum {
+    POINTER_SIZE = 32,
+    DEFAULT_CURSOR_GLYPH = 68, // XC_left_ptr
+    BUTTON_PRESS_EVENT = 4,
+    BUTTON_RELEASE_EVENT = 5,
+    MOTION_NOTIFY_EVENT = 6,
+    BUTTON_PRESS_MASK = 1 << 2,
+    BUTTON_RELEASE_MASK = 1 << 3,
+    POINTER_MOTION_MASK = 1 << 6,
+};
+
+struct pointer {
+    int x, y;
+    uint8_t buttons;
+    uint16_t modifiers;
+    int left, top, width, height;
+    uint32_t saved[POINTER_SIZE][POINTER_SIZE];
+    bool visible;
+};
+
+static bool cursor_bit(const struct cursor_glyph *glyph, int x, int y)
+{
+    x -= glyph->left;
+    y -= glyph->top;
+    return x >= 0 && x < glyph->width && y >= 0 && y < glyph->height &&
+           (glyph->rows[y] & (UINT32_C(0x80000000) >> x));
+}
+
+static uint32_t cursor_rgb(const uint16_t color[3])
+{
+    return ((uint32_t)(color[0] >> 8) << 16) | ((uint32_t)(color[1] >> 8) << 8) |
+           (color[2] >> 8);
+}
+
+static int hide_pointer(const struct framebuffer *fb, struct pointer *pointer)
+{
+    if (!pointer->visible)
+        return 0;
+    for (int row = 0; row < pointer->height; ++row) {
+        if (write_framebuffer_row(fb, pointer->left, pointer->top + row,
+                                  pointer->saved[row], pointer->width))
+            return -1;
+    }
+    pointer->visible = false;
+    return 0;
+}
+
+static int show_pointer(const struct framebuffer *fb, struct pointer *pointer,
+                        const struct cursor_resource *cursor)
+{
+    const struct cursor_glyph *source = &cursor_glyphs[cursor->source_glyph];
+    const struct cursor_glyph *mask = cursor->has_mask ? &cursor_glyphs[cursor->mask_glyph] : source;
+    uint32_t foreground = framebuffer_pixel(fb, cursor_rgb(cursor->foreground));
+    uint32_t background = framebuffer_pixel(fb, cursor_rgb(cursor->background));
+    int left = pointer->x + mask->left;
+    int top = pointer->y + mask->top;
+    int right = left + mask->width;
+    int bottom = top + mask->height;
+    pointer->left = left < 0 ? 0 : left;
+    pointer->top = top < 0 ? 0 : top;
+    if (right > (int)fb->mode.xres)
+        right = fb->mode.xres;
+    if (bottom > (int)fb->mode.yres)
+        bottom = fb->mode.yres;
+    pointer->width = right - pointer->left;
+    pointer->height = 0;
+    if (pointer->width <= 0 || bottom <= pointer->top)
+        return 0;
+
+    for (int y = pointer->top; y < bottom; ++y) {
+        uint32_t *saved = pointer->saved[pointer->height];
+        size_t bytes = pointer->width * sizeof(*saved);
+        off_t offset = (off_t)y * fb->layout.line_length + (off_t)pointer->left * sizeof(*saved);
+        if (lseek(fb->fd, offset, SEEK_SET) != offset || read_exact(fb->fd, saved, bytes) != 1)
+            return -1;
+        uint32_t row[POINTER_SIZE];
+        memcpy(row, saved, bytes);
+        for (int x = 0; x < pointer->width; ++x) {
+            int gx = pointer->left + x - pointer->x;
+            int gy = y - pointer->y;
+            if (cursor_bit(mask, gx, gy))
+                row[x] = cursor_bit(source, gx, gy) ? foreground : background;
+        }
+        ++pointer->height;
+        pointer->visible = true;
+        if (write_framebuffer_row(fb, pointer->left, y, row, pointer->width))
+            return -1;
+    }
+    return 0;
+}
+
+static struct window *pointer_child(struct window windows[MAX_WINDOWS], uint32_t parent,
+                                    int x, int y)
+{
+    for (size_t i = MAX_WINDOWS; i > 0; --i) {
+        struct window *child = &windows[i - 1];
+        struct window_area area;
+        if (child->id && child->parent == parent && window_view(windows, child, &area) &&
+            area.left <= x && x < area.right && area.top <= y && y < area.bottom)
+            return child;
+    }
+    return NULL;
+}
+
+static const struct cursor_resource *pointer_cursor(struct window windows[MAX_WINDOWS],
+                                                    const struct window *root,
+                                                    const struct pointer *pointer)
+{
+    static const struct cursor_resource default_cursor = {
+        .source_glyph = DEFAULT_CURSOR_GLYPH,
+        .mask_glyph = DEFAULT_CURSOR_GLYPH + 1,
+        .has_mask = true,
+        .background = {UINT16_MAX, UINT16_MAX, UINT16_MAX},
+    };
+    const struct cursor_resource *cursor = &default_cursor;
+    const struct window *window = root;
+    while (window) {
+        if (window->cursor.id)
+            cursor = &window->cursor;
+        window = pointer_child(windows, window->id, pointer->x, pointer->y);
+    }
+    return cursor;
+}
+
+static unsigned pointer_state(const struct pointer *pointer)
+{
+    return pointer->modifiers | ((pointer->buttons & 1) << 8) |
+           ((pointer->buttons & 4) << 7) | ((pointer->buttons & 2) << 9);
+}
+
+static int send_pointer_event(struct x11_client clients[2], struct window windows[MAX_WINDOWS],
+                              struct pointer *pointer, uint8_t type, uint8_t detail)
+{
+    unsigned mask = type == MOTION_NOTIFY_EVENT ? POINTER_MOTION_MASK :
+                    type == BUTTON_PRESS_EVENT ? BUTTON_PRESS_MASK : BUTTON_RELEASE_MASK;
+    struct window *target = NULL;
+    struct window *child = pointer_child(windows, ROOT_WINDOW, pointer->x, pointer->y);
+    while (child) {
+        target = child;
+        child = pointer_child(windows, target->id, pointer->x, pointer->y);
+    }
+    struct timespec now = {0};
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    uint32_t time = (uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+    while (true) {
+        struct window_area area = {0};
+        if (target)
+            window_view(windows, target, &area);
+        bool delivered = false;
+        for (unsigned slot = 0; slot < 2; ++slot) {
+            struct x11_client *client = &clients[slot];
+            unsigned events = target ? (target->owner == slot ? target->events : 0)
+                                     : client->root_events;
+            if (client->fd < 0 || !(events & mask))
+                continue;
+            bool le = client->little_endian;
+            uint8_t event[32] = {type, detail};
+            put_field(event + 2, 2, client->sequence, le);
+            put_field(event + 4, 4, time, le);
+            put_field(event + 8, 4, ROOT_WINDOW, le);
+            put_field(event + 12, 4, target ? target->id : ROOT_WINDOW, le);
+            put_field(event + 16, 4, child ? child->id : 0, le);
+            put_field(event + 20, 2, pointer->x, le);
+            put_field(event + 22, 2, pointer->y, le);
+            put_field(event + 24, 2, pointer->x - area.x, le);
+            put_field(event + 26, 2, pointer->y - area.y, le);
+            put_field(event + 28, 2, pointer_state(pointer), le);
+            event[30] = 1;
+            if (write_exact(client->fd, event, sizeof(event)))
+                return -1;
+            delivered = true;
+        }
+        if (delivered || !target)
+            return 0;
+        child = target;
+        target = find_window(windows, target->parent);
+    }
+}
+
+static int move_pointer(int fd, const struct framebuffer *fb, struct x11_client clients[2],
+                        struct window windows[MAX_WINDOWS], struct pointer *pointer)
+{
+    uint8_t record[8];
+    if (read(fd, record, sizeof(record)) != sizeof(record))
+        return 0;
+    int dx = (int16_t)get_field(record, 2, true);
+    int dy = (int16_t)get_field(record + 2, 2, true);
+    int x = pointer->x + dx;
+    int y = pointer->y + dy;
+    pointer->x = x < 0 ? 0 : x >= (int)fb->mode.xres ? (int)fb->mode.xres - 1 : x;
+    pointer->y = y < 0 ? 0 : y >= (int)fb->mode.yres ? (int)fb->mode.yres - 1 : y;
+    if ((dx || dy) && send_pointer_event(clients, windows, pointer, MOTION_NOTIFY_EVENT, 0))
+        return -1;
+    static const uint8_t buttons[] = {1, 3, 2};
+    for (unsigned bit = 0; bit < 3; ++bit) {
+        unsigned mask = 1U << bit;
+        if (!(mask & (pointer->buttons ^ record[4])))
+            continue;
+        uint8_t type = record[4] & mask ? BUTTON_PRESS_EVENT : BUTTON_RELEASE_EVENT;
+        if (send_pointer_event(clients, windows, pointer, type, buttons[bit]))
+            return -1;
+        pointer->buttons ^= mask;
+    }
+    return 0;
+}
+
+static int wait_for_x11_input(const struct x11_client clients[2], int keyboard, int listener, int mouse, struct pointer *pointer)
 {
     struct pollfd descriptors[] = {
         {.fd = clients[0].fd, .events = POLLIN},
         {.fd = clients[1].fd, .events = POLLIN},
         {.fd = keyboard, .events = POLLIN},
         {.fd = listener, .events = POLLIN},
+        {.fd = mouse, .events = POLLIN},
     };
     for (;;) {
-        if (poll(descriptors, 4, -1) < 0) {
+        if (poll(descriptors, 5, -1) < 0) {
             if (errno == EINTR)
                 continue;
             return -1;
         }
         if (descriptors[2].revents & POLLIN) {
             uint8_t event[2];
-            if (read(keyboard, event, sizeof(event)) == sizeof(event) &&
-                event[0] == 1 && event[1] == 0)
-                return 2;
+            if (read(keyboard, event, sizeof(event)) == sizeof(event)) {
+                if (event[0] == 1 && event[1] == 0)
+                    return 2;
+                unsigned key = event[0] & 0x7F;
+                unsigned modifier = key == 0x38 ? 1U << 3 : key == 0x1D ? 1U << 2 :
+                    !event[1] && (key == 0x2A || key == 0x36) ? 1U : 0;
+                if (event[0] & 0x80)
+                    pointer->modifiers &= ~modifier;
+                else
+                    pointer->modifiers |= modifier;
+            }
         }
+        if (descriptors[4].revents & POLLIN)
+            return 4;
         if (descriptors[3].revents & POLLIN)
             return 3;
         for (int i = 0; i < 2; ++i) {
@@ -1273,6 +1526,40 @@ static int wait_for_x11_input(const struct x11_client clients[2], int keyboard, 
     }
 }
 
+static int repaint_desktop(const struct framebuffer *fb, struct window windows[MAX_WINDOWS],
+                           const struct window *root, struct x11_client clients[2])
+{
+    const struct window base = {
+        .width = fb->mode.xres, .height = fb->mode.yres,
+        .background = root->has_background ? root->background : 0,
+        .has_background = true,
+    };
+    if (paint_window(fb, &base))
+        return -1;
+    for (size_t i = 0; i < MAX_WINDOWS; ++i) {
+        struct window *window = &windows[i];
+        struct window_area area;
+        if (!window->id || !window->mapped || !window->has_background ||
+            !window_view(windows, window, &area))
+            continue;
+        struct window visible = *window;
+        visible.x = area.left;
+        visible.y = area.top;
+        visible.width = (uint16_t)(area.right - area.left);
+        visible.height = (uint16_t)(area.bottom - area.top);
+        if (paint_window(fb, &visible))
+            return -1;
+    }
+    for (size_t i = 0; i < MAX_WINDOWS; ++i) {
+        struct window *window = &windows[i];
+        struct x11_client *owner = window->id && window->owner < 2 ? &clients[window->owner] : NULL;
+        if (owner && owner->fd >= 0 && window->mapped && (window->events & EXPOSURE_MASK) &&
+            send_expose(owner->fd, owner->sequence, window, owner->little_endian))
+            return -1;
+    }
+    return 0;
+}
+
 static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, int listener)
 {
     struct x11_client clients[] = {
@@ -1282,12 +1569,19 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
     if (start_x11_client(&clients[0], fb))
         return -1;
 
-    struct window windows[MAX_WINDOWS] = {0};
+    struct window *windows = calloc(MAX_WINDOWS, sizeof(*windows));
     struct graphics_context contexts[16] = {0};
-    struct pixmap pixmaps[MAX_PIXMAPS] = {0};
-    struct atom_table atoms = {0};
-    struct property properties[MAX_PROPERTIES] = {0};
+    struct pixmap *pixmaps = calloc(MAX_PIXMAPS, sizeof(*pixmaps));
+    struct atom_table *atoms = calloc(1, sizeof(*atoms));
+    struct property *properties = calloc(MAX_PROPERTIES, sizeof(*properties));
     struct cursor_resource cursors[MAX_CURSOR_RESOURCES] = {0};
+    if (!windows || !pixmaps || !atoms || !properties) {
+        free(windows);
+        free(pixmaps);
+        free(atoms);
+        free(properties);
+        return -1;
+    }
     struct window root = {.id = ROOT_WINDOW, .width = fb->mode.xres, .height = fb->mode.yres};
     uint32_t focus = 1; // PointerRoot
     uint8_t revert_focus = 0;
@@ -1295,12 +1589,28 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
     int status;
     bool cleared_console = false;
     bool secondary_accepted = false;
+    int mouse = keyboard >= 0 ? open("/dev/mouse", O_RDONLY | O_NONBLOCK) : -1;
+    struct pointer pointer = {0};
+    if (mouse >= 0) {
+        pointer.x = fb->mode.xres / 2;
+        pointer.y = fb->mode.yres / 2;
+    }
     int result = -1;
     for (;;) {
         int slot = 0;
         if (keyboard >= 0) {
+            if (mouse >= 0 && cleared_console && show_pointer(fb, &pointer, pointer_cursor(windows, &root, &pointer)))
+                goto cleanup;
             slot = wait_for_x11_input(clients, keyboard,
-                                     cleared_console && !secondary_accepted ? listener : -1);
+                                     cleared_console && !secondary_accepted ? listener : -1,
+                                     mouse, &pointer);
+            if (hide_pointer(fb, &pointer))
+                goto cleanup;
+            if (slot == 4) {
+                if (move_pointer(mouse, fb, clients, windows, &pointer))
+                    goto cleanup;
+                continue;
+            }
             if (slot == 3) {
                 clients[1].fd = accept(listener, NULL, NULL);
                 if (clients[1].fd >= 0) {
@@ -1373,6 +1683,11 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
             (opcode == GET_KEYBOARD_MAPPING && words != 2) ||
             ((opcode == SET_INPUT_FOCUS || opcode == UNGRAB_KEY) && words != 3) ||
             (opcode == GRAB_KEY && words != 4) ||
+            (opcode == SEND_EVENT && words != 11) ||
+            ((opcode == DESTROY_WINDOW || opcode == UNMAP_WINDOW || opcode == ALLOW_EVENTS) && words != 2) ||
+            (opcode == GRAB_BUTTON && words != 6) ||
+            (opcode == UNGRAB_BUTTON && words != 3) ||
+            ((opcode == GRAB_SERVER || opcode == UNGRAB_SERVER) && words != 1) ||
             (opcode == CREATE_WINDOW && (bytes < 32 || bytes > 92)) ||
             (opcode == QUERY_EXTENSION && words < 2) ||
             (opcode == LIST_EXTENSIONS && words != 1)) {
@@ -1390,7 +1705,9 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
                    opcode == CHANGE_WINDOW_ATTRIBUTES || opcode == CONFIGURE_WINDOW ||
                    opcode == INTERN_ATOM || opcode == GET_ATOM_NAME || opcode == ALLOC_COLOR ||
                    opcode == GET_KEYBOARD_MAPPING || opcode == SET_INPUT_FOCUS ||
-                   opcode == GRAB_KEY || opcode == UNGRAB_KEY) {
+                   opcode == GRAB_KEY || opcode == UNGRAB_KEY ||
+                   opcode == SEND_EVENT || opcode == DESTROY_WINDOW || opcode == UNMAP_WINDOW || opcode == ALLOW_EVENTS ||
+                   opcode == GRAB_BUTTON || opcode == UNGRAB_BUTTON || opcode == GRAB_SERVER || opcode == UNGRAB_SERVER) {
             if (read_exact(fd, request + 4, bytes - 4) != 1)
                 goto cleanup;
         } else {
@@ -1398,7 +1715,8 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
                 goto cleanup;
             if (opcode == NO_OPERATION)
                 continue;
-            if (opcode != LIST_EXTENSIONS && opcode != GET_INPUT_FOCUS && opcode != GET_MODIFIER_MAPPING)
+            if (opcode != LIST_EXTENSIONS && opcode != GET_INPUT_FOCUS && opcode != GET_MODIFIER_MAPPING &&
+                opcode != GRAB_SERVER && opcode != UNGRAB_SERVER && opcode != ALLOW_EVENTS)
                 error = BAD_REQUEST;
         }
 
@@ -1440,6 +1758,7 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
                                                 request + 32, little_endian, cursors, &bad_value);
             if (!error) {
                 *slot = candidate;
+                slot->owner = (uint8_t)(client - clients);
                 const struct window *parent = candidate.parent == ROOT_WINDOW
                     ? &root : find_window(windows, candidate.parent);
                 if ((parent->events & SUBSTRUCTURE_NOTIFY) &&
@@ -1457,12 +1776,117 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
                 error = BAD_LENGTH;
             } else if (opcode == CHANGE_WINDOW_ATTRIBUTES) {
                 error = apply_window_attributes(target, mask, request + 12, little_endian, cursors, &bad_value);
+                if (!error && target != &root && target->mapped &&
+                    (mask & (BACKGROUND_PIXMAP | BACKGROUND_PIXEL)) &&
+                    repaint_desktop(fb, windows, &root, clients))
+                    goto cleanup;
                 if (!error && target == &root)
                     client->root_events = root.events;
-            } else if (mask && (mask != (1 << 6) || get_field(request + 12, 4, little_endian) > 4)) {
-                // The sole child already occupies the top of the stacking order.
+            } else if (mask & ~0x7F) {
                 error = BAD_VALUE;
                 bad_value = mask;
+            } else {
+                const uint8_t *values = request + 12;
+                for (unsigned bit = 0; bit < 7; ++bit) {
+                    if (!(mask & (1U << bit)))
+                        continue;
+                    uint32_t val = get_field(values, 4, little_endian);
+                    values += 4;
+                    if (bit == 0) {
+                        target->x = (int16_t)val;
+                    } else if (bit == 1) {
+                        target->y = (int16_t)val;
+                    } else if (bit == 2) {
+                        if (!val || val > UINT16_MAX) {
+                            error = BAD_VALUE;
+                            bad_value = val;
+                            break;
+                        }
+                        target->width = (uint16_t)val;
+                    } else if (bit == 3) {
+                        if (!val || val > UINT16_MAX) {
+                            error = BAD_VALUE;
+                            bad_value = val;
+                            break;
+                        }
+                        target->height = (uint16_t)val;
+                    } else if (bit == 4) {
+                        if (val > UINT16_MAX) {
+                            error = BAD_VALUE;
+                            bad_value = val;
+                            break;
+                        }
+                        target->border_width = (uint16_t)val;
+                    } else if (bit == 5) {
+                        if (val && val != ROOT_WINDOW && !find_window(windows, val)) {
+                            error = BAD_WINDOW;
+                            bad_value = val;
+                            break;
+                        }
+                    } else if (bit == 6) {
+                        if (val > 4) {
+                            error = BAD_VALUE;
+                            bad_value = val;
+                            break;
+                        }
+                    }
+                }
+                if (!error && opcode == CONFIGURE_WINDOW && target != &root &&
+                    target->mapped && (mask & 0xF)) {
+                    struct x11_client *owner = target->owner < 2 ? &clients[target->owner] : NULL;
+                    if (owner && owner->fd >= 0 && (target->events & STRUCTURE_NOTIFY) &&
+                        send_configure_notify(owner->fd, owner->sequence, target, owner->little_endian))
+                        goto cleanup;
+                    if (repaint_desktop(fb, windows, &root, clients))
+                        goto cleanup;
+                }
+            }
+        } else if (!error && opcode == SEND_EVENT) {
+            uint32_t dest = get_field(request + 4, 4, little_endian);
+            if (dest > 1 && dest != ROOT_WINDOW && !find_window(windows, dest)) {
+                error = BAD_WINDOW;
+                bad_value = dest;
+            } else {
+                struct x11_client *target_client = (client == &clients[0]) ? &clients[1] : &clients[0];
+                if (target_client->fd >= 0) {
+                    uint8_t event[32];
+                    memcpy(event, request + 12, sizeof(event));
+                    event[0] |= 0x80;
+                    put_field(event + 2, 2, target_client->sequence, target_client->little_endian);
+                    if (write_exact(target_client->fd, event, sizeof(event)))
+                        goto cleanup;
+                }
+            }
+        } else if (!error && opcode == DESTROY_WINDOW) {
+            uint32_t id = get_field(request + 4, 4, little_endian);
+            struct window *w = id ? find_window(windows, id) : NULL;
+            if (id != ROOT_WINDOW && !w) {
+                error = BAD_WINDOW;
+                bad_value = id;
+            } else if (w) {
+                bool was_mapped = w->mapped;
+                *w = (struct window){0};
+                if (was_mapped && repaint_desktop(fb, windows, &root, clients))
+                    goto cleanup;
+            }
+        } else if (!error && opcode == UNMAP_WINDOW) {
+            uint32_t id = get_field(request + 4, 4, little_endian);
+            struct window *w = id ? find_window(windows, id) : NULL;
+            if (id != ROOT_WINDOW && !w) {
+                error = BAD_WINDOW;
+                bad_value = id;
+            } else if (w) {
+                w->mapped = false;
+                if (repaint_desktop(fb, windows, &root, clients))
+                    goto cleanup;
+            }
+        } else if (!error && (opcode == GRAB_BUTTON || opcode == UNGRAB_BUTTON)) {
+            uint32_t id = get_field(request + 4, 4, little_endian);
+            if (id != ROOT_WINDOW && (!id || !find_window(windows, id))) {
+                error = BAD_WINDOW;
+                bad_value = id;
+            } else if (opcode == GRAB_BUTTON) {
+                error = BAD_ACCESS;
             }
         } else if (!error && opcode == GET_KEYBOARD_MAPPING) {
             if (request[4] < 8 || !request[5] || (unsigned)request[4] + request[5] > 256) {
@@ -1531,6 +1955,14 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
                 if (gc->depth != ROOT_DEPTH || (gc->planes & 0xFFFFFF) != 0xFFFFFF) {
                     error = BAD_MATCH;
                 } else if (window_view(windows, draw_window, &area)) {
+                    if (keyboard >= 0 && !cleared_console && draw_window->mapped) {
+                        const struct window clear = {
+                            .width = fb->mode.xres, .height = fb->mode.yres, .has_background = true,
+                        };
+                        if (paint_window(fb, &clear))
+                            goto cleanup;
+                        cleared_console = true;
+                    }
                     int draw_result = fill_window_shapes(fb, &area, gc, request + 12, bytes - 12,
                                                          opcode == POLY_FILL_ARC, little_endian);
                     if (draw_result < 0)
@@ -1603,13 +2035,13 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
             } else if (length > MAX_ATOM_NAME) {
                 error = BAD_ALLOC;
             } else {
-                atom = intern_atom(&atoms, request + 8, length, request[1]);
+                atom = intern_atom(atoms, request + 8, length, request[1]);
                 if (!atom && !request[1])
                     error = BAD_ALLOC;
             }
         } else if (!error && opcode == GET_ATOM_NAME) {
             atom = get_field(request + 4, 4, little_endian);
-            if (!atom_valid(&atoms, atom)) {
+            if (!atom_valid(atoms, atom)) {
                 error = BAD_ATOM;
                 bad_value = atom;
             }
@@ -1626,9 +2058,9 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
                 error = BAD_WINDOW;
                 bad_value = id;
             } else if (opcode == CHANGE_PROPERTY) {
-                error = change_property(properties, &atoms, request, bytes, little_endian, &bad_value);
+                error = change_property(properties, atoms, request, bytes, little_endian, &bad_value);
             } else if (opcode == DELETE_PROPERTY) {
-                if (!atom_valid(&atoms, property_atom)) {
+                if (!atom_valid(atoms, property_atom)) {
                     error = BAD_ATOM;
                     bad_value = property_atom;
                 } else {
@@ -1637,7 +2069,7 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
                         *property = (struct property){0};
                 }
             } else {
-                error = check_get_property(&atoms, request, little_endian, &bad_value);
+                error = check_get_property(atoms, request, little_endian, &bad_value);
                 struct property *property = find_property(properties, id, property_atom);
                 uint32_t type = get_field(request + 12, 4, little_endian);
                 if (!error && property && (!type || type == property->type) &&
@@ -1724,7 +2156,7 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
             put_field(reply + 8, 4, atom, little_endian);
         } else if (opcode == GET_ATOM_NAME) {
             size_t length;
-            const void *name = atom_name(&atoms, atom, &length);
+            const void *name = atom_name(atoms, atom, &length);
             size_t padded = (length + 3) & ~(size_t)3;
             reply[0] = 1;
             put_field(reply + 4, 4, padded / 4, little_endian);
@@ -1742,7 +2174,6 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
             }
             put_field(reply + 16, 4, pixel, little_endian);
         } else if (opcode == QUERY_POINTER) {
-            // The guest has no pointer input yet. Start with a stationary pointer at the root origin.
             reply[0] = 1;
             reply[1] = 1; // Same screen
             put_field(reply + 8, 4, ROOT_WINDOW, little_endian);
@@ -1753,18 +2184,14 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
                 y += ancestor->y;
                 ancestor = find_window(windows, ancestor->parent);
             }
-            for (size_t i = MAX_WINDOWS; i > 0; --i) {
-                const struct window *child = &windows[i - 1];
-                struct window_area area;
-                if (child->id && child->parent == geometry->id &&
-                    window_view(windows, child, &area) && area.left <= 0 && area.top <= 0 &&
-                    area.right > 0 && area.bottom > 0) {
-                    put_field(reply + 12, 4, child->id, little_endian);
-                    break;
-                }
-            }
-            put_field(reply + 20, 2, (uint16_t)-x, little_endian);
-            put_field(reply + 22, 2, (uint16_t)-y, little_endian);
+            struct window *child = pointer_child(windows, geometry->id, pointer.x, pointer.y);
+            if (child)
+                put_field(reply + 12, 4, child->id, little_endian);
+            put_field(reply + 16, 2, pointer.x, little_endian);
+            put_field(reply + 18, 2, pointer.y, little_endian);
+            put_field(reply + 20, 2, pointer.x - x, little_endian);
+            put_field(reply + 22, 2, pointer.y - y, little_endian);
+            put_field(reply + 24, 2, pointer_state(&pointer), little_endian);
         } else if (opcode == GET_INPUT_FOCUS) {
             reply[0] = 1;
             reply[1] = revert_focus;
@@ -1821,15 +2248,23 @@ static int serve_x11(int primary, const struct framebuffer *fb, int keyboard, in
             put_field(reply + 14, 2, (uint16_t)geometry->y, little_endian);
             put_field(reply + 16, 2, geometry->width, little_endian);
             put_field(reply + 18, 2, geometry->height, little_endian);
+            put_field(reply + 20, 2, geometry->border_width, little_endian);
         }
         if (write_exact(fd, reply, reply_size))
             goto cleanup;
     }
 cleanup:
+    hide_pointer(fb, &pointer);
+    if (mouse >= 0)
+        close(mouse);
     if (clients[1].fd >= 0)
         close(clients[1].fd);
     for (size_t i = 0; i < MAX_PIXMAPS; ++i)
         free(pixmaps[i].pixels);
+    free(windows);
+    free(pixmaps);
+    free(atoms);
+    free(properties);
     return result;
 }
 

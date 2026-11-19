@@ -2,6 +2,8 @@
 # Build a static Fastfetch against the ACPI kernel's mlibc sysroot.
 set -eu
 
+app_cpu_flags=${APP_CPU_FLAGS:--march=native -mno-amx-tile}
+
 build=$1
 sysroot=$2
 cc=$(command -v "$3")
@@ -34,7 +36,6 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
-set(CMAKE_C_FLAGS_INIT "-DFF_ACPI_MLIBC -march=x86-64 -fno-pie -idirafter \"$uapi\"")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "--ld-path=\"$ld\" -static -nostdlib -no-pie -Wl,-z,separate-loadable-segments \"$sysroot/usr/lib/crt1.o\"")
 set(CMAKE_C_STANDARD_LIBRARIES_INIT "-lc")
 TOOLCHAIN
@@ -47,6 +48,7 @@ done
 
 printf 'Configuring Fastfetch %s\n' "$version"
 cmake -S "$build/source" -B "$build/obj" -G Ninja \
+    -DCMAKE_C_FLAGS="-DFF_ACPI_MLIBC $app_cpu_flags -fno-pie -idirafter \"$uapi\"" \
     -DCMAKE_TOOLCHAIN_FILE="$build/toolchain.cmake" -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_DISABLE_FIND_PACKAGE_PkgConfig=ON -DBUILD_FLASHFETCH=OFF -DSET_TWEAK=OFF \
     -DMODULE_DISABLE_LOCALIP=ON -DDEFAULT_STRUCTURE=Title:Version:Kernel:CPU:Memory "$@"

@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -160,6 +161,18 @@ static int check_unix_stream(void)
     return waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status);
 }
 
+static int check_path_lookups(void)
+{
+    struct stat info;
+    for (unsigned i = 0; i < 512; ++i) {
+        if (stat("/./dev/../missing", &info) != -1 || errno != ENOENT)
+            return -1;
+    }
+    if (stat("/.././dev/../welcome.txt", &info) || !S_ISREG(info.st_mode))
+        return -1;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 1 || strcmp(argv[0], "hello.elf") || !isatty(STDOUT_FILENO))
@@ -170,7 +183,8 @@ int main(int argc, char **argv)
     if (page == MAP_FAILED || page[0] != 0)
         return 1;
     page[0] = 42;
-    if (check_fork(page) || munmap(page, 4096) || check_poll() || check_unix_stream())
+    if (check_fork(page) || munmap(page, 4096) || check_poll() || check_unix_stream() ||
+        check_path_lookups())
         return 1;
 
     if (check_x11() || write_all("X11 setup, geometry, and framebuffer window verified in both byte orders\n"))

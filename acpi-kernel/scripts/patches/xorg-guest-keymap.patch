@@ -1,0 +1,20 @@
+--- a/xkb/ddxLoad.c
++++ b/xkb/ddxLoad.c
+@@ -465,6 +465,17 @@
+     unsigned int provided;
+     XkbComponentNamesRec kccgst = { 0 };
+     char name[PATH_MAX];
++    FILE *guest_keymap = fopen("/xorg-default.xkm", "rb");
++
++    if (guest_keymap) {
++        unsigned missing = XkmReadFile(guest_keymap, need, XkmAllIndicesMask, &xkb);
++        fclose(guest_keymap);
++        if (xkb && !(missing & need))
++            return xkb;
++        if (xkb)
++            XkbFreeKeyboard(xkb, 0, TRUE);
++        return NULL;
++    }
+ 
+     if (XkbRMLVOtoKcCGST(dev, rmlvo, &kccgst)) {
+         provided =

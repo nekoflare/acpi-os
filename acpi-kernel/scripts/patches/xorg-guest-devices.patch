@@ -1,0 +1,75 @@
+--- a/hw/vfb/meson.build
++++ b/hw/vfb/meson.build
+@@ -1,6 +1,7 @@
+ srcs = [
+     'InitInput.c',
+     'InitOutput.c',
++    'amlaot-guest.c',
+     '../../mi/miinitext.c',
+     '../../mi/miinitext.h',
+ ]
+--- a/hw/vfb/InitOutput.c
++++ b/hw/vfb/InitOutput.c
+@@ -103,6 +103,10 @@
+ #endif
+ } vfbScreenInfo, *vfbScreenInfoPtr;
+ 
++void amlaot_xorg_geometry(int *width, int *height);
++void amlaot_xorg_screen(ScreenPtr screen);
++void amlaot_xorg_close_screen(void);
++
+ static int vfbNumScreens;
+ static vfbScreenInfo *vfbScreens;
+ 
+@@ -718,6 +722,8 @@
+ {
+     vfbScreenInfoPtr pvfb = &vfbScreens[pScreen->myNum];
+ 
++    if (pScreen->myNum == 0)
++        amlaot_xorg_close_screen();
+     pScreen->CloseScreen = pvfb->closeScreen;
+ 
+     /*
+@@ -947,6 +953,8 @@
+ 
+     pvfb->closeScreen = pScreen->CloseScreen;
+     pScreen->CloseScreen = vfbCloseScreen;
++    if (pScreen->myNum == 0)
++        amlaot_xorg_screen(pScreen);
+ 
+     return ret;
+ 
+@@ -1007,6 +1015,8 @@
+         vfbScreens = &defaultScreenInfo;
+         vfbNumScreens = 1;
+     }
++    if (vfbNumScreens == 1 && vfbScreens[0].depth == 24)
++        amlaot_xorg_geometry(&vfbScreens[0].width, &vfbScreens[0].height);
+     for (i = 0; i < vfbNumScreens; i++) {
+         if (-1 == AddScreen(vfbScreenInit, argc, argv)) {
+             FatalError("Couldn't add screen %d", i);
+--- a/hw/vfb/InitInput.c
++++ b/hw/vfb/InitInput.c
+@@ -43,6 +43,9 @@
+ #include "exevents.h"
+ #include "extinit.h"
+ 
++void amlaot_xorg_input(DeviceIntPtr mouse, DeviceIntPtr keyboard);
++void amlaot_xorg_close_input(void);
++
+ void
+ ProcessInputEvents(void)
+ {
+@@ -137,10 +140,12 @@
+     xiclass = MakeAtom(XI_KEYBOARD, sizeof(XI_KEYBOARD) - 1, TRUE);
+     AssignTypeAndName(k, xiclass, "Xvfb keyboard");
+     (void) mieqInit();
++    amlaot_xorg_input(p, k);
+ }
+ 
+ void
+ CloseInput(void)
+ {
++    amlaot_xorg_close_input();
+     mieqFini();
+ }

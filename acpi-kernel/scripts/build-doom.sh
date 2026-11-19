@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+app_cpu_flags=${APP_CPU_FLAGS:--march=native -mno-amx-tile}
+
 build=$1
 sysroot=$2
 uapi=$3
@@ -33,7 +35,7 @@ for object in $objects; do
 done
 
 printf 'Compiling and linking DoomGeneric\n'
-"$clang" -v -O2 -march=x86-64 -fno-pie -fno-strict-aliasing -fwrapv \
+"$clang" -v -O2 $app_cpu_flags -fno-pie -fno-strict-aliasing -fwrapv \
     -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 \
     -Wno-incompatible-pointer-types -Wno-int-conversion \
     -nostdinc -isystem "$sysroot/include" -isystem "$resource/include" \

@@ -16,7 +16,7 @@ acpi_load_gdt:
     movw %ax, %fs
     movw %ax, %gs
 
-    /* Enable x87/SSE state. FXSAVE does not cover AVX or extended state. */
+    /* Enable x87 and SSE, then discover any XSAVE-managed vector state. */
     movq %cr0, %rax
     andq $~0x0c, %rax
     orq $0x22, %rax
@@ -25,6 +25,36 @@ acpi_load_gdt:
     andq $~0x50000, %rax
     orq $0x600, %rax
     movq %rax, %cr4
+
+    pushq %rbx
+    movl $1, %eax
+    cpuid
+    btl $26, %ecx
+    jnc .Lvector_ready
+    movq %cr4, %rax
+    orq $0x40000, %rax
+    movq %rax, %cr4
+    movl $0xD, %eax
+    xorl %ecx, %ecx
+    cpuid
+    /* x87, SSE, AVX and the three AVX-512 components. */
+    andl $0xE7, %eax
+    movl %eax, .Lxsave_mask(%rip)
+    xorl %ecx, %ecx
+    xorl %edx, %edx
+    xsetbv
+    movl $0xD, %eax
+    cpuid
+    cmpl $4096, %ebx
+    jbe .Lvector_ready
+    /* The task record reserves one aligned page for extended state. */
+    movl $3, %eax
+    xorl %ecx, %ecx
+    xorl %edx, %edx
+    xsetbv
+    movl %eax, .Lxsave_mask(%rip)
+.Lvector_ready:
+    popq %rbx
     retq
 .size acpi_load_gdt, .-acpi_load_gdt
 
@@ -106,6 +136,8 @@ acpi_breakpoint_entry:
     .quad 0
 .Luser_fx_state:
     .quad 0
+.Lxsave_mask:
+    .long 0
 
 .text
 .global acpi_run_task
@@ -113,7 +145,7 @@ acpi_breakpoint_entry:
 acpi_run_task:
     /* RDI is the frame and RSI its save slot. RDX and RCX carry the
        ring-0 stack top and private CR3 for a user task, or zero.
-       R8 points to the task's aligned FXSAVE area. */
+       R8 points to the task's aligned extended-state page. */
     pushq %rbp
     pushq %rbx
     pushq %r12
@@ -129,7 +161,15 @@ acpi_run_task:
     movq %rax, .Lkernel_cr3(%rip)
 
     movq %r8, .Luser_fx_state(%rip)
+    movl .Lxsave_mask(%rip), %eax
+    testl %eax, %eax
+    jz .Lrestore_legacy_vectors
+    xorl %edx, %edx
+    xrstor64 (%r8)
+    jmp .Luser_vectors_restored
+.Lrestore_legacy_vectors:
     fxrstor64 (%r8)
+.Luser_vectors_restored:
     xorl %eax, %eax
     movw %ax, %gs
     movq %rcx, %cr3
@@ -179,8 +219,19 @@ acpi_run_task:
     jz .Lrestore_scheduler
     movq %rax, %cr3
     movq $0, .Lkernel_cr3(%rip)
-    movq .Luser_fx_state(%rip), %rax
-    fxsave64 (%rax)
+    movq .Luser_fx_state(%rip), %rcx
+    movl .Lxsave_mask(%rip), %eax
+    testl %eax, %eax
+    jz .Lsave_legacy_vectors
+    /* RDX still holds the saved interrupt frame for the scheduler. */
+    movq %rdx, %r8
+    xorl %edx, %edx
+    xsave64 (%rcx)
+    movq %r8, %rdx
+    jmp .Luser_vectors_saved
+.Lsave_legacy_vectors:
+    fxsave64 (%rcx)
+.Luser_vectors_saved:
     xorl %eax, %eax
     movw %ax, %fs
     movw %ax, %gs
@@ -277,7 +328,7 @@ acpi_vector_entries:
 .rept 256
     .if vector == 3
         jmp acpi_breakpoint_entry
-    .elseif vector == 0x20 || vector == 0x21 || vector == 0x23
+    .elseif vector == 0x20 || vector == 0x21 || vector == 0x23 || vector == 0x24
         /* Interrupt gates clear IF. Leave the EOI to the ASL dispatcher. */
         movb $vector, acpi_irq_pending(%rip)
         jmp .Ldevice_interrupt

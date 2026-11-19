@@ -68,7 +68,7 @@ def x11_window_visible(capture, desktop=False):
     return len(rows) == window_height and rows[-1] - rows[0] == window_height - 1
 
 
-def dwm_showcase_visible(capture):
+def dwm_bar_visible(capture):
     magic, dimensions, max_value, pixels = capture.read_bytes().split(b"\n", 3)
     width, height = map(int, dimensions.split())
     if magic != b"P6" or max_value != b"255" or len(pixels) != width * height * 3:
@@ -79,16 +79,7 @@ def dwm_showcase_visible(capture):
     if pixels[:3] != bytes.fromhex("005577") or bytes.fromhex("222222") not in colors or len(colors) <= 12:
         return False
 
-    # The independent X11 client draws a centered card with a mint border and white text.
-    left, top = (width - 304) // 2, (height - 160) // 2
-    start = (top * width + left) * 3
-    end = ((top + 159) * width + left) * 3
-    border = bytes.fromhex("79e0c4") * 304
-    if pixels[start:start + len(border)] != border or pixels[end:end + len(border)] != border:
-        return False
-    panel = pixels[((top + 43) * width + left + 24) * 3:((top + 85) * width + left + 240) * 3]
-    subtitle = ((top + 110) * width + left + 25) * 3
-    return panel.count(bytes.fromhex("f0f7ff")) > 100 and pixels[subtitle:subtitle + 3] == bytes.fromhex("79e0c4")
+    return True
 
 
 def capture_desktop(stream, capture, serial_path, bash_prompt, dwm_check):
@@ -96,8 +87,30 @@ def capture_desktop(stream, capture, serial_path, bash_prompt, dwm_check):
         raise RuntimeError("Bash became interactive before the desktop closed")
     command(stream, "screendump", {"filename": str(capture)})
     if dwm_check:
-        return dwm_showcase_visible(capture)
+        return dwm_bar_visible(capture)
     return x11_window_visible(capture, desktop=True)
+
+
+def click_dwm_tag(stream, capture):
+    def send(event_type, **data):
+        command(stream, "input-send-event", {"events": [{"type": event_type, "data": data}]})
+        time.sleep(0.06)
+
+    _, dimensions, _, _ = capture.read_bytes().split(b"\n", 3)
+    width, height = map(int, dimensions.split())
+    for axis, delta in (("x", 29 - width // 2), ("y", 6 - height // 2)):
+        while delta:
+            step = max(-100, min(100, delta))
+            send("rel", axis=axis, value=step)
+            delta -= step
+    send("btn", down=True, button="left")
+    send("btn", down=False, button="left")
+
+
+def dwm_tag_changed(stream, capture):
+    command(stream, "screendump", {"filename": str(capture)})
+    pixels = capture.read_bytes().split(b"\n", 3)[3]
+    return pixels[:3] == bytes.fromhex("222222") and bytes.fromhex("005577") in pixels[18 * 3:60 * 3]
 
 
 def boot(serial_path, qemu_log, qemu_command):
@@ -137,7 +150,7 @@ def boot(serial_path, qemu_log, qemu_command):
                             wait_for(
                                 process, deadline,
                                 lambda: capture_desktop(stream, before, serial_path, bash_prompt, dwm_check),
-                                "the dwm bar and independent X11 showcase window" if dwm_check else "the X11 desktop at its unscrolled position",
+                                "the dwm bar" if dwm_check else "the X11 desktop at its unscrolled position",
                             )
                         else:
                             command(stream, "screendump", {"filename": str(before)})
@@ -145,6 +158,10 @@ def boot(serial_path, qemu_log, qemu_command):
                                 raise RuntimeError("QEMU display is missing the mapped X11 window")
                         if bash_check or mlibc_check:
                             serial_path.with_suffix(".x11.ppm").write_bytes(before.read_bytes())
+                        if dwm_check:
+                            click_dwm_tag(stream, before)
+                            wait_for(process, deadline, lambda: dwm_tag_changed(stream, before),
+                                     "a PS/2 mouse click selecting another dwm tag")
                         if bash_check:
                             send_keys(stream, ("esc",))
                             wait_for(
@@ -183,7 +200,7 @@ def boot(serial_path, qemu_log, qemu_command):
                                 + rb"fastfetch\nfbtest\n"
                                 + (rb"fonts\n" if dwm_check else b"")
                                 + rb"ls\nreadme\.txt\nwelcome\.txt\nx11-demo\n"
-                                + (b"" if dwm_check else rb"x11-start\.sh\n")
+                                + (rb"xeyes\n" if dwm_check else rb"x11-start\.sh\n")
                                 + rb"dev\nproc\n"
                                 + re.escape(bash_prompt)
                             )
@@ -208,8 +225,8 @@ def boot(serial_path, qemu_log, qemu_command):
                             send_keys(stream, (*"ls", "spc", "slash", *"dev", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: b"fb0\nkbd\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
-                                "Bash listing /dev/fb0",
+                                lambda: b"fb0\nkbd\nmouse\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
+                                "Bash listing the framebuffer and input devices",
                             )
                             send_keys(stream, (*"fbtest", "ret"))
                             wait_for(
@@ -247,7 +264,9 @@ def boot(serial_path, qemu_log, qemu_command):
                         listing = b"welcome.txt\r\n"
                         if bash_check:
                             listing += b"x11-demo\r\n"
-                        if bash_check and not dwm_check:
+                        if dwm_check:
+                            listing += b"xeyes\r\n"
+                        elif bash_check:
                             listing += b"x11-start.sh\r\n"
                         listing += b"dev\r\nproc\r\nasl> "
                         wait_for(

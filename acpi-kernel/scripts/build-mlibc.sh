@@ -2,6 +2,8 @@
 # Stage a pinned static mlibc built with its x86-64 Linux syscall backend.
 set -eu
 
+app_cpu_flags=${APP_CPU_FLAGS:--march=native -mno-amx-tile}
+
 build=$1
 meson=$2
 clang=$3
@@ -42,7 +44,7 @@ git -C "$src" checkout -q --detach "$revision"
 printf 'Configuring mlibc\n'
 CC="$clang" CXX="$clangxx" "$meson" setup --reconfigure "$build/mlibc-build" "$src" \
     --prefix=/usr --libdir=lib -Ddefault_library=static -Dlinux_kernel_headers="$uapi" \
-    -Dc_args=-march=x86-64 -Dcpp_args=-march=x86-64
+    -Dc_args="$app_cpu_flags" -Dcpp_args="$app_cpu_flags"
 printf 'Compiling mlibc\n'
 "$meson" compile -C "$build/mlibc-build" -j "$jobs"
 printf 'Installing mlibc into the guest sysroot\n'

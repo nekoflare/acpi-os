@@ -1,3 +1,4 @@
+.DEFAULT_GOAL := all
 BUILD := ../target/acpi-kernel
 BOOT_ELF = $(BUILD)/hello.elf
 BOOT_CONFIG = config/limine.conf
@@ -23,10 +24,20 @@ LLD ?= ld.lld
 IASL ?= iasl
 LIMINE_DIR ?= /usr/share/limine
 QEMU ?= qemu-system-x86_64
-QEMU_CPU ?=
+QEMU_CPU ?= host
 XORRISO ?= xorriso
 PYTHON ?= python3
 OVMF ?= /usr/share/edk2/x64/OVMF_CODE.4m.fd
+
+APP_ARCH ?= native
+export APP_CPU_FLAGS := -march=$(APP_ARCH) -mno-amx-tile
+APP_CPU_CONFIG := $(MLIBC_BUILD)/app-cpu-flags
+
+.PHONY: force-app-cpu-config
+$(APP_CPU_CONFIG): force-app-cpu-config
+	@mkdir -p "$(@D)"
+	@printf '%s\n' '$(APP_CPU_FLAGS)' > "$@.tmp"
+	@if cmp -s "$@" "$@.tmp"; then unlink "$@.tmp"; else mv "$@.tmp" "$@"; fi
 
 KERNEL_FLAGS := -O2 -mcmodel=kernel -mno-red-zone -mgeneral-regs-only -fno-pic
 BOOT_FLAGS := $(KERNEL_FLAGS) -std=c17 -ffreestanding -fno-stack-protector -Wall -Wextra -Werror
@@ -173,13 +184,15 @@ check-mlibc: mlibc
 check-mlibc-uefi: mlibc
 	$(MAKE) BUILD="$(MLIBC_BUILD)" BOOT_ELF="$(MLIBC_BUILD)/hello-mlibc.elf" MLIBC_CHECK=1 check-uefi
 
-$(MLIBC_SYSROOT)/lib/libc.a: scripts/build-mlibc.sh
+$(MLIBC_SYSROOT)/lib/libc.a: scripts/build-mlibc.sh $(APP_CPU_CONFIG)
 	sh $< "$(MLIBC_BUILD)" "$(MESON)" "$(CLANG)" "$(CLANGXX)" "$(MLIBC_UAPI)" "$(MLIBC_JOBS)"
 
 $(MLIBC_BUILD)/%.o: userspace/%.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
-	$(CLANG) -O2 -march=x86-64 -fno-pie -Wall -Wextra -Werror -nostdlibinc \
+	$(CLANG) -O2 $(APP_CPU_FLAGS) -fno-pie -Wall -Wextra -Werror -nostdlibinc \
 		-isystem "$(MLIBC_SYSROOT)/include" \
 		-idirafter "$(if $(MLIBC_UAPI),$(MLIBC_UAPI),$(MLIBC_BUILD)/linux-uapi)" -c $< -o $@
+
+$(MLIBC_BUILD)/x11-smoke.o: userspace/x11-cursor-font.h
 
 $(MLIBC_BUILD)/hello-mlibc.elf: $(MLIBC_BUILD)/hello-mlibc.o $(MLIBC_BUILD)/x11-smoke.o
 	$(LLD) -static -z separate-loadable-segments -e _start "$(MLIBC_SYSROOT)/lib/crt1.o" \
@@ -208,6 +221,47 @@ check-bash: bash
 check-bash-uefi: bash
 	$(MAKE) $(BASH_BOOT) check-uefi
 
+.PHONY: xorg-server xorg-image xorg-desktop-image run-xorg-uefi st
+XORG_BUILD ?= $(abspath ../target/acpi-kernel-xorg)
+XORG_IMAGE_BUILD ?= $(abspath ../target/acpi-kernel-xorg-probe)
+XORG_DESKTOP_BUILD ?= $(abspath ../target/acpi-kernel-xorg-desktop)
+XORG_DESKTOP_ASSETS ?= $(DWM_BUILD)
+ST_BUILD ?= $(abspath ../target/acpi-kernel-st)
+XKBCOMP ?= xkbcomp
+xorg-server: $(XORG_BUILD)/Xvfb
+
+$(XORG_BUILD)/Xvfb: scripts/build-xorg.sh $(APP_CPU_CONFIG) userspace/xorg-guest.c scripts/patches/xorg-guest-devices.patch \
+		scripts/patches/xorg-guest-keymap.patch scripts/patches/xtrans-guest-sockets.patch
+	sh $< "$(XORG_BUILD)" "$(MLIBC_JOBS)" "$(MESON)"
+
+$(XORG_BUILD)/xorg-default.xkm: config/xorg-default.xkb
+	mkdir -p "$(XORG_BUILD)"
+	$(XKBCOMP) -w 0 -xkm $< $@
+
+$(XORG_BUILD)/xorg-probe: userspace/xorg-probe.c $(XORG_BUILD)/Xvfb
+	"$(XORG_BUILD)/sysroot/musl/bin/musl-gcc" -static -no-pie -O2 $(APP_CPU_FLAGS) -Wall -Wextra -Werror $< -o $@
+
+st: $(ST_BUILD)/st
+
+$(ST_BUILD)/st: scripts/build-st.sh scripts/patches/st-guest-terminal.patch userspace/st-guest-poll.h $(XORG_BUILD)/Xvfb
+	+sh $< "$(ST_BUILD)" "$(XORG_BUILD)/sysroot" "$(MLIBC_JOBS)"
+
+xorg-image: $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/xorg-default.xkm
+	$(MAKE) BUILD="$(XORG_IMAGE_BUILD)" BOOT_ELF="$(XORG_BUILD)/xorg-probe" \
+		BOOT_CONFIG=config/limine-xorg.conf BOOT_MODULE=xorg-probe \
+		INITRAMFS_EXTRA="$(XORG_BUILD)/Xvfb $(XORG_BUILD)/xorg-default.xkm" all
+
+XORG_DESKTOP_BOOT = BUILD="$(XORG_DESKTOP_BUILD)" BOOT_ELF="$(XORG_BUILD)/xorg-probe" \
+	BOOT_CONFIG=config/limine-xorg.conf BOOT_MODULE=xorg-probe \
+	INITRAMFS_EXTRA="$(XORG_BUILD)/Xvfb $(XORG_BUILD)/xorg-default.xkm $(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(ST_BUILD)/st $(BASH_BUILD)/bash.elf $(BASH_BUILD)/fastfetch config/dwm-fonts.conf" \
+	INITRAMFS_FONT="$(XORG_DESKTOP_ASSETS)/dwm-font.ttf"
+
+xorg-desktop-image: $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/xorg-default.xkm $(ST_BUILD)/st $(BASH_BUILD)/bash.elf $(BASH_BUILD)/fastfetch
+	$(MAKE) $(XORG_DESKTOP_BOOT) all
+
+run-xorg-uefi: xorg-desktop-image
+	$(MAKE) $(XORG_DESKTOP_BOOT) QEMU_CPU="$(or $(QEMU_CPU),host)" boot-uefi
+
 .PHONY: dwm
 dwm: $(DWM_BUILD)/dwm
 
@@ -231,7 +285,7 @@ $(BASH_BUILD)/bash.elf: scripts/build-bash.sh $(MLIBC_SYSROOT)/lib/libc.a
 	+sh $< "$(BASH_BUILD)" "$(MLIBC_BUILD)/sysroot" "$(CLANG)" "$(LLD)" "$(MLIBC_UAPI)"
 
 $(BASH_BUILD)/fbtest: userspace/fbtest.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
-	$(CLANG) -O2 -march=x86-64 -fno-pie -Wall -Wextra -Werror -nostdinc \
+	$(CLANG) -O2 $(APP_CPU_FLAGS) -fno-pie -Wall -Wextra -Werror -nostdinc \
 		-isystem "$(MLIBC_SYSROOT)/include" -idirafter "$(if $(MLIBC_UAPI),$(MLIBC_UAPI),$(MLIBC_BUILD)/linux-uapi)" \
 		-c $< -o $(BASH_BUILD)/fbtest.o
 	$(LLD) -static -z separate-loadable-segments "$(MLIBC_SYSROOT)/lib/crt1.o" \

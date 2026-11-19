@@ -2,6 +2,8 @@
 # Build a static GNU Bash with the staged mlibc CRT and headers.
 set -eu
 
+app_cpu_flags=${APP_CPU_FLAGS:--march=native -mno-amx-tile}
+
 if [ "$1" = --cc ]; then
     shift
     for arg in "$@"; do
@@ -50,11 +52,12 @@ sed -i 's|set_if_not ("PS1", current_user.euid == 0 ? "# " : primary_prompt);|se
 
 cd "$build/obj"
 printf 'Configuring GNU Bash %s\n' "$version"
-CC="sh $script --cc" CFLAGS="-O2 -march=x86-64 -fno-pie -std=gnu17" \
+CC="sh $script --cc" CFLAGS="-O2 $app_cpu_flags -fno-pie -std=gnu17" \
     "../bash-$version/configure" --enable-minimal-config --disable-nls \
     --without-bash-malloc --disable-readline --disable-job-control --enable-static-link
 sed -i 's|^#  define PPROMPT .*|#  define PPROMPT "root@localhost:~# "|' \
     "$build/bash-$version/config-bot.h"
+make clean
 printf 'Compiling GNU Bash %s\n' "$version"
 make bash
 cp bash "$build/bash.elf"

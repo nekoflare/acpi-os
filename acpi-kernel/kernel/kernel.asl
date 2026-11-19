@@ -56,6 +56,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         KSTA, 8
     }
 
+    OperationRegion (VBIP, SystemIO, 0x1CE, 2)
+    Field (VBIP, WordAcc, NoLock, Preserve) { VBIX, 16 }
+    OperationRegion (VBDP, SystemIO, 0x1CF, 2)
+    Field (VBDP, WordAcc, NoLock, Preserve) { VBDT, 16 }
+    OperationRegion (PCIO, SystemIO, 0xCF8, 8)
+    Field (PCIO, DWordAcc, NoLock, Preserve) { PCIX, 32, PCDT, 32 }
+
     Include ("font8x8.asl")
 
     Name (HHDO, Zero)
@@ -96,6 +103,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (FRSZ, Zero)
     Name (FGSZ, Zero)
     Name (FBSW, Zero)
+    Name (FBVA, 0xFFFFFF0020000000)
+    Name (FBYT, Zero) // Rows between scanout pages, including alignment padding
+    Name (FBPG, Zero) // Scanout page, with page zero reserved for the console
+    Name (FBOW, Zero) // Open file description owning the visible desktop
+    Name (FBCK, Zero) // Probe the display only once
     Name (FBIO, Buffer (4096) {})
     Name (FBVS, Buffer (160) {})
     Name (FBFS, Buffer (80) {})
@@ -641,6 +653,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (PIVC, 0x20)
     Name (LAVC, 0x21)
     Name (KBVC, 0x23)
+    Name (MSVC, 0x24)
+    Name (MSBA, Zero)
+    Name (MSRE, Zero)
+    Name (MSFL, Zero)
+    Name (MSRD, Zero)
+    Name (KCFG, Zero)
     Name (SVEC, 0xFF)
     Name (IMSK, 0x10000)
     Name (IPOL, 0x2000)
@@ -736,8 +754,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (Arg2)
     }
 
-    // Mask firmware routes and find the I/O APIC and pins covering the PIT and keyboard GSIs.
-    Method (ISET, 4, NotSerialized)
+    // Mask firmware routes and find the I/O APIC and pins covering the PIT, keyboard, and mouse GSIs.
+    Method (ISET, 5, NotSerialized)
     {
         Local0 = 44
         While (Local0 < Arg1)
@@ -767,6 +785,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                     If (KBBA) { Return (Zero) }
                     KBBA = Local2
                     KBRE = 0x10 + 2 * (Arg3 - Local5)
+                }
+                If (Arg4 >= Local5 && Arg4 - Local5 <= Local3)
+                {
+                    If (MSBA) { Return (Zero) }
+                    MSBA = Local2
+                    MSRE = 0x10 + 2 * (Arg4 - Local5)
                 }
             }
             Local0 += XMEM (Local1 + One, One)
@@ -809,6 +833,60 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (!UCOP (Arg0, Arg1, XADR (KSBF) + KSHD, 2)) { Return (Zero - 14) }
         KSHD = (KSHD + 2) & 511
         Return (2)
+    }
+
+    Name (MSNM, Buffer () {0x6D, 0x6F, 0x75, 0x73, 0x65})
+    Name (MSND, Zero)
+    Name (MSOP, Zero)
+    Name (MSBF, Buffer (512) {})
+    Name (MSHD, Zero)
+    Name (MSTL, Zero)
+    Name (MSCT, Zero)
+    Name (MSPH, Zero)
+    Name (MSDX, Zero)
+
+    // Each record is signed LE16 dx, signed LE16 dy (down positive),
+    // a PS/2 button-state byte, and three reserved zero bytes.
+    Method (MSPK, 1, NotSerialized)
+    {
+        If (!MSCT)
+        {
+            If (!(Arg0 & 8)) { Return (Zero) }
+            MSPH = Arg0
+            MSCT = One
+            Return (Zero)
+        }
+        If (MSCT == One)
+        {
+            MSDX = Arg0
+            MSCT = 2
+            Return (Zero)
+        }
+        MSCT = Zero
+        If (!MSOP) { Return (Zero) }
+
+        Local0 = MSDX
+        Local1 = Arg0
+        If (MSPH & 0x10) { Local0 -= 256 }
+        If (MSPH & 0x20) { Local1 -= 256 }
+        If (MSPH & 0x40) { Local0 = Zero }
+        If (MSPH & 0x80) { Local1 = Zero }
+        Local2 = (MSTL + 8) & 511
+        If (Local2 == MSHD) { MSHD = (MSHD + 8) & 511 }
+        XSTQ (XADR (MSBF) + MSTL,
+            (Local0 & 0xFFFF) | (((Zero - Local1) & 0xFFFF) << 16) | ((MSPH & 7) << 32))
+        MSTL = Local2
+        Return (Zero)
+    }
+
+    Method (MSRR, 3, NotSerialized)
+    {
+        If (!Arg2) { Return (Zero) }
+        If (Arg2 < 8) { Return (Zero - 22) }
+        If (MSHD == MSTL) { Return (Zero - 11) }
+        If (!UCOP (Arg0, Arg1, XADR (MSBF) + MSHD, 8)) { Return (Zero - 14) }
+        MSHD = (MSHD + 8) & 511
+        Return (8)
     }
 
     Name (KBUF, Buffer (128) {})
@@ -908,8 +986,52 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             IREG (KBBA, KBRE, IMSK)
             Return (Zero)
         }
-        KDAT = Local1 | 0x41 // Set 1 translation and first-port IRQ enabled
+        KCFG = Local1 | 0x41 // Set 1 translation and first-port IRQ enabled
+        KDAT = KCFG
         Return (One)
+    }
+
+    Method (MSSC, 1, NotSerialized)
+    {
+        Local0 = 3
+        While (Local0)
+        {
+            If (!KBCM (0xD4) || !KBDT (Arg0)) { Return (Zero) }
+            Local1 = 0x10000
+            While (Local1)
+            {
+                Local2 = KSTA
+                If ((Local2 & 0x21) == 0x21)
+                {
+                    Local3 = KDAT
+                    If (Local2 & 0xC0) { Return (Zero) }
+                    If (Local3 == 0xFA) { Return (One) }
+                    If (Local3 != 0xFE) { Return (Zero) }
+                    Break
+                }
+                If (Local2 & One) { KIRQ () }
+                Decrement (Local1)
+            }
+            If (!Local1) { Return (Zero) }
+            Decrement (Local0)
+        }
+        Return (Zero)
+    }
+
+    Method (MSST, 1, NotSerialized)
+    {
+        If (!MSBA || (MSBA == PIBA && MSRE == PIRE) ||
+            (MSBA == KBBA && MSRE == KBRE)) { Return (Zero) }
+        If (!KBCM (0xA8)) { Return (Zero) } // Enable auxiliary port
+        If (MSSC (0xF6) && MSSC (0xF4))
+        {
+            IREG (MSBA, MSRE + One, Arg0 << 24)
+            IREG (MSBA, MSRE, MSVC | MSFL)
+            If (KBCM (0x60) && KBDT ((KCFG & ~0x20) | 2)) { Return (One) }
+            IREG (MSBA, MSRE, IMSK)
+        }
+        KBCM (0xA7)
+        Return (Zero)
     }
 
     Method (KERS, 0, NotSerialized)
@@ -924,7 +1046,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local0 = KSTA
         If (!(Local0 & One)) { Return (Zero) }
         Local1 = KDAT
-        If (Local0 & 0xE0) { Return (Zero) } // Auxiliary, timeout or parity error
+        If (Local0 & 0x20)
+        {
+            If (Local0 & 0xC0) { MSCT = Zero }
+            ElseIf (MSRD) { MSPK (Local1) }
+            Return (Zero)
+        }
+        If (Local0 & 0xC0) { Return (Zero) }
 
         If (KSOP) { Return (KSIR (Local1)) }
 
@@ -1049,10 +1177,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             SWAK ()
         }
         Local0 = Zero
-        If (Arg0 == KBVC) { Local0 = KIRQ () }
+        If (Arg0 == KBVC || Arg0 == MSVC) { Local0 = KIRQ () }
         If (Arg0) { LREG (0xB0, Zero) }
         If (Local0) { KWAK () }
-        If (Arg0 == LAVC || Arg0 == KBVC) { PWAK () }
+        If (Arg0 == LAVC || Arg0 == KBVC || Arg0 == MSVC) { PWAK () }
     }
 
     Method (TMRS, 3, NotSerialized)
@@ -1068,7 +1196,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (Local0 == Ones) { Return (Zero) }
         Local4 = ISOV (Arg0, Arg1, One)
         KBFL = ISFL
-        If (!ISET (Arg0, Arg1, Local0, Local4)) { Return (Zero) }
+        Local5 = ISOV (Arg0, Arg1, 12)
+        MSFL = ISFL
+        If (!ISET (Arg0, Arg1, Local0, Local4, Local5)) { Return (Zero) }
 
         Local1 = LREG (0x20, Ones)
         If (!X2EN) { Local1 >>= 24 }
@@ -1100,8 +1230,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         PUTS ("LAPIC periodic timer delivered 3 interrupts")
         KRDY = KSET (Local1)
-        If (KRDY) { PUTS ("PS/2 keyboard IRQ ready") }
-        Else { PUTS ("PS/2 keyboard unavailable") }
+        If (KRDY)
+        {
+            PUTS ("PS/2 keyboard IRQ ready")
+            MSRD = MSST (Local1)
+        }
+        If (MSRD) { PUTS ("PS/2 mouse IRQ ready") }
+        If (!KRDY) { PUTS ("PS/2 keyboard unavailable") }
         Return (One)
     }
 
@@ -1251,7 +1386,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (LARG, 0x80)
     Name (NOEX, 0x8000000000000000)
     // R/W, U/S, PWT, PCD, global and NX.
-    Name (VFLG, 0x800000000000011E)
+    Name (VFLG, 0x800000000000019E) // Includes the leaf PAT bit
     // Bit 9 is software-owned. On leaves it marks VALL pages, on branches our tables.
     Name (VOWN, 0x200)
     Name (UANO, 0x400) // Anonymous user leaf eligible for mprotect
@@ -1674,7 +1809,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Name (SQHD, Zero)
     Name (SQTL, Zero)
-    Name (TSIZ, 0x4000)
+    Name (TSIZ, 0x5000)
     // Task record: next pointer, saved frame pointer, entry argument.
     Name (TSFR, 8)
     Name (TSAR, 16)
@@ -1690,10 +1825,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (PRWT, 40) // Blocked in wait4
     Name (UPNM, Zero) // Boot module basename
     Name (TSFS, 40) // User FS base
-    Name (TSFX, 64) // Aligned 512-byte FXSAVE area
+    Name (TSFX, 0x1000) // Page-aligned XSAVE or FXSAVE area
     Name (TSPR, 48) // Process record in the direct map, zero for native tasks
     Name (TSCE, 56) // Close-on-exec bits indexed by descriptor number
-    Name (TSFD, 576) // Sixteen pointers to shared open file descriptions
+    Name (TSFD, 552) // Pointers to shared open file descriptions
+    Name (TSCL, 712) // Closed or redirected implicit console descriptors
     Name (WSTA, Buffer (4) {})
     CreateDWordField (WSTA, Zero, WVAL)
     Name (WRUS, Buffer (144) {}) // Zeroed Linux x86-64 struct rusage
@@ -1848,7 +1984,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     {
         Local0 = XVWD (Arg0 + TSCR, Ones)
         Local1 = Arg0 + TSFD
-        While (Local1 < Arg0 + TSFD + (FDLM - 3) * 8)
+        While (Local1 < Arg0 + TSFD + FDLM * 8)
         {
             FDCL (Local1)
             Local1 += 8
@@ -2053,11 +2189,16 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             }
             Local3 = Local1 - Local2
             Local2 += Arg1
-            If (SHMT (Local2, Local3, ".")) { Continue }
-            If (SHMT (Local2, Local3, ".."))
+            // Path lookups run on every open and stat. Keep dot components
+            // allocation-free so misses cannot exhaust the early AML arena.
+            If (XBYT (Local2) == 0x2E)
             {
-                Local0 = XVWD (Local0 + VNPA, Ones)
-                Continue
+                If (Local3 == One) { Continue }
+                If (Local3 == 2 && XBYT (Local2 + One) == 0x2E)
+                {
+                    Local0 = XVWD (Local0 + VNPA, Ones)
+                    Continue
+                }
             }
             Local0 = VFIN (Local0, Local2, Local3)
             If (!Local0) { Return (Zero - 2) }
@@ -2079,6 +2220,14 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 SKCL (Local0)
                 Return (Zero)
             }
+            If (Local0 == MSOP) { MSOP = Zero }
+            If (Local0 == FBOW)
+            {
+                VBIX = 9
+                VBDT = Zero
+                FBOW = Zero
+                FBPG = Zero
+            }
             If (Local0 == KSOP)
             {
                 KSOP = Zero
@@ -2092,8 +2241,38 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Method (UFDL, 2, NotSerialized)
     {
-        If (Arg1 < 3 || Arg1 >= FDLM) { Return (Zero) }
-        Return (XVWD (Arg0 + TSFD + (Arg1 - 3) * 8, Ones))
+        If (Arg1 >= FDLM) { Return (Zero) }
+        Return (XVWD (Arg0 + TSFD + Arg1 * 8, Ones))
+    }
+
+    Method (SSTD, 2, NotSerialized)
+    {
+        Return (Arg1 < 3 && !(XVWD (Arg0 + TSCL, Ones) & (One << Arg1)) &&
+            !UFDL (Arg0, Arg1))
+    }
+
+    Method (SYDP, 3, NotSerialized)
+    {
+        If (Arg1 >= FDLM || Arg2 >= FDLM) { Return (Zero - 9) }
+        Local0 = UFDL (Arg0, Arg1)
+        If (Arg1 == Arg2)
+        {
+            If (Local0 || SSTD (Arg0, Arg1)) { Return (Arg2) }
+            Return (Zero - 9)
+        }
+        If (!Local0)
+        {
+            If (SSTD (Arg0, Arg1)) { Return (Zero - 38) }
+            Return (Zero - 9)
+        }
+
+        XSTQ (Local0 + 16, XVWD (Local0 + 16, Ones) + One)
+        Local1 = Arg0 + TSFD + Arg2 * 8
+        FDCL (Local1)
+        XSTQ (Local1, Local0)
+        XSTQ (Arg0 + TSCE, XVWD (Arg0 + TSCE, Ones) & ~(One << Arg2))
+        If (Arg2 < 3) { XSTQ (Arg0 + TSCL, XVWD (Arg0 + TSCL, Ones) | (One << Arg2)) }
+        Return (Arg2)
     }
 
     Method (SYOP, 4, NotSerialized)
@@ -2105,6 +2284,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (!KRDY) { Return (Zero - 19) }
             If (KSOP) { Return (Zero - 16) } // EBUSY
         }
+        If (Local0 == MSND)
+        {
+            If (!MSRD) { Return (Zero - 19) }
+            If (MSOP) { Return (Zero - 16) }
+        }
         If ((Arg3 & 3) && XVWD (Local0 + VNTY, Ones) != 12)
         {
             Return (Zero - 30) // EROFS
@@ -2114,7 +2298,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local1 = 3
         While (Local1 < FDLM)
         {
-            Local2 = Arg0 + TSFD + (Local1 - 3) * 8
+            Local2 = Arg0 + TSFD + Local1 * 8
             If (!XVWD (Local2, Ones))
             {
                 Local3 = PALC ()
@@ -2138,6 +2322,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                     KSKP = Zero
                     KSOP = Local3
                 }
+                If (Local0 == MSND)
+                {
+                    MSHD = Zero
+                    MSTL = Zero
+                    MSOP = Local3
+                }
                 XSTQ (Local2, Local3)
                 Local4 = XVWD (Arg0 + TSCE, Ones) & ~(One << Local1)
                 If (Arg3 & 0x80000) { Local4 |= One << Local1 } // O_CLOEXEC
@@ -2155,15 +2345,24 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (!Local0) { Return (Zero - 9) }
         Local1 = XVWD (Local0, Ones)
         If (Local1 == XADR (SKND)) { Return (SKRW (Arg0, Local0, Arg2, Arg3, Zero)) }
+        If (Local1 == MSND) { Return (MSRR (Arg0, Arg2, Arg3)) }
         If (Local1 == KSND) { Return (KSRD (Arg0, Arg2, Arg3)) }
         If (XVWD (Local1 + VNTY, Ones) == 4) { Return (Zero - 21) } // EISDIR
         Local2 = XVWD (Local0 + 8, Ones)
         Local3 = XVWD (Local0 + 24, Ones)
+        If (XVWD (Local1 + VNTY, Ones) == 12) { Local3 = FBSZ }
         If (!Arg3 || Local2 >= Local3) { Return (Zero) }
         Local4 = Local3 - Local2
         If (Local4 > Arg3) { Local4 = Arg3 }
         If (Local4 > PGSZ) { Local4 = PGSZ }
-        If (!UCOP (Arg0, Arg2, XVWD (Local0 + 32, Ones) + Local2, Local4))
+        Local5 = XVWD (Local0 + 32, Ones) + Local2
+        If (XVWD (Local1 + VNTY, Ones) == 12)
+        {
+            If (!FBAD || FBPP != 4) { Return (Zero - 19) }
+            Local5 = XADR (FBIO)
+            XFBL (Local5, FBAD + Local2, Local4)
+        }
+        If (!UCOP (Arg0, Arg2, Local5, Local4))
         {
             Return (Zero - 14)
         }
@@ -2173,10 +2372,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Method (SYLS, 4, NotSerialized)
     {
-        If (Arg1 <= 2) { Return (Zero - 29) } // ESPIPE
+        If (SSTD (Arg0, Arg1)) { Return (Zero - 29) } // ESPIPE
         Local0 = UFDL (Arg0, Arg1)
         If (!Local0) { Return (Zero - 9) }
-        If (Local0 == KSOP || XVWD (Local0, Ones) == XADR (SKND)) { Return (Zero - 29) }
+        If (Local0 == KSOP || Local0 == MSOP || XVWD (Local0, Ones) == XADR (SKND)) { Return (Zero - 29) }
         If (XVWD (XVWD (Local0, Ones) + VNTY, Ones) == 4)
         {
             If (Arg3 || Arg2) { Return (Zero - 22) }
@@ -2290,7 +2489,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local1 = 0x21B6 // character device, 0666
         Local2 = Zero
         Local3 = 2
-        If (Local0 || Arg1 > 2)
+        If (Local0 || !SSTD (Arg0, Arg1))
         {
             If (Local0)
             {
@@ -2315,7 +2514,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                     Local1 = 0x21B6 // framebuffer character device, 0666
                     Local2 = FBSZ
                 }
-                If (Local0 == KSND) { Local1 = 0x2124 } // keyboard, 0444
+                If (Local0 == KSND || Local0 == MSND) { Local1 = 0x2124 } // keyboard, 0444
                 If (Local0 == XADR (SKND)) { Local1 = 0xC1FF } // socket, 0777
             }
         }
@@ -2332,10 +2531,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Method (SYWR, 4, NotSerialized)
     {
-        If (Arg1 >= 3)
+        Arg1 &= 0xFFFFFFFF
+        Local0 = UFDL (Arg0, Arg1)
+        If (Local0)
         {
-            Local0 = UFDL (Arg0, Arg1 & 0xFFFFFFFF)
-            If (!Local0) { Return (Zero - 9) }
             Local1 = XVWD (Local0, Ones)
             If (Local1 == XADR (SKND)) { Return (SKRW (Arg0, Local0, Arg2, Arg3, One)) }
             If (!FBAD || FBPP != 4) { Return (Zero - 19) } // ENODEV
@@ -2351,7 +2550,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             XSTQ (Local0 + 8, Local3 + Local2)
             Return (Local2)
         }
-        If (Arg1 != One && Arg1 != 2) { Return (Zero - 9) } // EBADF
+        If (!SSTD (Arg0, Arg1) || !Arg1) { Return (Zero - 9) } // EBADF
         Local0 = Arg3
         If (Local0 > PGSZ) { Local0 = PGSZ }
         If (!URNG (Arg0, Arg2, Local0, Zero)) { Return (Zero - 14) } // EFAULT
@@ -2409,7 +2608,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Method (SYRD, 2, NotSerialized)
     {
         Local4 = XVWD (Arg1 + 8 * 8, Ones) & 0xFFFFFFFF
-        If (Local4)
+        If (Local4 || !SSTD (Arg0, Zero))
         {
             Return (SYFR (Arg0, Local4, XVWD (Arg1 + 9 * 8, Ones),
                 XVWD (Arg1 + 12 * 8, Ones)))
@@ -2560,9 +2759,115 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (Zero - 22) // Only a complete mapping can be unmapped.
     }
 
+    Method (VBRD, 1, NotSerialized)
+    {
+        VBIX = Arg0
+        Return (VBDT)
+    }
+
+    // Verify that the boot framebuffer is the first page of QEMU Standard VGA.
+    // Map two additional scanout pages in its PCI framebuffer aperture.
+    Method (FBFP, 0, NotSerialized)
+    {
+        FBCK = One
+        If (FBPP != 4 || FBRD != 16 || FBGR != 8 || FBBL ||
+            FBPT != FBWD * 4 || FBAD < HHDO) { Return (Zero) }
+        Local0 = Zero
+        While (Local0 < 32)
+        {
+            Local1 = 0x80000000 | (Local0 << 11)
+            PCIX = Local1
+            If (PCDT == 0x11111234)
+            {
+                PCIX = Local1 + 4
+                If (!(PCDT & 2)) { Return (Zero) }
+                PCIX = Local1 + 0x10
+                Local2 = PCDT
+                If ((Local2 & 7) || (Local2 & ~0xF) != FBAD - HHDO) { Return (Zero) }
+                Break
+            }
+            Increment (Local0)
+        }
+        If (Local0 == 32 || VBRD (Zero) != 0xB0C5 || !(VBRD (4) & One) ||
+            VBRD (One) != FBWD || VBRD (2) != FBHT || VBRD (3) != 32 ||
+            VBRD (6) != FBWD || VBRD (8) || VBRD (9)) { Return (Zero) }
+
+        Local3 = FBHT
+        While ((Local3 * FBPT) & (PGSZ - One)) { Increment (Local3) }
+        Local4 = Local3 * FBPT
+        Local5 = VBRD (0xA) << 16
+        If (Local3 > 0x7FFF || Local4 * 2 + FBSZ > Local5) { Return (Zero) }
+
+        Local2 = (Local2 & ~0xF) + Local4
+        Local5 = Local4 + FBSZ
+        Local7 = FBCA ()
+        Local6 = Zero
+        While (Local6 < Local5)
+        {
+            If (!VMAP (FBVA + Local6, Local2 + Local6, Local7))
+            {
+                While (Local6)
+                {
+                    Local6 -= PGSZ
+                    VRMV (HHDO + XCR3 (), 39, FBVA + Local6, Zero)
+                }
+                Return (Zero)
+            }
+            Local6 += PGSZ
+        }
+        FBYT = Local3
+        Return (One)
+    }
+
+    // Use a firmware-provided write-combining PAT entry when available.
+    Method (FBCA, 0, NotSerialized)
+    {
+        Local0 = XMSR (0x277, Ones)
+        Local1 = Zero
+        Local2 = 0x18 // Fall back to the legacy uncacheable PAT entry.
+        While (Local1 < 8)
+        {
+            If ((Local0 & 0xFF) == One)
+            {
+                Local2 = ((Local1 & 3) << 3) | ((Local1 & 4) << 5)
+                Break
+            }
+            Local0 >>= 8
+            Increment (Local1)
+        }
+        If (XNXE ()) { Local2 |= NOEX }
+        Return (WRIT | Local2)
+    }
+
+    Method (FBPR, 3, NotSerialized)
+    {
+        If (!FBCK) { FBFP () }
+        If (!FBYT) { Return (Zero - 25) } // ENOTTY, use ordinary fbdev writes
+        If (FBOW && FBOW != Arg1) { Return (Zero - 16) } // EBUSY
+        Local0 = One
+        If (FBPG == One) { Local0 = 2 }
+        Local1 = FBVA + (Local0 - One) * FBYT * FBPT
+        If (!UCPY (Arg0, Local1, Arg2, FBSZ)) { Return (Zero - 14) }
+
+        Local2 = Local0 * FBYT
+        VBIX = 9
+        VBDT = Local2
+        If (VBDT != Local2)
+        {
+            VBDT = Zero
+            FBYT = Zero
+            FBPG = Zero
+            FBOW = Zero
+            Return (Zero - 25)
+        }
+        FBPG = Local0
+        FBOW = Arg1
+        Return (Zero)
+    }
+
     Method (SYIO, 4, NotSerialized)
     {
-        If (Arg1 >= FDLM || (Arg1 >= 3 && !UFDL (Arg0, Arg1)))
+        If (!UFDL (Arg0, Arg1) && !SSTD (Arg0, Arg1))
         {
             Return (Zero - 9) // EBADF
         }
@@ -2586,6 +2891,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Return (Zero - 25) // ENOTTY
         }
+        // Private fbdev request. Arg3 points to a complete packed XRGB frame.
+        If (Arg2 == 0x46F0) { Return (FBPR (Arg0, Local0, Arg3)) }
         If (Arg2 == 0x4600)
         {
             If (!FBAD || FBPP != 4) { Return (Zero - 19) } // ENODEV
@@ -2692,13 +2999,14 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Return (Zero - 12)
         }
         XMOV (Local1, Arg1, 20 * 8)
-        XMOV (Local0 + TSFX, Arg0 + TSFX, 512)
+        XMOV (Local0 + TSFX, Arg0 + TSFX, PGSZ)
         XSTQ (Local0 + TSFR, Local1)
         XSTQ (Local1 + 14 * 8, Zero) // Child's syscall result
         XSTQ (Local0 + TSFS, XVWD (Arg0 + TSFS, Ones))
         XSTQ (Local0 + TSCE, XVWD (Arg0 + TSCE, Ones))
+        XSTQ (Local0 + TSCL, XVWD (Arg0 + TSCL, Ones))
         Local2 = TSFD
-        While (Local2 < TSFD + (FDLM - 3) * 8)
+        While (Local2 < TSFD + FDLM * 8)
         {
             Local3 = XVWD (Arg0 + Local2, Ones)
             If (Local3)
@@ -2905,18 +3213,18 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         SDEL (Local1)
 
         Local5 = XVWD (Arg0 + TSCE, Ones)
-        Local6 = 3
+        Local6 = Zero
         While (Local5 && Local6 < FDLM)
         {
             If (Local5 & (One << Local6))
             {
-                FDCL (Arg0 + TSFD + (Local6 - 3) * 8)
+                FDCL (Arg0 + TSFD + Local6 * 8)
             }
             Increment (Local6)
         }
         XSTQ (Arg0 + TSCE, Zero)
         XSTQ (Arg0 + TSFS, Zero)
-        XMOV (Arg0 + TSFX, XADR (EXZR), 512)
+        XCLR (Arg0 + TSFX)
         XSTQ (Arg0 + TSFX, 0x037F)
         XSTQ (Arg0 + TSFX + 24, 0x1F80)
         XMOV (Arg0 + TSIZ - 20 * 8, XADR (EXZR), 20 * 8)
@@ -2975,16 +3283,21 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Method (PRDY, 2, NotSerialized)
     {
         If (Arg1 >> 31) { Return (Zero) } // Negative descriptors are ignored.
-        If (!Arg1)
+        If (!Arg1 && SSTD (Arg0, Arg1))
         {
             If (!KRDY) { Return (8) } // POLLERR
             If (KBHD != KEND) { Return (0x41) } // POLLIN | POLLRDNORM
             Return (Zero)
         }
-        If (Arg1 <= 2) { Return (0x104) } // POLLOUT | POLLWRNORM
+        If (SSTD (Arg0, Arg1)) { Return (0x104) } // POLLOUT | POLLWRNORM
         Local0 = UFDL (Arg0, Arg1)
         If (!Local0) { Return (0x20) } // POLLNVAL
         If (XVWD (Local0, Ones) == XADR (SKND)) { Return (SKRD (Local0)) }
+        If (Local0 == MSOP)
+        {
+            If (MSHD != MSTL) { Return (0x41) }
+            Return (Zero)
+        }
         If (Local0 == KSOP)
         {
             If (KSHD != KSTL) { Return (0x41) }
@@ -3122,7 +3435,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local0 = 3
         While (Local0 < FDLM)
         {
-            Local1 = Arg0 + TSFD + (Local0 - 3) * 8
+            Local1 = Arg0 + TSFD + Local0 * 8
             If (!XVWD (Local1, Ones))
             {
                 XSTQ (Local1, Arg1)
@@ -3170,6 +3483,47 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Local0 = Local1
         }
         SKUP (Arg0)
+    }
+
+    Name (SKPF, Buffer (8) {})
+
+    Method (SKPA, 3, NotSerialized)
+    {
+        If (!URNG (Arg0, Arg2, 8, WRIT)) { Return (Zero - 14) }
+        Local0 = SKNW (Arg1)
+        If (!Local0) { Return (Zero - 12) }
+        Local1 = SKNW (Arg1)
+        If (!Local1)
+        {
+            SKUP (Local0)
+            Return (Zero - 12)
+        }
+        Local2 = FINS (Arg0, Local0, Arg1)
+        If (Local2 >= Zero - 4095)
+        {
+            SKUP (Local0)
+            SKUP (Local1)
+            Return (Local2)
+        }
+        Local3 = FINS (Arg0, Local1, Arg1)
+        If (Local3 >= Zero - 4095)
+        {
+            FDCL (Arg0 + TSFD + Local2 * 8)
+            SKUP (Local1)
+            Return (Local3)
+        }
+        XSTQ (Local0 + SKST, 2)
+        XSTQ (Local1 + SKST, 2)
+        XSTQ (Local0 + SKPR, Local1)
+        XSTQ (Local1 + SKPR, Local0)
+        XSTQ (XADR (SKPF), Local2 | (Local3 << 32))
+        If (!UCOP (Arg0, Arg2, XADR (SKPF), 8))
+        {
+            FDCL (Arg0 + TSFD + Local2 * 8)
+            FDCL (Arg0 + TSFD + Local3 * 8)
+            Return (Zero - 14)
+        }
+        Return (Zero)
     }
 
     Method (SKSO, 4, NotSerialized)
@@ -3566,6 +3920,19 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         SKWH = Arg0
     }
 
+    Name (RLBV, Buffer (16) {})
+
+    // The descriptor table has a fixed size. Report that limit to libc.
+    Method (SYRL, 3, NotSerialized)
+    {
+        If (Arg1 != 7) { Return (Zero - 22) } // RLIMIT_NOFILE
+        Local0 = XADR (RLBV)
+        XSTQ (Local0, FDLM)
+        XSTQ (Local0 + 8, FDLM)
+        If (Arg2 && !UCOP (Arg0, Arg2, Local0, 16)) { Return (Zero - 14) }
+        Return (Zero)
+    }
+
     Method (SYSC, 1, NotSerialized)
     {
         Local0 = XVWD (Arg0 + TSFR, Ones)
@@ -3597,7 +3964,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Local3 = SYRD (Arg0, Local0)
             If (Local3 == Ones)
             {
-                If (Local2 & 0xFFFFFFFF) { SKBK (Arg0) }
+                If ((Local2 & 0xFFFFFFFF) || UFDL (Arg0, Zero)) { SKBK (Arg0) }
                 Else { KBLK (Arg0) }
                 Return (Zero)
             }
@@ -3620,9 +3987,14 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Local2 &= 0xFFFFFFFF
             Local3 = Zero - 9
-            If (Local2 >= 3 && Local2 < FDLM)
+            If (Local2 < FDLM)
             {
-                Local3 = FDCL (Arg0 + TSFD + (Local2 - 3) * 8)
+                If (SSTD (Arg0, Local2))
+                {
+                    XSTQ (Arg0 + TSCL, XVWD (Arg0 + TSCL, Ones) | (One << Local2))
+                    Local3 = Zero
+                }
+                Else { Local3 = FDCL (Arg0 + TSFD + Local2 * 8) }
             }
         }
         ElseIf (Local1 == 4 || Local1 == 6) // stat or lstat
@@ -3717,6 +4089,27 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 }
             }
         }
+        ElseIf (Local1 == 33) // dup2
+        {
+            Local3 = SYDP (Arg0, Local2 & 0xFFFFFFFF, XVWD (Local0 + 9 * 8, Ones) & 0xFFFFFFFF)
+        }
+        ElseIf (Local1 == 53) // socketpair
+        {
+            Local4 = XVWD (Local0 + 9 * 8, Ones) & 0xFFFFFFFF
+            Local3 = Zero - 97 // EAFNOSUPPORT
+            If ((Local2 & 0xFFFFFFFF) == One)
+            {
+                Local3 = Zero - 94 // ESOCKTNOSUPPORT
+                If ((Local4 & ~0x80800) == One)
+                {
+                    Local3 = Zero - 93 // EPROTONOSUPPORT
+                    If (!(XVWD (Local0 + 12 * 8, Ones) & 0xFFFFFFFF))
+                    {
+                        Local3 = SKPA (Arg0, Local4, XVWD (Local0 + 5 * 8, Ones))
+                    }
+                }
+            }
+        }
         ElseIf (Local1 == 41) // socket
         {
             Local3 = SKSO (Arg0, Local2 & 0xFFFFFFFF, XVWD (Local0 + 9 * 8, Ones) & 0xFFFFFFFF,
@@ -3783,7 +4176,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Local3 = SKFC (Arg0, Local2, XVWD (Local0 + 9 * 8, Ones) & 0xFFFFFFFF,
                 XVWD (Local0 + 12 * 8, Ones))
-            If (Local3 == Zero - 88 || (Local2 & 0xFFFFFFFF) < 3) { Local3 = Zero - 38 }
+            If (Local3 == Zero - 88 || SSTD (Arg0, Local2 & 0xFFFFFFFF)) { Local3 = Zero - 38 }
         }
         ElseIf (Local1 == 79) // getcwd, always the initramfs root
         {
@@ -3817,6 +4210,27 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Local4 = XVWD (XVWD (Arg0 + TSPR, Ones) + PRPA, Ones)
             Local3 = Zero
             If (Local4) { Local3 = XVWD (Local4 + PRID, Ones) }
+        }
+        ElseIf (Local1 == 97) // getrlimit
+        {
+            Local4 = XVWD (Local0 + 9 * 8, Ones)
+            Local3 = Zero - 14
+            If (Local4) { Local3 = SYRL (Arg0, Local2 & 0xFFFFFFFF, Local4) }
+        }
+        ElseIf (Local1 == 302) // prlimit64
+        {
+            Local4 = XVWD (Arg0 + TSPR, Ones)
+            Local2 &= 0xFFFFFFFF
+            Local3 = Zero - 3 // ESRCH
+            If (!Local2 || Local2 == XVWD (Local4 + PRID, Ones))
+            {
+                Local3 = Zero - One // EPERM for limit changes
+                If (!XVWD (Local0 + 12 * 8, Ones))
+                {
+                    Local3 = SYRL (Arg0, XVWD (Local0 + 9 * 8, Ones) & 0xFFFFFFFF,
+                        XVWD (Local0 + 5 * 8, Ones))
+                }
+            }
         }
         ElseIf (Local1 == 217) // getdents64
         {
@@ -4025,7 +4439,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             }
             Local1 = XRUN (Local3, Local0 + TSFR, Local2, Local4, Local0 + TSFX)
             If (Local4) { XMSR (0xC0000100, Zero) }
-            If (Local1 == PIVC || Local1 == KBVC)
+            If (Local1 == PIVC || Local1 == KBVC || Local1 == MSVC)
             {
                 TACK (Local1)
                 Continue
@@ -4501,6 +4915,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 VNOD (Local0, XADR (FBNM), SizeOf (FBNM), 12)
                 KSND = VNOD (Local0, XADR (KSNM), SizeOf (KSNM), 2)
+                MSND = VNOD (Local0, XADR (MSNM), SizeOf (MSNM), 2)
             }
             Local0 = VNOD (VROT, XADR (PRNM), SizeOf (PRNM), 4)
             If (!Local0 || !VNOD (Local0, XADR (MINM), SizeOf (MINM), Zero))

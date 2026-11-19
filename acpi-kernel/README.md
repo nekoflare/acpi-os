@@ -65,6 +65,13 @@ only in response to an interrupt. The driver decodes US ASCII keys,
 including Shift, Caps Lock, Backspace, and Enter, and buffers input for
 waiting readers.
 
+The PS/2 mouse uses ISA IRQ 12 or its MADT override and vector `0x24`.
+Open `/dev/mouse` for a single reader and wait for data with `poll`.
+Each read returns one eight-byte record with signed little-endian 16-bit
+X and Y deltas, a button-state byte (left, right, and middle in bits
+0–2), and three reserved zero bytes. Positive Y moves down. An empty
+queue yields `EAGAIN`, and a full queue drops the oldest record.
+
 In freestanding builds, AMLAOT recognizes these x86 kernel intrinsics:
 
 | ASL call | Operation |
@@ -76,7 +83,7 @@ In freestanding builds, AMLAOT recognizes these x86 kernel intrinsics:
 | `XAPC ()` | Return whether CPUID reports a local APIC |
 | `XMSR (Index, Value)` | Write an MSR, or read it when `Value` is `Ones` |
 | `XWAI (Cycles)` | Enable maskable interrupts while waiting for a latched vector, then return with interrupts disabled. A zero argument waits with `hlt`. A nonzero argument bounds the wait in TSC cycles |
-| `XRUN (Frame, SaveAddress, KernelStack, Root, FxState)` | Dispatch a task with its interrupt frame. A user task supplies its ring-0 stack top and physical PML4 address. Restore and save the user x87/SSE state using the aligned `FxState` area, restore the kernel root on return, save the resulting frame pointer, and return the dispatch event |
+| `XRUN (Frame, SaveAddress, KernelStack, Root, FxState)` | Dispatch a task with its interrupt frame. A user task supplies its ring-0 stack top and physical PML4 address. Restore and save the user vector state using the aligned `FxState` page, restore the kernel root on return, save the resulting frame pointer, and return the dispatch event |
 | `XIMG (Offset, Width)` | Read a little-endian word from the first Limine module, or get its size when width is zero |
 | `XCPY (Address, Offset, Length)` | Copy a validated span of the first Limine module into mapped memory |
 | `XBYT (Address)` | Read one byte from mapped memory |
@@ -215,7 +222,15 @@ The return path restores the kernel root before resuming ASL. Syscall
 buffer accesses walk the caller's page tables and use the physical
 direct map. The scheduler saves and restores per-task x87 and SSE state
 and the FS base set by `arch_prctl(ARCH_SET_FS)`. The kernel builds with
-general-purpose registers only. Userspace uses the baseline x86-64 ISA.
+general-purpose registers only. Userspace gets x87 and SSE on all supported
+CPUs. The kernel enables AVX and AVX-512 when the guest CPU exposes the
+corresponding XSAVE components and they fit in the task's state page.
+The scheduler uses FXSAVE when XSAVE is unavailable.
+
+Local app builds default to `APP_ARCH=native` and QEMU defaults to
+`QEMU_CPU=host` so those apps can use the build machine's instruction set.
+Use `APP_ARCH=x86-64` for a baseline build. AMX is excluded from the local
+compiler flags because the guest task state does not include tile registers.
 
 The Linux x86-64 syscall subset includes `read` (0) from PS/2 stdin or
 an open VFS file, `write` (1) and `writev` (20) to writable descriptors,
@@ -235,6 +250,8 @@ descriptors, `getpid` (39), fork-style `clone` (56), `fork` (57), `execve` (59),
 and `faccessat` (269). The interactive
 init process has PID and TID 0. Other boot processes have PID and TID 1.
 Each process can open up to 16 VFS files or directories.
+`getrlimit` and `prlimit64` report the fixed `RLIMIT_NOFILE` for the
+calling process, including its three console descriptors.
 The working directory is the VFS root. Reads with an empty
 input queue block until a keystroke arrives. `uname` reports `ASL kernel`
 as the system name and `x86_64` as the machine type. Reads and writes may return
@@ -256,7 +273,7 @@ It preserves the PID and open descriptors except those marked
 environment strings sharing 3,488 bytes including terminators.
 
 Local `AF_UNIX` stream sockets support `socket`, `bind`, `listen`,
-`connect`, `accept`, and `accept4`, with byte streams through `read`,
+`connect`, `accept`, `accept4`, and `socketpair`, with byte streams through `read`,
 `write`, `readv`, `writev`, `recvfrom`, and `recvmsg`. The receive
 calls for Unix streams support byte payloads without ancillary data. Both abstract addresses and absolute path strings such as
 `/tmp/.X11-unix/X0` are supported. Path strings are names in the kernel
@@ -264,7 +281,8 @@ socket registry and are removed on final close. They do not create files
 in the read-only VFS. Sockets support polling, close-on-exec, and
 nonblocking mode. A full pending connection queue returns `EAGAIN`.
 A disconnected peer produces EOF after queued input has been read and
-`EPIPE` on writes.
+`EPIPE` on writes. `dup2` can redirect the console descriptors to
+an open file or stream, including across `fork` and `execve`.
 
 When a Limine framebuffer is available in 32-bit mode, the kernel exposes
 `/dev/fb0` as a minimal fbdev-compatible device. Programs can open it for
@@ -351,7 +369,7 @@ its child window. The probe checks the stationary pointer position and
 the lifetime of a one-bit pixmap. Pixmaps currently store geometry and
 depth. The probe also checks atom creation, lookup, and name retrieval,
 plus opening the core cursor font and creating and releasing glyph-cursor
-resources. The server tracks cursor metadata for future pointer rendering.
+resources. The server renders the selected cursor from the X.Org cursor font.
 The server handles one connection at a time and resets dynamic atoms
 when that connection closes.
 The server uses the 32-bit Limine framebuffer for root dimensions and
@@ -410,22 +428,55 @@ Limine reference material is available in the [boot protocol specification](http
 
 ## dwm guest session
 
+The upstream X.Org desktop is available through:
+
+```sh
+make -C acpi-kernel run-xorg-uefi
+```
+
+This builds a static Xvfb with the host compiler, Meson, Ninja, and
+the host's X11 protocol and Linux UAPI headers. Host `xkbcomp` compiles
+the guest's US keyboard map into the image. On QEMU Standard VGA with
+room for two desktop scanout pages, X.Org copies each completed frame
+to the hidden page and flips the display to it. The console keeps its
+own page and is restored when X.Org closes the framebuffer. Other
+framebuffers use writes to changed rows. X.Org reads PS/2 events from
+`/dev/kbd` and `/dev/mouse`. The desktop image launches dwm, xeyes,
+and suckless st on its local display. st opens Bash on startup.
+Run `fastfetch` in st to see the guest's kernel, CPU, and memory.
+The guest port sends
+line-edited input and shell output over a Unix stream. Programs that
+require Linux PTY ioctls or terminal job control remain unsupported.
+
+The first desktop build compiles st and its static X11 client libraries
+locally. It uses CMake, Ninja, and the host XCB protocol definitions.
+Set `XORG_DESKTOP_ASSETS` to a directory with existing
+static `dwm`, `xeyes`, and `dwm-font.ttf` artifacts. It defaults to
+`target/acpi-kernel-dwm`. This target uses the available artifacts
+directly.
+
+Use `make -C acpi-kernel xorg-image` to build the server and boot probe
+without the dwm and xeyes assets. The probe verifies an X11 connection
+over the guest's Unix socket and prints its result to serial.
+
+### Custom X11 demo
+
 Run `make run-uefi DWM=1` from the repository root to boot into the
-dwm 6.8 session. The guest X11 server draws dwm's status bar to
-`/dev/fb0`. A separate guest X11 client connects and opens a centered
-“AMLAOT / RUNNING DWM” showcase window. Press Escape to close the
-session and reach Bash.
+dwm 6.8 session. The guest X11 server draws the bar and the active X.Org
+cursor to `/dev/fb0`. Move the PS/2 mouse and click the bar to select
+tags or change layouts. The session also starts xeyes. Press Escape to
+close the session and reach Bash.
 Run `x11-demo --dwm` in Bash to start it again.
 
 The build uses Docker and Alpine's static libraries to link dwm with
 musl. It bundles the host's default monospace font selected by
 `fc-match`. Set `DWM_FONT` to override it. The X11 server accepts dwm
-and one additional client in this session. The showcase uses
-`override_redirect` to position its own window. Tiling and dwm
-keybindings still need window-management and keyboard event delivery.
+and one additional client in this session. Moving and resizing managed
+windows with the mouse still requires X11 pointer grabs.
 
-`make -C acpi-kernel DWM=1 check-bash-uefi` checks the bar and showcase window pixels
-in QEMU and verifies that Escape returns to Bash.
+`make -C acpi-kernel DWM=1 check-bash-uefi` checks the bar in QEMU,
+injects a PS/2 mouse click to select another tag, and verifies that
+Escape returns to Bash.
 
 ## Fastfetch
 

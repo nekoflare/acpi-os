@@ -257,8 +257,13 @@ uint64_t acpi_framebuffer_blit(uint64_t destination, uint64_t source, uint64_t b
     const uint64_t framebuffer_size = console_framebuffer->pitch * console_framebuffer->height;
     const uint64_t framebuffer_end = framebuffer_start + framebuffer_size;
     if (destination < framebuffer_start || destination > framebuffer_end ||
-        bytes > framebuffer_end - destination)
+        bytes > framebuffer_end - destination) {
+        if (source >= framebuffer_start && source <= framebuffer_end &&
+            bytes <= framebuffer_end - source)
+            framebuffer_transfer(destination, framebuffer_shadow ? shadow_address(source) : source,
+                                 bytes);
         return 0;
+    }
 
     if (framebuffer_shadow) {
         uint64_t target = shadow_address(destination);
@@ -501,6 +506,28 @@ static int32_t region_access(void *userdata, const char *path, uint8_t space,
             *word = *value;
         else
             *value = *word;
+        return AML_OK;
+    }
+    if (space == 1 && width == 2 && (address == 0x1CE || address == 0x1CF)) {
+        uint16_t word;
+        if (write) {
+            if (address == 0x1CF)
+                __asm__ volatile("sfence" : : : "memory");
+            __asm__ volatile("outw %0, %1" : : "a"((uint16_t)*value), "Nd"((uint16_t)address) : "memory");
+        } else {
+            __asm__ volatile("inw %1, %0" : "=a"(word) : "Nd"((uint16_t)address));
+            *value = word;
+        }
+        return AML_OK;
+    }
+    if (space == 1 && width == 4 && (address == 0xCF8 || address == 0xCFC)) {
+        uint32_t word;
+        if (write)
+            __asm__ volatile("outl %0, %1" : : "a"((uint32_t)*value), "Nd"((uint16_t)address));
+        else {
+            __asm__ volatile("inl %1, %0" : "=a"(word) : "Nd"((uint16_t)address));
+            *value = word;
+        }
         return AML_OK;
     }
     if (space != 1 || width != 1 ||
