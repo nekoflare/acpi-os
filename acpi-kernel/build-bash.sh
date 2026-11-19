@@ -40,9 +40,17 @@ fi
 printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
 tar -xf "$archive" -C "$build"
 
+# Give the bundled interactive shell the same identity shown by Fastfetch.
+sed -i 's|^#define PPROMPT .*|#define PPROMPT "root@localhost:~# "|' \
+    "$build/bash-$version/config-top.h"
+sed -i 's|set_if_not ("PS1", current_user.euid == 0 ? "# " : primary_prompt);|set_if_not ("PS1", primary_prompt);|' \
+    "$build/bash-$version/variables.c"
+
 cd "$build/obj"
 CC="sh $script --cc" CFLAGS="-O2 -march=x86-64 -fno-pie -std=gnu17" \
     "../bash-$version/configure" --enable-minimal-config --disable-nls \
     --without-bash-malloc --disable-readline --disable-job-control --enable-static-link
+sed -i 's|^#  define PPROMPT .*|#  define PPROMPT "root@localhost:~# "|' \
+    "$build/bash-$version/config-bot.h"
 make bash
 cp bash "$build/bash.elf"

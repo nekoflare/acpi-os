@@ -64,7 +64,12 @@ def boot(serial_path, qemu_log, qemu_command):
                         lambda: serial_path.read_bytes().endswith((b"$ ", b"# ")),
                         "the interactive Bash prompt",
                     )
-                    bash_prompt = serial_path.read_bytes()[-2:]
+                    bash_prompt = b"root@localhost:~# "
+                    wait_for(
+                        process, deadline,
+                        lambda: b"root@localhost:" in serial_path.read_bytes(),
+                        "the root@localhost Bash prompt",
+                    )
                 else:
                     wait_for(
                         process, deadline,
@@ -88,7 +93,7 @@ def boot(serial_path, qemu_log, qemu_command):
                                                "spc", "shift-4", "shift-4", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: b"\r\n0\n" + bash_prompt in serial_path.read_bytes(),
+                                lambda: re.search(rb"\r?\n0\r?\nroot@localhost:", serial_path.read_bytes()) is not None,
                                 "Bash reporting PID 0",
                             )
                             send_keys(stream, (*"test", "spc", "minus", "f", "spc", "slash",
@@ -97,32 +102,32 @@ def boot(serial_path, qemu_log, qemu_command):
                                                *"found", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: b"\r\nfound\n" + bash_prompt in serial_path.read_bytes(),
+                                lambda: b"\nfound\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
                                 "Bash test -f finding the initramfs file",
                             )
                             send_keys(stream, (*"source", "spc", "slash", *"boot",
                                                "minus", *"test", "dot", *"sh", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: b"Bash sourced the read-only initramfs\n" + bash_prompt in serial_path.read_bytes(),
+                                lambda: b"Bash sourced the read-only initramfs\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
                                 "Bash sourcing the initramfs script",
                             )
                             send_keys(stream, (*"ls", "spc", "slash", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: b"boot-test.sh\nfastfetch\nls\nreadme.txt\nwelcome.txt\nproc\n" + bash_prompt in serial_path.read_bytes(),
+                                lambda: b"boot-test.sh\nfastfetch\nls\nreadme.txt\nwelcome.txt\nproc\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
                                 "Bash running the standalone ls executable",
                             )
                             send_keys(stream, ("slash", *"ls", "spc", "minus", "a", "spc", "slash", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: b".\n..\nboot-test.sh\nfastfetch\nls\nreadme.txt\nwelcome.txt\nproc\n" + bash_prompt in serial_path.read_bytes(),
+                                lambda: b".\n..\nboot-test.sh\nfastfetch\nls\nreadme.txt\nwelcome.txt\nproc\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
                                 "ls -a showing dot entries",
                             )
                             send_keys(stream, (*"ls", "spc", "slash", *"proc", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: b"meminfo\n" + bash_prompt in serial_path.read_bytes(),
+                                lambda: b"meminfo\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
                                 "ls enumerating /proc",
                             )
                             send_keys(stream, (*"fastfetch", "ret"))
@@ -139,7 +144,7 @@ def boot(serial_path, qemu_log, qemu_command):
                             send_keys(stream, (*"echo", "spc", "shift-4", "shift-slash", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: serial_path.read_bytes().count(b"\r\n0\n" + bash_prompt) == 2,
+                                lambda: len(re.findall(rb"\r?\n0\r?\nroot@localhost:", serial_path.read_bytes())) == 2,
                                 "Fastfetch exiting successfully",
                             )
                             send_keys(stream, (*"exit", "spc", "0", "ret"))
