@@ -8,6 +8,46 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+static void cpuid(uint32_t leaf, uint32_t *a, uint32_t *b,
+                  uint32_t *c, uint32_t *d)
+{
+    __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d)
+                     : "a"(leaf), "c"(0));
+}
+
+static uint64_t read_tsc(void)
+{
+    uint32_t low, high;
+    __asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
+    return ((uint64_t)high << 32) | low;
+}
+
+static uint64_t tsc_frequency(void)
+{
+    uint32_t max_leaf, b, c, d;
+    cpuid(0, &max_leaf, &b, &c, &d);
+    if (max_leaf >= 0x15) {
+        uint32_t denominator, numerator, crystal_hz;
+        cpuid(0x15, &denominator, &numerator, &crystal_hz, &d);
+        if (denominator && numerator && crystal_hz)
+            return (uint64_t)crystal_hz * numerator / denominator;
+    }
+    if (max_leaf >= 0x16) {
+        uint32_t base_mhz;
+        cpuid(0x16, &base_mhz, &b, &c, &d);
+        if (base_mhz)
+            return (uint64_t)base_mhz * 1000000;
+    }
+    return 10000000000ULL;
+}
+
+static void hold_pattern(void)
+{
+    uint64_t deadline = read_tsc() + tsc_frequency() * 5;
+    while (read_tsc() < deadline)
+        __asm__ volatile("pause");
+}
+
 static int write_all(int fd, const void *data, size_t size)
 {
     const unsigned char *bytes = data;
@@ -84,5 +124,6 @@ int main(void)
     }
     printf("fbdev test pattern displayed (%ux%u XRGB8888)\n",
            var.xres, var.yres);
+    hold_pattern();
     return 0;
 }
