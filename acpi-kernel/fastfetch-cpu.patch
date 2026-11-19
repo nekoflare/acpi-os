@@ -1,0 +1,36 @@
+--- a/src/detection/cpu/cpu_linux.c
++++ b/src/detection/cpu/cpu_linux.c
+@@ -13,6 +13,10 @@
+ #include <unistd.h>
+ #include <dirent.h>
+ #include <fcntl.h>
++
++#ifdef FF_ACPI_MLIBC
++#include <cpuid.h>
++#endif
+ 
+ #define FF_CPUINFO_PATH "/proc/cpuinfo"
+ 
+@@ -799,7 +803,22 @@
+ [[maybe_unused]] static const char* detectCPUX86(const FFCPUOptions* options, FFCPUResult* cpu) {
+     FF_STRBUF_AUTO_DESTROY cpuinfo = ffStrbufCreateA(PROC_FILE_BUFFSIZ);
+     if (!ffReadFileBuffer(FF_CPUINFO_PATH, &cpuinfo) || cpuinfo.length == 0) {
++#ifdef FF_ACPI_MLIBC
++        // The ASL kernel may boot without a mounted /proc/cpuinfo.
++        unsigned int brand[12];
++        for (unsigned int i = 0; i < 3; ++i) {
++            unsigned int* regs = &brand[i * 4];
++            if (!__get_cpuid(0x80000002 + i, &regs[0], &regs[1], &regs[2], &regs[3])) {
++                return "CPUID does not expose a CPU model";
++            }
++        }
++        const char* model = (const char*) brand;
++        ffStrbufSetNS(&cpu->name, (uint32_t) strnlen(model, sizeof(brand)), model);
++        ffStrbufTrim(&cpu->name, ' ');
++        return nullptr;
++#else
+         return "ffReadFileBuffer(\"" FF_CPUINFO_PATH "\") failed";
++#endif
+     }
+ 
+     FF_STRBUF_AUTO_DESTROY physicalCoresBuffer = ffStrbufCreate();
