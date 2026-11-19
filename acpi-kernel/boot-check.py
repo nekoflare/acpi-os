@@ -115,13 +115,13 @@ def boot(serial_path, qemu_log, qemu_command):
                             send_keys(stream, (*"ls", "spc", "slash", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: b"boot-test.sh\nfastfetch\nls\nreadme.txt\nwelcome.txt\nproc\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
+                                lambda: b"boot-test.sh\nfastfetch\nfbtest\nls\nreadme.txt\nwelcome.txt\ndev\nproc\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
                                 "Bash running the standalone ls executable",
                             )
                             send_keys(stream, ("slash", *"ls", "spc", "minus", "a", "spc", "slash", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: b".\n..\nboot-test.sh\nfastfetch\nls\nreadme.txt\nwelcome.txt\nproc\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
+                                lambda: b".\n..\nboot-test.sh\nfastfetch\nfbtest\nls\nreadme.txt\nwelcome.txt\ndev\nproc\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
                                 "ls -a showing dot entries",
                             )
                             send_keys(stream, (*"ls", "spc", "slash", *"proc", "ret"))
@@ -129,6 +129,19 @@ def boot(serial_path, qemu_log, qemu_command):
                                 process, deadline,
                                 lambda: b"meminfo\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
                                 "ls enumerating /proc",
+                            )
+                            send_keys(stream, (*"ls", "spc", "slash", *"dev", "ret"))
+                            wait_for(
+                                process, deadline,
+                                lambda: b"fb0\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
+                                "Bash listing /dev/fb0",
+                            )
+                            send_keys(stream, (*"fbtest", "ret"))
+                            wait_for(
+                                process, deadline,
+                                lambda: b"fbdev test pattern displayed (" in serial_path.read_bytes()
+                                        and serial_path.read_bytes().endswith(bash_prompt),
+                                "userspace fbdev ioctl and pixel-write test",
                             )
                             send_keys(stream, (*"fastfetch", "ret"))
                             wait_for(
@@ -158,7 +171,7 @@ def boot(serial_path, qemu_log, qemu_command):
                         send_keys(stream, ("l", "x", "backspace", "s", "spc", "slash", "ret"))
                         wait_for(
                             process, deadline,
-                            lambda: b"welcome.txt\r\nproc\r\nasl> " in serial_path.read_bytes(),
+                            lambda: b"welcome.txt\r\ndev\r\nproc\r\nasl> " in serial_path.read_bytes(),
                             "the initramfs listing",
                         )
                         after = serial_path.with_suffix(".ppm").resolve()
@@ -177,7 +190,7 @@ def boot(serial_path, qemu_log, qemu_command):
                             if b"mlibc C program verified fork, TLS, allocation, and console I/O\n" not in output:
                                 raise RuntimeError("The mlibc C program did not report success")
                         for expected in (
-                            b"readme.txt\r\nwelcome.txt\r\nproc\r\nasl> ",
+                            b"readme.txt\r\nwelcome.txt\r\ndev\r\nproc\r\nasl> ",
                             b"Welcome to the ASL kernel shell.\r\nasl> ",
                         ):
                             if expected not in output:

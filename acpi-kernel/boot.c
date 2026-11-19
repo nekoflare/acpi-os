@@ -188,6 +188,9 @@ uint64_t acpi_framebuffer_info(uint64_t field)
     case 3: return fb->pitch;
     case 4: return fb->bpp / 8;
     case 5: return console_white;
+    case 6: return fb->red_shift;
+    case 7: return fb->green_shift;
+    case 8: return fb->blue_shift;
     default: return 0;
     }
 }
@@ -259,9 +262,25 @@ uint64_t acpi_pixel_row(uint64_t address, uint64_t bits, uint64_t colors, uint64
 
 uint64_t acpi_framebuffer_blit(uint64_t destination, uint64_t source, uint64_t bytes)
 {
+    if (!console_framebuffer)
+        return 0;
+    const uint64_t framebuffer_start = (uintptr_t)console_framebuffer->address;
+    const uint64_t framebuffer_size = console_framebuffer->pitch * console_framebuffer->height;
+    const uint64_t framebuffer_end = framebuffer_start + framebuffer_size;
+    if (destination < framebuffer_start || destination > framebuffer_end ||
+        bytes > framebuffer_end - destination)
+        return 0;
+
     if (framebuffer_shadow) {
         uint64_t target = shadow_address(destination);
-        framebuffer_transfer(target, source ? shadow_address(source) : 0, bytes);
+        if (source >= framebuffer_start && source <= framebuffer_end &&
+            bytes <= framebuffer_end - source)
+            source = shadow_address(source);
+        else if (source) {
+            framebuffer_transfer(target, source, bytes);
+            source = target;
+        }
+        framebuffer_transfer(target, source, bytes);
         source = source ? target : 0;
     }
     framebuffer_transfer(destination, source, bytes);

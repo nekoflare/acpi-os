@@ -173,10 +173,10 @@ $(MLIBC_BUILD)/hello-mlibc.elf: hello-mlibc.c $(MLIBC_SYSROOT)/lib/libc.a Makefi
 
 BASH_BOOT = BUILD="$(BASH_BUILD)" BOOT_ELF="$(BASH_BUILD)/bash.elf" \
 	BOOT_CONFIG=limine-bash.conf BOOT_MODULE=bash.elf BASH_CHECK=1 \
-	INITRAMFS_EXTRA="$(BASH_BUILD)/fastfetch"
+	INITRAMFS_EXTRA="$(BASH_BUILD)/fastfetch $(BASH_BUILD)/fbtest"
 
 .PHONY: bash run-bash check-bash check-bash-uefi
-bash: $(BASH_BUILD)/bash.elf
+bash: $(BASH_BUILD)/bash.elf $(BASH_BUILD)/fbtest
 	$(MAKE) $(BASH_BOOT) all
 
 run-bash: bash
@@ -190,6 +190,13 @@ check-bash-uefi: bash
 
 $(BASH_BUILD)/bash.elf: build-bash.sh $(MLIBC_SYSROOT)/lib/libc.a
 	+sh $< "$(BASH_BUILD)" "$(MLIBC_BUILD)/sysroot" "$(CLANG)" "$(LLD)" "$(MLIBC_UAPI)"
+
+$(BASH_BUILD)/fbtest: fbtest.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
+	$(CLANG) -O2 -march=x86-64 -fno-pie -Wall -Wextra -Werror -nostdinc \
+		-isystem "$(MLIBC_SYSROOT)/include" -idirafter "$(if $(MLIBC_UAPI),$(MLIBC_UAPI),$(MLIBC_BUILD)/linux-uapi)" \
+		-c $< -o $(BASH_BUILD)/fbtest.o
+	$(LLD) -static -z separate-loadable-segments "$(MLIBC_SYSROOT)/lib/crt1.o" \
+		$(BASH_BUILD)/fbtest.o "$(MLIBC_SYSROOT)/lib/libc.a" -o $@
 
 FASTFETCH_BUILD := $(abspath ../target/acpi-kernel/fastfetch)
 $(BASH_BUILD)/fastfetch: $(FASTFETCH_BUILD)/fastfetch.elf

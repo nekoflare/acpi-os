@@ -94,6 +94,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (FBWD, Zero)
     Name (FBHT, Zero)
     Name (FBSZ, Zero)
+    Name (FBRD, Zero)
+    Name (FBGR, Zero)
+    Name (FBBL, Zero)
     Name (FBIO, Buffer (4096) {})
     Name (FBVS, Buffer (160) {})
     Name (FBFS, Buffer (80) {})
@@ -112,6 +115,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         FBWD = XFBQ (One)
         FBHT = XFBQ (2)
         FBSZ = FBPT * FBHT
+        FBRD = XFBQ (6)
+        FBGR = XFBQ (7)
+        FBBL = XFBQ (8)
         FBCL = XFBQ (5)
         XFBL (FBAD, Zero, Local0 * FBPT)
         Return (One)
@@ -1896,6 +1902,21 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (One)
     }
 
+    // Copy a validated userspace buffer into kernel-owned storage.
+    Method (UCPY, 4, NotSerialized)
+    {
+        If (!URNG (Arg0, Arg2, Arg3, Zero)) { Return (Zero) }
+        Local0 = Zero
+        While (Local0 < Arg3)
+        {
+            Local1 = UPHY (Arg0, Arg2 + Local0, Zero)
+            If (!Local1) { Return (Zero) }
+            XSTB (Arg1 + Local0, XBYT (Local1))
+            Increment (Local0)
+        }
+        Return (One)
+    }
+
     // Copy the path from userspace and select the starting directory.
     Method (UENT, 3, NotSerialized)
     {
@@ -2204,7 +2225,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (Local3 >= FBSZ) { Return (Zero) }
             If (Local2 > FBSZ - Local3) { Local2 = FBSZ - Local3 }
             If (!URNG (Arg0, Arg2, Local2, Zero)) { Return (Zero - 14) }
-            If (!UCOP (Arg0, XADR (FBIO), Arg2, Local2)) { Return (Zero - 14) }
+            If (!UCPY (Arg0, XADR (FBIO), Arg2, Local2)) { Return (Zero - 14) }
             XFBL (FBAD + Local3, XADR (FBIO), Local2)
             XSTQ (Local0 + 8, Local3 + Local2)
             Return (Local2)
@@ -2381,15 +2402,14 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             If (!FBAD || FBPP != 4) { Return (Zero - 19) } // ENODEV
             If (!URNG (Arg0, Arg3, SizeOf (FBVS), WRIT)) { Return (Zero - 14) }
-            XCLR (XADR (FBVS))
             XSTQ (XADR (FBVS), FBWD)
             XSTQ (XADR (FBVS) + 4, FBHT)
             XSTQ (XADR (FBVS) + 8, FBWD)
             XSTQ (XADR (FBVS) + 12, FBHT)
             XSTQ (XADR (FBVS) + 24, 32)
-            XSTQ (XADR (FBVS) + 32, 16 | (8 << 32))
-            XSTQ (XADR (FBVS) + 44, 8 | (8 << 32))
-            XSTQ (XADR (FBVS) + 56, 8 | (8 << 32))
+            XSTQ (XADR (FBVS) + 32, FBRD | (8 << 32))
+            XSTQ (XADR (FBVS) + 44, FBGR | (8 << 32))
+            XSTQ (XADR (FBVS) + 56, FBBL | (8 << 32))
             If (!UCOP (Arg0, Arg3, XADR (FBVS), SizeOf (FBVS))) { Return (Zero - 14) }
             Return (Zero)
         }
@@ -2397,7 +2417,6 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             If (!FBAD || FBPP != 4) { Return (Zero - 19) } // ENODEV
             If (!URNG (Arg0, Arg3, SizeOf (FBFS), WRIT)) { Return (Zero - 14) }
-            XCLR (XADR (FBFS))
             XMOV (XADR (FBFS), XADR (FBNM), SizeOf (FBNM))
             XSTQ (XADR (FBFS) + 24, FBSZ)
             XSTQ (XADR (FBFS) + 28, 0)
