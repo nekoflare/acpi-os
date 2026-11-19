@@ -48,6 +48,28 @@ static void hold_pattern(void)
         __asm__ volatile("pause");
 }
 
+static uint32_t hsv_pixel(uint32_t hue, uint32_t saturation,
+                          uint32_t red_shift, uint32_t green_shift,
+                          uint32_t blue_shift)
+{
+    uint32_t sector = hue >> 8;
+    uint32_t fraction = hue & 255;
+    uint32_t p = (255 * (255 - saturation)) / 255;
+    uint32_t q = (255 * (255 - saturation * fraction / 255)) / 255;
+    uint32_t t = (255 * (255 - saturation * (255 - fraction) / 255)) / 255;
+    uint32_t red, green, blue;
+
+    switch (sector) {
+    case 0: red = 255; green = t; blue = p; break;
+    case 1: red = q; green = 255; blue = p; break;
+    case 2: red = p; green = 255; blue = t; break;
+    case 3: red = p; green = q; blue = 255; break;
+    case 4: red = t; green = p; blue = 255; break;
+    default: red = 255; green = p; blue = q; break;
+    }
+    return (red << red_shift) | (green << green_shift) | (blue << blue_shift);
+}
+
 static int write_all(int fd, const void *data, size_t size)
 {
     const unsigned char *bytes = data;
@@ -79,7 +101,7 @@ int main(void)
         close(fd);
         return 1;
     }
-    if (!var.xres || !var.yres || var.bits_per_pixel != 32 ||
+    if (var.xres < 2 || var.yres < 2 || var.bits_per_pixel != 32 ||
         var.red.offset != 16 || var.red.length != 8 ||
         var.green.offset != 8 || var.green.length != 8 ||
         var.blue.offset != 0 || var.blue.length != 8 ||
@@ -97,24 +119,26 @@ int main(void)
         return 1;
     }
 
-    const uint32_t colors[] = {0xFF0000, 0x00FF00, 0x0000FF, 0xFFFFFF};
-    for (uint32_t x = 0; x < var.xres; ++x) {
-        uint32_t rgb = colors[(uint64_t)x * 4 / var.xres];
-        row[x] = ((rgb >> 16 & 0xFF) << var.red.offset) |
-                 ((rgb >> 8 & 0xFF) << var.green.offset) |
-                 ((rgb & 0xFF) << var.blue.offset);
-    }
-    if (lseek(fd, (off_t)(var.yres / 2) * fix.line_length, SEEK_SET) < 0) {
-        perror("fbtest: seek to test row");
-        free(row);
-        close(fd);
-        return 1;
-    }
-    if (write_all(fd, row, (size_t)var.xres * sizeof(*row)) < 0) {
-        perror("fbtest: write framebuffer pixels");
-        free(row);
-        close(fd);
-        return 1;
+    uint32_t draw_width = var.xres < 320 ? var.xres : 320;
+    uint32_t draw_height = var.yres < 200 ? var.yres : 200;
+    uint32_t origin_x = (var.xres - draw_width) / 2;
+    uint32_t origin_y = (var.yres - draw_height) / 2;
+    for (uint32_t y = 0; y < draw_height; ++y) {
+        uint32_t saturation = (uint64_t)(draw_height - 1 - y) * 255 / (draw_height - 1);
+        for (uint32_t x = 0; x < draw_width; ++x) {
+            uint32_t hue = (uint64_t)x * 1535 / (draw_width - 1);
+            row[x] = hsv_pixel(hue, saturation, var.red.offset,
+                               var.green.offset, var.blue.offset);
+        }
+        off_t offset = (off_t)(origin_y + y) * fix.line_length +
+                       (off_t)origin_x * sizeof(*row);
+        if (lseek(fd, offset, SEEK_SET) < 0 ||
+            write_all(fd, row, (size_t)draw_width * sizeof(*row)) < 0) {
+            perror("fbtest: write color space");
+            free(row);
+            close(fd);
+            return 1;
+        }
     }
 
     free(row);
@@ -122,8 +146,8 @@ int main(void)
         perror("fbtest: close framebuffer");
         return 1;
     }
-    printf("fbdev test pattern displayed (%ux%u XRGB8888)\n",
-           var.xres, var.yres);
+    printf("HSV color space displayed (%ux%u XRGB8888)\n",
+           draw_width, draw_height);
     hold_pattern();
     return 0;
 }

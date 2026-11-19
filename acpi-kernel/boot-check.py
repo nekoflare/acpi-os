@@ -139,7 +139,7 @@ def boot(serial_path, qemu_log, qemu_command):
                             send_keys(stream, (*"fbtest", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: b"fbdev test pattern displayed (" in serial_path.read_bytes()
+                                lambda: b"HSV color space displayed (" in serial_path.read_bytes()
                                         and serial_path.read_bytes().endswith(bash_prompt),
                                 "userspace fbdev ioctl and pixel-write test",
                             )
