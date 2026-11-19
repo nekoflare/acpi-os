@@ -64,7 +64,6 @@ In freestanding builds, AMLAOT recognizes these x86 kernel intrinsics:
 | `XADR (Buffer)` | Return the address of the buffer's storage |
 | `XGDT (Pointer, Code, Data)` | Load the 10-byte GDTR and reload the segment selectors |
 | `XIDT (Pointer)` | Load the 10-byte IDTR |
-| `XVEC ()` | Return the base of the 256 interrupt stubs, each 16 bytes |
 | `XDWD (Address, Value)` | Write a 32-bit MMIO register, or read it when `Value` is `Ones` |
 | `XAPC ()` | Return whether CPUID reports a local APIC |
 | `XMSR (Index, Value)` | Write an MSR, or read it when `Value` is `Ones` |
@@ -75,25 +74,33 @@ In freestanding builds, AMLAOT recognizes these x86 kernel intrinsics:
 | `XBYT (Address)` | Read one byte from mapped memory |
 | `XSTB (Address, Value)` | Write one byte to mapped memory |
 | `XTRG (Selector)` | Load the task register with a TSS selector |
-| `XSYE ()` | Return the SYSCALL entry address |
-| `XEXT ()` | Return the native task exit trampoline |
-| `XTST ()` | Return the native scheduler test entry point |
-| `XSTQ (Address, Value)` | Write an aligned virtual 64-bit word |
 | `XHND ()` | Return the vector-3 trampoline address |
 | `XBRK ()` | Trigger `int3` and dispatch to the root ASL `BRKP` method |
 | `XMAP (Index, Field)` | Fields 0 and 1 return the aligned start and exclusive end of a usable range, or zero for a skipped entry. Fields 2, 3, and 4 return the raw Limine base, length, and type. Returns `Ones` past the map |
 | `XPLK (PhysicalAddress, Link)` | Write the free-list link in an allocator-owned page, or read it when `Link` is `Ones` |
 | `XCR3 ()` | Return the active four-level page-table root's physical address, or zero if unavailable |
-| `XFBQ (Field)` | Query the selected framebuffer address, width, height, pitch, bytes per pixel, or packed foreground color (fields 0–5) |
-| `XRGB (Rgb)` | Pack a 24-bit RGB color using the selected framebuffer's channel layout |
+| `XFBQ (Field)` | Query the selected framebuffer address, width, height, pitch, bytes per pixel, or packed foreground color (fields 0–5), RGB channel shifts (6–8), or RGB channel widths (9–11) |
 | `XPRW (Address, Bits, Colors, BytesPerPixel)` | Draw eight pixels with foreground in the low 32 bits and background in the high 32 bits |
 | `XFBL (Destination, Source, Length)` | Copy framebuffer bytes forward, or clear them when source is zero |
-| `XNXE ()` | Return one if the CPU has enabled execute-disable page permissions |
-| `XHHD ()` | Return Limine's higher-half direct-map offset |
 | `XCLR (Address)` | Zero one writable virtual page |
 | `XINV (Address)` | Invalidate the local CPU's translation for a virtual page |
-| `XVWD (Address, Value)` | Write an aligned virtual 64-bit word, or read it when `Value` is `Ones` |
 | `XMEM (PhysicalAddress, Width)` | Read a little-endian 1-, 4-, or 8-byte value from firmware memory mapped by Limine, or return `Ones` on failure |
+
+`XVWD` and `XSTQ` are ASL methods that access an aligned 64-bit word through
+a method-local `SystemMemory` region and `QWordAcc` field. `XVWD` reads when
+its value argument is `Ones`, otherwise it writes and returns zero. `XSTQ`
+always writes and returns zero, including when the value is `Ones`. Both
+take an address in an existing kernel mapping. The freestanding compiler
+uses an arena checkpoint for these scalar region methods and discards the
+temporary objects when the method returns.
+
+The ASL method `XRGB (Rgb)` packs a 24-bit RGB color using the selected
+framebuffer's channel layout. The ASL method `XNXE ()` reads EFER through
+`XMSR` and returns one when execute-disable page permissions are enabled.
+
+At boot, `KERN` reads the direct-map offset and the addresses of the
+interrupt stub table, SYSCALL entry, task exit trampoline, and scheduler
+test entry from the handoff supplied by `_start`.
 
 Keep any buffer referenced by a loaded table register alive and at the
 same address while the table is installed. The ASL kernel stores both
@@ -311,11 +318,12 @@ general Linux syscall ABI are outside its current scope.
 ## Static Bash
 
 The interactive UEFI image boots GNU Bash 5.2.37 and bundles Fastfetch
-in the initramfs. Run `make run-uefi` from the repository root or
+and Doom in the initramfs. Run `make run-uefi` from the repository root or
 `make -C acpi-kernel run-uefi`. This launch uses KVM with host CPU
 passthrough so Fastfetch reports the host CPU model. The build uses the mlibc sysroot and
 needs curl, tar, and sha256sum in addition to the mlibc and Fastfetch
-build tools. The Bash build omits Readline and job control.
+build tools. The Doom data download also requires gzip. The Bash build omits
+Readline and job control.
 
 ```sh
 make -C acpi-kernel -j8 bash
@@ -364,3 +372,39 @@ This port uses a short default module list and disables Local IP detection
 because mlibc's Linux `getifaddrs()` requires netlink support. Fastfetch
 reads the ASL kernel identity through `uname()`.
 CPU and memory detection depend on Linux-style `/proc` data.
+
+## Doom
+
+Doomgeneric runs as a static ring-3 program linked against mlibc. The
+build fetches a pinned [Doomgeneric revision](https://github.com/ozkl/doomgeneric/tree/e257a09527062bfb986b6e5e0780839b6cbd5b71).
+Run `make run-uefi` from the repository root and type `doom` at the Bash
+prompt in the QEMU window. The first build downloads and verifies
+id Software’s Doom 1.8 shareware episode and bundles it as `/doom.wad`.
+Set `DOOM_WAD` to the absolute path of your full-game IWAD to play the
+full game.
+
+To boot directly into the game, use one of these targets.
+
+```sh
+make -C acpi-kernel run-doom
+make -C acpi-kernel run-doom-uefi
+```
+
+The ISO is `target/acpi-kernel-doom/acpi-kernel.iso`. The game requests
+a 32-bit Limine framebuffer and scales its 320×200 image to a centered
+4:3 viewport. In the QEMU display, use the arrow keys to move and turn,
+Ctrl to fire, Space to use doors, and Esc for the menu. Save slots live
+in memory until Doom exits. Audio, mouse input, and persistent storage
+are unavailable in this port.
+
+The game reads raw PS/2 events from `/dev/kbd`. Opening the device
+exclusively captures keyboard input until the final reference to that
+open file is closed, including at process exit. Each read returns a
+two-byte event with a translated set-1 scan byte (bit 7 marks release)
+and an extended-key flag (1 for an E0 prefix). An empty queue returns
+`EAGAIN`. The console resumes receiving characters when the device
+is released. Pixel output uses the existing `/dev/fb0` interface.
+
+`clock_gettime(CLOCK_MONOTONIC)` reports elapsed LAPIC ticks at roughly
+10 ms resolution. `nanosleep` parks the calling task on the scheduler's
+sleep queue until its deadline, rounded to timer ticks.

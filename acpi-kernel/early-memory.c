@@ -68,3 +68,14 @@ void free(void *allocation)
     /* The early arena is reserved for the lifetime of this boot milestone. */
     (void)allocation;
 }
+
+/* Scalar region methods take a checkpoint and discard their temporary objects. */
+size_t acpi_arena_mark(void)
+{
+    return used;
+}
+
+void acpi_arena_reset(size_t mark)
+{
+    used = mark;
+}

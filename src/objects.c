@@ -164,6 +164,14 @@ void *aml_object_slot(aml_context *ctx)
     return slot;
 }
 
+void aml_reset_allocations(aml_context *ctx, const void *mark)
+{
+    while (ctx->allocations != mark) {
+        ctx->allocated -= ctx->allocations->size;
+        ctx->allocations = ctx->allocations->next;
+    }
+}
+
 void aml_retire_region(value *slot)
 {
     *slot = (value){.type = RETIRED_SLOT};

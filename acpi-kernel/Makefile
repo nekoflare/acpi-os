@@ -173,10 +173,10 @@ $(MLIBC_BUILD)/hello-mlibc.elf: hello-mlibc.c $(MLIBC_SYSROOT)/lib/libc.a Makefi
 
 BASH_BOOT = BUILD="$(BASH_BUILD)" BOOT_ELF="$(BASH_BUILD)/bash.elf" \
 	BOOT_CONFIG=limine-bash.conf BOOT_MODULE=bash.elf BASH_CHECK=1 \
-	INITRAMFS_EXTRA="$(BASH_BUILD)/fastfetch $(BASH_BUILD)/fbtest"
+	INITRAMFS_EXTRA="$(BASH_BUILD)/fastfetch $(BASH_BUILD)/fbtest $(BASH_BUILD)/doom $(DOOM_DATA)"
 
 .PHONY: bash run-bash check-bash check-bash-uefi
-bash: $(BASH_BUILD)/bash.elf $(BASH_BUILD)/fbtest
+bash: $(BASH_BUILD)/bash.elf $(BASH_BUILD)/fbtest $(BASH_BUILD)/doom doom-wad
 	$(MAKE) $(BASH_BOOT) all
 
 run-bash: bash
@@ -214,3 +214,47 @@ run-fastfetch: fastfetch
 
 $(FASTFETCH_BUILD)/fastfetch.elf: build-fastfetch.sh fastfetch-mlibc.patch fastfetch-cpu.patch $(MLIBC_SYSROOT)/lib/libc.a
 	sh $< "$(FASTFETCH_BUILD)" "$(MLIBC_BUILD)/sysroot" "$(CLANG)" "$(LLD)" "$(MLIBC_UAPI)" "$(MLIBC_JOBS)"
+
+DOOM_BUILD := $(abspath ../target/acpi-kernel-doom)
+DOOM_SHAREWARE_ARCHIVE := $(DOOM_BUILD)/doom-1.8.wad.gz
+DOOM_SHAREWARE_WAD := $(DOOM_BUILD)/doom1.wad
+DOOM_WAD ?= $(DOOM_SHAREWARE_WAD)
+DOOM_DATA := $(DOOM_BUILD)/doom.wad
+ifeq ($(DOOM_WAD),$(DOOM_SHAREWARE_WAD))
+doom-wad: $(DOOM_SHAREWARE_WAD)
+endif
+DOOM_BOOT = BUILD="$(DOOM_BUILD)" BOOT_ELF="$(DOOM_BUILD)/doom.elf" \
+	BOOT_CONFIG=limine-doom.conf BOOT_MODULE=doom.elf INITRAMFS_EXTRA="$(DOOM_DATA)"
+
+.PHONY: doom run-doom run-doom-uefi doom-wad
+doom: $(DOOM_BUILD)/doom.elf doom-wad
+	$(MAKE) $(DOOM_BOOT) all
+
+run-doom: doom
+	$(MAKE) $(DOOM_BOOT) run
+
+run-doom-uefi: doom
+	$(MAKE) $(DOOM_BOOT) boot-uefi
+
+doom-wad:
+	@test -n "$(DOOM_WAD)" && test -f "$(DOOM_WAD)" || \
+		{ echo "Set DOOM_WAD to the path of a Doom or Freedoom IWAD." >&2; exit 1; }
+	mkdir -p "$(DOOM_BUILD)"
+	@cmp -s -- "$(DOOM_WAD)" "$(DOOM_BUILD)/doom.wad" || cp -- "$(DOOM_WAD)" "$(DOOM_BUILD)/doom.wad"
+
+$(BASH_BUILD)/doom: $(DOOM_BUILD)/doom.elf
+	mkdir -p "$(BASH_BUILD)"
+	cp "$<" "$@"
+
+$(DOOM_SHAREWARE_ARCHIVE):
+	mkdir -p "$(DOOM_BUILD)"
+	curl -fL --retry 2 "https://www.gamers.org/pub/idgames/idstuff/doom/doom-1.8.wad.gz" -o "$@.tmp"
+	printf '%s  %s\n' 58cf6a563b631a47561630afa6276d853c27079342f7969ec3006965da8557a1 "$@.tmp" | sha256sum -c -
+	mv "$@.tmp" "$@"
+
+$(DOOM_SHAREWARE_WAD): $(DOOM_SHAREWARE_ARCHIVE)
+	gzip -dc "$<" > "$@"
+
+$(DOOM_BUILD)/doom.elf: build-doom.sh doomgeneric-asl.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
+	+sh $< "$(DOOM_BUILD)" "$(MLIBC_SYSROOT)" \
+		"$(abspath $(if $(MLIBC_UAPI),$(MLIBC_UAPI),$(MLIBC_BUILD)/linux-uapi))" "$(CLANG)" "$(LLD)"

@@ -96,7 +96,8 @@ static volatile uint64_t requests_end[] = {
 extern const uint8_t acpi_initramfs_start[], acpi_initramfs_end[];
 int32_t aml_KERN(aml_context *, uint64_t *, uint64_t rsdp,
                  uint64_t initramfs, uint64_t initramfs_size,
-                 uint64_t module_name, uint64_t module_command);
+                 uint64_t module_name, uint64_t module_command,
+                 uint64_t boot_addresses);
 
 enum {
     USABLE = 0,
@@ -191,23 +192,11 @@ uint64_t acpi_framebuffer_info(uint64_t field)
     case 6: return fb->red_shift;
     case 7: return fb->green_shift;
     case 8: return fb->blue_shift;
+    case 9: return fb->red_size;
+    case 10: return fb->green_size;
+    case 11: return fb->blue_size;
     default: return 0;
     }
-}
-
-static uint32_t pack_channel(uint64_t value, unsigned size, unsigned shift)
-{
-    return (uint32_t)(((value * ((UINT64_C(1) << size) - 1) + 127) / 255) << shift);
-}
-
-uint64_t acpi_framebuffer_rgb(uint64_t rgb)
-{
-    const struct framebuffer *fb = console_framebuffer;
-    if (!fb)
-        return 0;
-    return pack_channel((rgb >> 16) & 255, fb->red_size, fb->red_shift) |
-           pack_channel((rgb >> 8) & 255, fb->green_size, fb->green_shift) |
-           pack_channel(rgb & 255, fb->blue_size, fb->blue_shift);
 }
 
 /* Copy forward for scrolling, or clear when source is zero. */
@@ -316,16 +305,6 @@ uint64_t acpi_page_range(uint64_t index, uint64_t field)
     return field ? limit : first;
 }
 
-/* Access the free-list link at the start of an allocator-owned page. */
-uint64_t acpi_page_link(uint64_t physical, uint64_t link)
-{
-    uint64_t *word = (uint64_t *)(direct_map_offset + physical);
-    if (link == UINT64_MAX)
-        return *word;
-    *word = link;
-    return 0;
-}
-
 uint64_t acpi_page_root(void)
 {
     uint64_t cr4, cr3;
@@ -335,18 +314,6 @@ uint64_t acpi_page_root(void)
 
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3) : : "memory");
     return cr3 & UINT64_C(0x000ffffffffff000);
-}
-
-uint64_t acpi_nx_enabled(void)
-{
-    uint32_t efer_low, efer_high;
-    __asm__ volatile("rdmsr" : "=a"(efer_low), "=d"(efer_high) : "c"(0xc0000080u));
-    return (efer_low >> 11) & 1; /* EFER.NXE */
-}
-
-uint64_t acpi_direct_map_offset(void)
-{
-    return direct_map_offset;
 }
 
 uint64_t acpi_clear_page(uint64_t address)
@@ -368,20 +335,6 @@ uint64_t acpi_invalidate_page(uint64_t address)
 {
     __asm__ volatile("invlpg (%0)" : : "r"(address) : "memory");
     return 0;
-}
-
-/* Access an aligned word through an existing virtual mapping. */
-uint64_t acpi_store_word(uint64_t address, uint64_t value)
-{
-    *(volatile uint64_t *)address = value;
-    return 0;
-}
-
-uint64_t acpi_virtual_word(uint64_t address, uint64_t value)
-{
-    if (value == UINT64_MAX)
-        return *(const volatile uint64_t *)address;
-    return acpi_store_word(address, value);
 }
 
 static bool acpi_byte_mapped(uint64_t address)
@@ -482,28 +435,8 @@ uint64_t acpi_load_tr(uint64_t selector)
 
 extern void acpi_syscall_entry(void);
 
-uint64_t acpi_syscall_address(void)
-{
-    return (uintptr_t)acpi_syscall_entry;
-}
-
 extern void acpi_task_exit(void);
 extern void acpi_task_test(uint64_t *);
-
-uint64_t acpi_task_exit_address(void)
-{
-    return (uintptr_t)acpi_task_exit;
-}
-
-uint64_t acpi_task_test_address(void)
-{
-    return (uintptr_t)acpi_task_test;
-}
-
-uint64_t acpi_idt_entries(void)
-{
-    return (uintptr_t)acpi_vector_entries;
-}
 
 uint64_t acpi_mmio_dword(uint64_t address, uint64_t value)
 {
@@ -557,11 +490,19 @@ uint64_t acpi_wait_irq(uint64_t cycles)
     return acpi_irq_pending;
 }
 
-static int32_t port_access(void *userdata, const char *path, uint8_t space,
+static int32_t region_access(void *userdata, const char *path, uint8_t space,
                            uint64_t address, uint8_t width, bool write, uint64_t *value)
 {
     (void)userdata;
     (void)path;
+    if (space == 0 && width == 8 && !(address & 7)) {
+        volatile uint64_t *word = (volatile uint64_t *)address;
+        if (write)
+            *word = *value;
+        else
+            *value = *word;
+        return AML_OK;
+    }
     if (space != 1 || width != 1 ||
         !((address >= 0x3F8 && address <= 0x3FF) ||
           address == 0x40 || address == 0x43 ||
@@ -594,15 +535,24 @@ _Noreturn void _start(void)
                 rsdp_physical = (uintptr_t)rsdp->address - direct_map_offset;
         }
         select_framebuffer();
-        const aml_host host = {.region_access = port_access};
+        const aml_host host = {.region_access = region_access};
         aml_context *ctx = aml_context_create_with_host(&host);
         uint64_t result;
         if (ctx) {
             const struct module_file *module = boot_module();
+            /* Keep this order in sync with the ASL KERN boot handoff. */
+            const uint64_t boot_addresses[] = {
+                direct_map_offset,
+                (uintptr_t)acpi_vector_entries,
+                (uintptr_t)acpi_syscall_entry,
+                (uintptr_t)acpi_task_exit,
+                (uintptr_t)acpi_task_test,
+            };
             aml_KERN(ctx, &result, rsdp_physical, (uintptr_t)acpi_initramfs_start,
                      (uintptr_t)acpi_initramfs_end - (uintptr_t)acpi_initramfs_start,
                      (uintptr_t)boot_module_name(module),
-                     module ? (uintptr_t)module->command : 0);
+                     module ? (uintptr_t)module->command : 0,
+                     (uintptr_t)boot_addresses);
         }
     }
     for (;;)

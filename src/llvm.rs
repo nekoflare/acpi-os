@@ -231,6 +231,9 @@ declare void @aml_objects_destroy(ptr)
 declare void @aml_context_set_host(ptr, ptr)
 declare ptr @aml_object_slot(ptr)
 declare void @aml_retire_region(ptr)
+declare i64 @acpi_arena_mark()
+declare void @acpi_arena_reset(i64)
+declare void @aml_reset_allocations(ptr, ptr)
 declare void @aml_objects_collect(ptr)
 declare i32 @aml_sync_level(ptr)
 declare void @aml_release_mutexes(ptr)
@@ -577,6 +580,40 @@ fn merge_paths(left: Option<u8>, right: Option<u8>) -> Option<u8> {
     }
 }
 
+// Only scalar, leaf region methods can discard their allocations on return.
+fn scoped_region_method(body: &[Statement]) -> bool {
+    let [region, fields, rest @ ..] = body else { return false };
+    let (StatementKind::Region(region), StatementKind::RegionFields(fields)) =
+        (&region.kind, &fields.kind)
+    else { return false };
+    let [field] = fields.units.as_slice() else { return false };
+    if !matches!(&fields.backing, FieldBacking::Region(name) if *name == region.name)
+        || !matches!(region.base, Expression::Arg(_) | Expression::Integer(_))
+        || !matches!(region.length, Expression::Integer(_))
+        || field.bits > 64
+    {
+        return false;
+    }
+    fn scalar(expr: &Expression) -> bool {
+        matches!(expr, Expression::Integer(_) | Expression::Arg(_))
+    }
+    fn safe(statement: &Statement, field: &AbsolutePath) -> bool {
+        let is_field = |expr: &Expression| matches!(expr, Expression::Field(name) if name == field);
+        match &statement.kind {
+            StatementKind::Return(expr) => matches!(expr, Expression::Integer(_)) || is_field(expr),
+            StatementKind::Evaluate(Expression::Apply(Operator::Store, args)) => {
+                matches!(args.as_slice(), [source, target] if scalar(source) && is_field(target))
+            }
+            StatementKind::If { predicate, body, otherwise: None } => {
+                matches!(predicate, Expression::Apply(Operator::LEqual, args) if args.iter().all(scalar))
+                    && body.iter().all(|s| safe(s, field))
+            }
+            _ => false,
+        }
+    }
+    rest.iter().all(|s| safe(s, &field.name))
+}
+
 impl<'a> MethodEmitter<'a> {
     fn new(
         method: &'a Method,
@@ -660,7 +697,8 @@ entry:
   br i1 %invalid, label %error, label %invoke
 invoke:
   call void @aml_objects_collect(ptr %ctx)
-  store i64 100000, ptr %ctx"#
+  store i64 {budget}, ptr %ctx"#,
+            budget = if self.bindings.freestanding { -1 } else { 100000 }
         )
         .unwrap();
         let mut operands = String::new();
@@ -804,6 +842,10 @@ error:
         }
         module.push_str("  %exit.status = alloca i32\n");
         module.push_str("  %depth.ok = icmp ule i32 %depth, 64\n  br i1 %depth.ok, label %prepare, label %depth.error\nprepare:\n");
+        let scoped = self.bindings.freestanding && matches!(self.width, IntegerWidth::Bits64) && scoped_region_method(&self.method.body);
+        if scoped {
+            module.push_str("  %arena.mark = call i64 @acpi_arena_mark()\n  %allocations.addr = getelementptr i64, ptr %ctx, i64 1\n  %allocations.mark = load ptr, ptr %allocations.addr\n");
+        }
         for (index, slot) in references.iter().enumerate() {
             writeln!(module, "  {slot} = call ptr @aml_object_slot(ptr %ctx)\n  %slot.ok{index} = icmp ne ptr {slot}, null\n  br i1 %slot.ok{index}, label %slot.ready{index}, label %allocation.error\nslot.ready{index}:").unwrap();
         }
@@ -820,9 +862,17 @@ error:
         for index in self.local_regions {
             writeln!(module, "  call void @aml_retire_region(ptr %field{index})").unwrap();
         }
+        let reset = "  call void @aml_reset_allocations(ptr %ctx, ptr %allocations.mark)\n  call void @acpi_arena_reset(i64 %arena.mark)\n";
+        if scoped {
+            module.push_str(reset);
+        }
         module.push_str("  %final.status = load i32, ptr %exit.status\n  ret i32 %final.status\ndepth.error:\n  ret i32 2\n");
         if !references.is_empty() {
-            module.push_str("allocation.error:\n  ret i32 6\n");
+            module.push_str("allocation.error:\n");
+            if scoped {
+                module.push_str(reset);
+            }
+            module.push_str("  ret i32 6\n");
         }
         module.push_str("}\n\n");
         Ok(())
@@ -1321,13 +1371,9 @@ error:
         let integer_intrinsic = match name.as_str() {
             "XMEM" => Some(("acpi_read_memory", 2)),
             "XMAP" => Some(("acpi_page_range", 2)),
-            "XPLK" => Some(("acpi_page_link", 2)),
             "XCR3" => Some(("acpi_page_root", 0)),
-            "XNXE" => Some(("acpi_nx_enabled", 0)),
-            "XVEC" => Some(("acpi_idt_entries", 0)),
             "XDWD" => Some(("acpi_mmio_dword", 2)),
             "XFBQ" => Some(("acpi_framebuffer_info", 1)),
-            "XRGB" => Some(("acpi_framebuffer_rgb", 1)),
             "XPRW" => Some(("acpi_pixel_row", 4)),
             "XFBL" => Some(("acpi_framebuffer_blit", 3)),
             "XAPC" => Some(("acpi_has_apic", 0)),
@@ -1340,14 +1386,8 @@ error:
             "XBYT" => Some(("acpi_virtual_byte", 1)),
             "XSTB" => Some(("acpi_store_byte", 2)),
             "XTRG" => Some(("acpi_load_tr", 1)),
-            "XSYE" => Some(("acpi_syscall_address", 0)),
-            "XEXT" => Some(("acpi_task_exit_address", 0)),
-            "XTST" => Some(("acpi_task_test_address", 0)),
-            "XHHD" => Some(("acpi_direct_map_offset", 0)),
             "XCLR" => Some(("acpi_clear_page", 1)),
             "XINV" => Some(("acpi_invalidate_page", 1)),
-            "XVWD" => Some(("acpi_virtual_word", 2)),
-            "XSTQ" => Some(("acpi_store_word", 2)),
             _ => None,
         };
         if !self.bindings.freestanding

@@ -56,7 +56,7 @@ def boot(serial_path, qemu_log, qemu_command):
                 stderr=errors,
             )
             try:
-                deadline = time.monotonic() + (25 if bash_check else 12)
+                deadline = time.monotonic() + (40 if bash_check else 12)
                 wait_for(process, deadline, monitor.exists, "QMP")
                 if bash_check:
                     wait_for(
@@ -112,16 +112,21 @@ def boot(serial_path, qemu_log, qemu_command):
                                 lambda: b"Bash sourced the read-only initramfs\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
                                 "Bash sourcing the initramfs script",
                             )
+                            root_listing = (
+                                rb"boot-test\.sh\ndoom\ndoom\.wad\nfastfetch\nfbtest\n"
+                                rb"ls\nreadme\.txt\nwelcome\.txt\ndev\nproc\n"
+                                + re.escape(bash_prompt)
+                            )
                             send_keys(stream, (*"ls", "spc", "slash", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: b"boot-test.sh\nfastfetch\nfbtest\nls\nreadme.txt\nwelcome.txt\ndev\nproc\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
+                                lambda: re.search(root_listing, serial_path.read_bytes().replace(b"\r\n", b"\n")),
                                 "Bash running the standalone ls executable",
                             )
                             send_keys(stream, ("slash", *"ls", "spc", "minus", "a", "spc", "slash", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: b".\n..\nboot-test.sh\nfastfetch\nfbtest\nls\nreadme.txt\nwelcome.txt\ndev\nproc\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
+                                lambda: re.search(rb"\.\n\.\.\n" + root_listing, serial_path.read_bytes().replace(b"\r\n", b"\n")),
                                 "ls -a showing dot entries",
                             )
                             send_keys(stream, (*"ls", "spc", "slash", *"proc", "ret"))
@@ -133,7 +138,7 @@ def boot(serial_path, qemu_log, qemu_command):
                             send_keys(stream, (*"ls", "spc", "slash", *"dev", "ret"))
                             wait_for(
                                 process, deadline,
-                                lambda: b"fb0\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
+                                lambda: b"fb0\nkbd\n" + bash_prompt in serial_path.read_bytes().replace(b"\r\n", b"\n"),
                                 "Bash listing /dev/fb0",
                             )
                             send_keys(stream, (*"fbtest", "ret"))
