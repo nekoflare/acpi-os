@@ -1,4 +1,4 @@
-"""Pack flat files into the ASL kernel's boot archive."""
+"""Pack files into the ASL kernel's boot archive."""
 
 from pathlib import Path
 import re
@@ -8,10 +8,16 @@ import sys
 
 def pack(output, files):
     image = bytearray(b"ASLRFS01")
-    for path in sorted(files, key=lambda path: path.name):
-        name = path.name.encode("ascii")
-        if not re.fullmatch(rb"[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}", name):
-            raise ValueError(f"Invalid initramfs filename: {path.name}")
+    entries = []
+    for spec in files:
+        name, separator, source = spec.partition("=")
+        path = Path(source if separator else name)
+        entries.append((name if separator else path.name, path))
+    for name, path in sorted(entries, key=lambda entry: entry[0]):
+        name = name.encode("ascii")
+        component = rb"[A-Za-z0-9_][A-Za-z0-9_.-]*"
+        if len(name) > 63 or not re.fullmatch(component + rb"(?:/" + component + rb")?", name):
+            raise ValueError(f"Invalid initramfs filename: {name!r}")
         data = path.read_bytes()
         image.extend(struct.pack("<QQ", len(name), len(data)))
         image.extend(name)
@@ -21,4 +27,4 @@ def pack(output, files):
 
 
 if __name__ == "__main__":
-    pack(Path(sys.argv[1]), map(Path, sys.argv[2:]))
+    pack(Path(sys.argv[1]), sys.argv[2:])

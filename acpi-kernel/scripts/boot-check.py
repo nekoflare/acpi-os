@@ -45,8 +45,65 @@ def send_keys(stream, keys):
         time.sleep(0.08)
 
 
+def x11_window_visible(capture, desktop=False):
+    magic, dimensions, max_value, pixels = capture.read_bytes().split(b"\n", 3)
+    width, height = map(int, dimensions.split())
+    if magic != b"P6" or max_value != b"255" or len(pixels) != width * height * 3:
+        raise RuntimeError("Unexpected QEMU screendump format")
+
+    # Only the one-shot mlibc probe allows console scrolling after mapping.
+    origin_x, window_width, window_height = 96, 208, 112
+    color = bytes.fromhex("2ba6a2")
+    window_row = color * window_width
+    rows = []
+    for y in range(height):
+        start = (y * width + origin_x) * 3
+        end = start + len(window_row)
+        if pixels[start:end] == window_row:
+            if pixels[start - 3:start] == color or pixels[end:end + 3] == color:
+                raise RuntimeError("X11 window pixels extend beyond the requested width")
+            rows.append(y)
+    if desktop:
+        return rows == list(range(192, 192 + window_height)) and pixels[60:63] == bytes.fromhex("1c293e")
+    return len(rows) == window_height and rows[-1] - rows[0] == window_height - 1
+
+
+def dwm_showcase_visible(capture):
+    magic, dimensions, max_value, pixels = capture.read_bytes().split(b"\n", 3)
+    width, height = map(int, dimensions.split())
+    if magic != b"P6" or max_value != b"255" or len(pixels) != width * height * 3:
+        raise RuntimeError("Unexpected QEMU screendump format")
+    # The stock dwm bar has a blue selected tag, dark gray background, and antialiased text.
+    bar = pixels[:width * min(height, 24) * 3]
+    colors = {bar[i:i + 3] for i in range(0, len(bar), 3)}
+    if pixels[:3] != bytes.fromhex("005577") or bytes.fromhex("222222") not in colors or len(colors) <= 12:
+        return False
+
+    # The independent X11 client draws a centered card with a mint border and white text.
+    left, top = (width - 304) // 2, (height - 160) // 2
+    start = (top * width + left) * 3
+    end = ((top + 159) * width + left) * 3
+    border = bytes.fromhex("79e0c4") * 304
+    if pixels[start:start + len(border)] != border or pixels[end:end + len(border)] != border:
+        return False
+    panel = pixels[((top + 43) * width + left + 24) * 3:((top + 85) * width + left + 240) * 3]
+    subtitle = ((top + 110) * width + left + 25) * 3
+    return panel.count(bytes.fromhex("f0f7ff")) > 100 and pixels[subtitle:subtitle + 3] == bytes.fromhex("79e0c4")
+
+
+def capture_desktop(stream, capture, serial_path, bash_prompt, dwm_check):
+    if bash_prompt in serial_path.read_bytes():
+        raise RuntimeError("Bash became interactive before the desktop closed")
+    command(stream, "screendump", {"filename": str(capture)})
+    if dwm_check:
+        return dwm_showcase_visible(capture)
+    return x11_window_visible(capture, desktop=True)
+
+
 def boot(serial_path, qemu_log, qemu_command):
     bash_check = os.getenv("BASH_CHECK") == "1"
+    dwm_check = os.getenv("DWM_CHECK") == "1"
+    mlibc_check = os.getenv("MLIBC_CHECK") == "1"
     with tempfile.TemporaryDirectory(prefix="amlaot-") as temp:
         monitor = Path(temp) / "qmp"
         with serial_path.open("wb") as serial, qemu_log.open("wb") as errors:
@@ -58,19 +115,8 @@ def boot(serial_path, qemu_log, qemu_command):
             try:
                 deadline = time.monotonic() + (40 if bash_check else 12)
                 wait_for(process, deadline, monitor.exists, "QMP")
-                if bash_check:
-                    wait_for(
-                        process, deadline,
-                        lambda: serial_path.read_bytes().endswith((b"$ ", b"# ")),
-                        "the interactive Bash prompt",
-                    )
-                    bash_prompt = b"root@localhost:~# "
-                    wait_for(
-                        process, deadline,
-                        lambda: b"root@localhost:" in serial_path.read_bytes(),
-                        "the root@localhost Bash prompt",
-                    )
-                else:
+                bash_prompt = b"root@localhost:~# "
+                if not bash_check:
                     wait_for(
                         process, deadline,
                         lambda: b"What is your name?" in serial_path.read_bytes(),
@@ -87,7 +133,26 @@ def boot(serial_path, qemu_log, qemu_command):
                         reply(stream)
                         command(stream, "qmp_capabilities")
                         before = Path(temp) / "before.ppm"
-                        command(stream, "screendump", {"filename": str(before)})
+                        if bash_check:
+                            wait_for(
+                                process, deadline,
+                                lambda: capture_desktop(stream, before, serial_path, bash_prompt, dwm_check),
+                                "the dwm bar and independent X11 showcase window" if dwm_check else "the X11 desktop at its unscrolled position",
+                            )
+                        else:
+                            command(stream, "screendump", {"filename": str(before)})
+                            if mlibc_check and not x11_window_visible(before):
+                                raise RuntimeError("QEMU display is missing the mapped X11 window")
+                        if bash_check or mlibc_check:
+                            serial_path.with_suffix(".x11.ppm").write_bytes(before.read_bytes())
+                        if bash_check:
+                            send_keys(stream, ("esc",))
+                            wait_for(
+                                process, deadline,
+                                lambda: serial_path.read_bytes().endswith(bash_prompt),
+                                "Bash after closing the X11 desktop with Escape",
+                            )
+                            command(stream, "screendump", {"filename": str(before)})
                         if bash_check:
                             send_keys(stream, ("e", "c", "h", "x", "backspace", "o",
                                                "spc", "shift-4", "shift-4", "ret"))
@@ -113,8 +178,13 @@ def boot(serial_path, qemu_log, qemu_command):
                                 "Bash sourcing the initramfs script",
                             )
                             root_listing = (
-                                rb"boot-test\.sh\ndoom\ndoom\.wad\nfastfetch\nfbtest\n"
-                                rb"ls\nreadme\.txt\nwelcome\.txt\ndev\nproc\n"
+                                rb"boot-test\.sh\ndoom\ndoom\.wad\n"
+                                + (rb"dwm\ndwm-fonts\.conf\ndwm-start\.sh\n" if dwm_check else b"")
+                                + rb"fastfetch\nfbtest\n"
+                                + (rb"fonts\n" if dwm_check else b"")
+                                + rb"ls\nreadme\.txt\nwelcome\.txt\nx11-demo\n"
+                                + (b"" if dwm_check else rb"x11-start\.sh\n")
+                                + rb"dev\nproc\n"
                                 + re.escape(bash_prompt)
                             )
                             send_keys(stream, (*"ls", "spc", "slash", "ret"))
@@ -174,9 +244,15 @@ def boot(serial_path, qemu_log, qemu_command):
                             "the ASL shell prompt",
                         )
                         send_keys(stream, ("l", "x", "backspace", "s", "spc", "slash", "ret"))
+                        listing = b"welcome.txt\r\n"
+                        if bash_check:
+                            listing += b"x11-demo\r\n"
+                        if bash_check and not dwm_check:
+                            listing += b"x11-start.sh\r\n"
+                        listing += b"dev\r\nproc\r\nasl> "
                         wait_for(
                             process, deadline,
-                            lambda: b"welcome.txt\r\ndev\r\nproc\r\nasl> " in serial_path.read_bytes(),
+                            lambda: listing in serial_path.read_bytes(),
                             "the initramfs listing",
                         )
                         after = serial_path.with_suffix(".ppm").resolve()
@@ -191,11 +267,13 @@ def boot(serial_path, qemu_log, qemu_command):
                             "the missing-file response and next prompt",
                         )
                         output = serial_path.read_bytes()
-                        if os.getenv("MLIBC_CHECK") == "1":
+                        if mlibc_check:
                             if b"mlibc C program verified fork, TLS, allocation, and console I/O\n" not in output:
                                 raise RuntimeError("The mlibc C program did not report success")
+                            if b"X11 setup, geometry, and framebuffer window verified in both byte orders\n" not in output:
+                                raise RuntimeError("The guest X11 protocol check did not report success")
                         for expected in (
-                            b"readme.txt\r\nwelcome.txt\r\ndev\r\nproc\r\nasl> ",
+                            listing,
                             b"Welcome to the ASL kernel shell.\r\nasl> ",
                         ):
                             if expected not in output:

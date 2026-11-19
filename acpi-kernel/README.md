@@ -218,10 +218,15 @@ and the FS base set by `arch_prctl(ARCH_SET_FS)`. The kernel builds with
 general-purpose registers only. Userspace uses the baseline x86-64 ISA.
 
 The Linux x86-64 syscall subset includes `read` (0) from PS/2 stdin or
-an open VFS file, `write` (1) to stdout or stderr, and `close` (3)
-and `lseek` (8) for open VFS files. Console seeks return `ESPIPE`.
-Other supported calls include `mmap` (9) for private anonymous read/write
-memory, `munmap`
+an open VFS file, `write` (1) and `writev` (20) to writable descriptors,
+and `close` (3) and `lseek` (8) for open VFS files. Console seeks return
+`ESPIPE`. The kernel supports `poll` (7) and
+`ppoll` (271) for up to 1,024 entries. Console stdin and `/dev/kbd` report
+readability when input is queued. The scheduler wakes waiting callers on
+keyboard input or timer ticks. `ppoll` accepts a null signal mask.
+Other supported calls include `mmap` (9) for private anonymous memory,
+`mprotect` (10) for anonymous pages with no access, read-only access, or
+read/write access, `munmap`
 (11) for a complete mapped range, `ioctl` (16) with `TIOCGWINSZ` on console
 descriptors, `getpid` (39), fork-style `clone` (56), `fork` (57), `execve` (59), `exit` (60),
 `wait4` (61), `uname` (63), `getcwd` (79), the UID and GID queries (which return zero),
@@ -249,6 +254,17 @@ outside this syscall subset.
 It preserves the PID and open descriptors except those marked
 `O_CLOEXEC`. The initial exec stack accepts up to 64 argument and
 environment strings sharing 3,488 bytes including terminators.
+
+Local `AF_UNIX` stream sockets support `socket`, `bind`, `listen`,
+`connect`, `accept`, and `accept4`, with byte streams through `read`,
+`write`, `readv`, `writev`, `recvfrom`, and `recvmsg`. The receive
+calls for Unix streams support byte payloads without ancillary data. Both abstract addresses and absolute path strings such as
+`/tmp/.X11-unix/X0` are supported. Path strings are names in the kernel
+socket registry and are removed on final close. They do not create files
+in the read-only VFS. Sockets support polling, close-on-exec, and
+nonblocking mode. A full pending connection queue returns `EAGAIN`.
+A disconnected peer produces EOF after queued input has been read and
+`EPIPE` on writes.
 
 When a Limine framebuffer is available in 32-bit mode, the kernel exposes
 `/dev/fb0` as a minimal fbdev-compatible device. Programs can open it for
@@ -319,14 +335,39 @@ make -C acpi-kernel -j2 check-mlibc check-mlibc-uefi
 
 The mlibc boot checks exercise the C program's TLS before and after
 blocking, both fork entry points, private memory and TLS across fork,
-shared file offsets, child reaping, allocation, formatted output, and the
+shared file offsets, child reaping, allocation, descriptor polling, local
+stream sockets, formatted output, and the
 same keyboard and shell flow as the assembly demo. Threads, dynamic linking, and a
 general Linux syscall ABI are outside its current scope.
+
+The mlibc boot checks also run an in-guest X11 protocol probe. A client
+connects to a server process at `/tmp/.X11-unix/X0`, negotiates X11 11.0 in
+both byte orders, and checks `GetGeometry`, `QueryTree`, and
+`QueryExtension` replies and error sequencing. `ListExtensions` returns
+an empty list. The probe also exercises graphics-context creation and
+release and the empty reply for an unset window property. A client can
+select root-window events and receive `CreateNotify` and `MapNotify` for
+its child window. The probe checks the stationary pointer position and
+the lifetime of a one-bit pixmap. Pixmaps currently store geometry and
+depth. The probe also checks atom creation, lookup, and name retrieval,
+plus opening the core cursor font and creating and releasing glyph-cursor
+resources. The server tracks cursor metadata for future pointer rendering.
+The server handles one connection at a time and resets dynamic atoms
+when that connection closes.
+The server uses the 32-bit Limine framebuffer for root dimensions and
+advertises a 24-bit TrueColor visual. The client sends `CreateWindow` and
+`MapWindow` for a borderless 208×112 teal window. The server paints its
+background through `/dev/fb0`, with clipping and native framebuffer
+channel layout. The probe supports one child window per connection and
+exits before the prompt. The painted pixels persist until overwritten.
+The boot check verifies the window in a QEMU screendump and saves it as
+`serial.x11.ppm` or `serial-uefi.x11.ppm` under `target/acpi-kernel-mlibc`.
+The wire format follows the [X Window System Protocol](https://xorg.freedesktop.org/releases/current/doc/xproto/x11protocol.html).
 
 ## Static Bash
 
 The interactive UEFI image boots GNU Bash 5.2.37 and bundles Fastfetch
-and Doom in the initramfs. Run `make run-uefi` from the repository root or
+Doom, and the X11 framebuffer demo in the initramfs. Run `make run-uefi` from the repository root or
 `make -C acpi-kernel run-uefi`. This launch uses KVM with host CPU
 passthrough so Fastfetch reports the host CPU model. The build uses the mlibc sysroot and
 needs curl, tar, and sha256sum in addition to the mlibc and Fastfetch
@@ -339,18 +380,22 @@ make -C acpi-kernel run-bash
 make -C acpi-kernel -j2 check-bash check-bash-uefi
 ```
 
-The Bash Limine entry starts interactive Bash as PID 0. Type in the QEMU
-display window and press Enter. The kernel echoes the keys and handles
-Backspace. Run `ls /` to list the root or `ls -a /` to include the dot
+The Bash Limine entry starts Bash as PID 0 and runs `/x11-demo --desktop`
+from its startup script. The desktop shows a framed teal window on a
+dark background. The X11 server and client stay connected while the
+desktop is open. Press Escape in QEMU to close it and reach Bash.
+Run `x11-demo --desktop` to reopen the desktop or `x11-demo` for the
+one-shot drawing demo. The desktop supports one local client window
+and uses the keyboard to exit. The kernel echoes the keys and handles Backspace. Run `ls /` to list the root or `ls -a /` to include the dot
 entries. Bash starts with `PATH=/` and runs the bundled `/ls` as a
 separate process. Type `fastfetch` to run the bundled system summary.
 Run `echo $$` to check the PID or `source /boot-test.sh`
 to run the bundled script. `exit` hands control to the ASL shell.
 
 The `init:` prefix in `module_string` selects PID 0 and line-based console
-input. The remaining string supplies `-i` to Bash. The module basename
-supplies `argv[0]`. If the remaining string contains a pipe character,
-the first pipe separates two optional arguments.
+input. The module basename supplies `argv[0]`. The first pipe separates
+the two boot arguments, `--rcfile` and `/x11-start.sh`. Bash detects the
+guest console as a terminal and loads the startup script in interactive mode.
 
 This build supports Bash builtins, sourced scripts, and external static
 programs that stay within the supported syscall subset. Pipelines and
@@ -362,6 +407,25 @@ The freestanding runtime uses a 64 KiB early allocation arena that keeps
 allocations until shutdown.
 
 Limine reference material is available in the [boot protocol specification](https://github.com/Limine-Bootloader/limine-protocol/blob/trunk/PROTOCOL.md).
+
+## dwm guest session
+
+Run `make run-uefi DWM=1` from the repository root to boot into the
+dwm 6.8 session. The guest X11 server draws dwm's status bar to
+`/dev/fb0`. A separate guest X11 client connects and opens a centered
+“AMLAOT / RUNNING DWM” showcase window. Press Escape to close the
+session and reach Bash.
+Run `x11-demo --dwm` in Bash to start it again.
+
+The build uses Docker and Alpine's static libraries to link dwm with
+musl. It bundles the host's default monospace font selected by
+`fc-match`. Set `DWM_FONT` to override it. The X11 server accepts dwm
+and one additional client in this session. The showcase uses
+`override_redirect` to position its own window. Tiling and dwm
+keybindings still need window-management and keyboard event delivery.
+
+`make -C acpi-kernel DWM=1 check-bash-uefi` checks the bar and showcase window pixels
+in QEMU and verifies that Escape returns to Bash.
 
 ## Fastfetch
 

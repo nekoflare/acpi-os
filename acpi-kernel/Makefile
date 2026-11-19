@@ -8,6 +8,14 @@ MLIBC_SYSROOT := $(MLIBC_BUILD)/sysroot/usr
 MESON ?= meson
 MLIBC_UAPI ?=
 MLIBC_JOBS ?= 8
+DWM ?= 0
+DOCKER ?= docker
+DWM_BUILD := $(abspath ../target/acpi-kernel-dwm)
+DWM_FONT ?= $(shell fc-match -f '%{file}' monospace)
+DWM_EXTRA = $(if $(filter 1,$(DWM)),$(DWM_BUILD)/dwm $(DWM_BUILD)/xeyes $(DWM_BUILD)/dwm-font.ttf config/dwm-fonts.conf)
+BASH_IMAGE_BUILD = $(if $(DWM_EXTRA),$(DWM_BUILD),$(BASH_BUILD))
+BASH_CONFIG = $(if $(DWM_EXTRA),config/limine-dwm.conf,config/limine-bash.conf)
+BASH_STARTUP = $(if $(DWM_EXTRA),config/dwm-start.sh,config/x11-start.sh)
 CLANG ?= clang
 CLANGXX ?= clang++
 OPT ?= opt
@@ -106,8 +114,8 @@ $(BUILD)/ls: $(BUILD)/ls.o Makefile
 
 INITRAMFS_FILES := $(wildcard initramfs/*) $(BUILD)/ls $(INITRAMFS_EXTRA)
 
-$(BUILD)/initramfs.img: scripts/pack-initramfs.py initramfs $(INITRAMFS_FILES) Makefile | $(BUILD)
-	$(PYTHON) $< $@ $(INITRAMFS_FILES)
+$(BUILD)/initramfs.img: scripts/pack-initramfs.py initramfs $(INITRAMFS_FILES) $(INITRAMFS_FONT) Makefile | $(BUILD)
+	$(PYTHON) $< $@ $(INITRAMFS_FILES) $(if $(INITRAMFS_FONT),fonts/dwm-font.ttf=$(INITRAMFS_FONT))
 
 $(BUILD)/initramfs.o: kernel/embed-initramfs.S $(BUILD)/initramfs.img Makefile
 	$(CLANG) $(KERNEL_FLAGS) -DINITRAMFS_IMAGE='"$(BUILD)/initramfs.img"' -c $< -o $@
@@ -140,13 +148,13 @@ boot-uefi: all copy-aml
 	$(QEMU) $(QEMU_FLAGS) -drive if=pflash,format=raw,readonly=on,file="$(OVMF)"
 
 check: all
-	@if ! MLIBC_CHECK="$(MLIBC_CHECK)" BASH_CHECK="$(BASH_CHECK)" $(PYTHON) scripts/boot-check.py $(BUILD)/serial.log $(BUILD)/qemu.log $(QEMU) $(CHECK_QEMU_FLAGS) || \
+	@if ! MLIBC_CHECK="$(MLIBC_CHECK)" BASH_CHECK="$(BASH_CHECK)" DWM_CHECK="$(DWM_CHECK)" $(PYTHON) scripts/boot-check.py $(BUILD)/serial.log $(BUILD)/qemu.log $(QEMU) $(CHECK_QEMU_FLAGS) || \
 		! $(BOOT_CHECK) root=RSDT bash_check="$(BASH_CHECK)" $(BUILD)/serial.log; then \
 		    cat $(BUILD)/serial.log $(BUILD)/qemu.log; exit 1; \
 		fi
 
 check-uefi: all
-	@if ! MLIBC_CHECK="$(MLIBC_CHECK)" BASH_CHECK="$(BASH_CHECK)" $(PYTHON) scripts/boot-check.py $(BUILD)/serial-uefi.log $(BUILD)/qemu-uefi.log $(QEMU) $(CHECK_QEMU_FLAGS) \
+	@if ! MLIBC_CHECK="$(MLIBC_CHECK)" BASH_CHECK="$(BASH_CHECK)" DWM_CHECK="$(DWM_CHECK)" $(PYTHON) scripts/boot-check.py $(BUILD)/serial-uefi.log $(BUILD)/qemu-uefi.log $(QEMU) $(CHECK_QEMU_FLAGS) \
 		-drive if=pflash,format=raw,readonly=on,file="$(OVMF)" || \
 		! $(BOOT_CHECK) root=XSDT bash_check="$(BASH_CHECK)" $(BUILD)/serial-uefi.log; then \
 		    cat $(BUILD)/serial-uefi.log $(BUILD)/qemu-uefi.log; exit 1; \
@@ -168,18 +176,27 @@ check-mlibc-uefi: mlibc
 $(MLIBC_SYSROOT)/lib/libc.a: scripts/build-mlibc.sh
 	sh $< "$(MLIBC_BUILD)" "$(MESON)" "$(CLANG)" "$(CLANGXX)" "$(MLIBC_UAPI)" "$(MLIBC_JOBS)"
 
-$(MLIBC_BUILD)/hello-mlibc.elf: userspace/hello-mlibc.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
-	$(CLANG) -O2 -march=x86-64 -fno-pie -Wall -Wextra -Werror -nostdinc \
-		-isystem "$(MLIBC_SYSROOT)/include" -c $< -o $(MLIBC_BUILD)/hello-mlibc.o
-	$(LLD) -static -z separate-loadable-segments -e _start "$(MLIBC_SYSROOT)/lib/crt1.o" \
-		$(MLIBC_BUILD)/hello-mlibc.o "$(MLIBC_SYSROOT)/lib/libc.a" -o $@
+$(MLIBC_BUILD)/%.o: userspace/%.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
+	$(CLANG) -O2 -march=x86-64 -fno-pie -Wall -Wextra -Werror -nostdlibinc \
+		-isystem "$(MLIBC_SYSROOT)/include" \
+		-idirafter "$(if $(MLIBC_UAPI),$(MLIBC_UAPI),$(MLIBC_BUILD)/linux-uapi)" -c $< -o $@
 
-BASH_BOOT = BUILD="$(BASH_BUILD)" BOOT_ELF="$(BASH_BUILD)/bash.elf" \
-	BOOT_CONFIG=config/limine-bash.conf BOOT_MODULE=bash.elf BASH_CHECK=1 \
-	INITRAMFS_EXTRA="$(BASH_BUILD)/fastfetch $(BASH_BUILD)/fbtest $(BASH_BUILD)/doom $(DOOM_DATA)"
+$(MLIBC_BUILD)/hello-mlibc.elf: $(MLIBC_BUILD)/hello-mlibc.o $(MLIBC_BUILD)/x11-smoke.o
+	$(LLD) -static -z separate-loadable-segments -e _start "$(MLIBC_SYSROOT)/lib/crt1.o" \
+		$^ "$(MLIBC_SYSROOT)/lib/libc.a" -o $@
+
+$(BASH_BUILD)/x11-demo: $(MLIBC_BUILD)/x11-demo.o $(MLIBC_BUILD)/x11-smoke.o
+	mkdir -p $(BASH_BUILD)
+	$(LLD) -static -z separate-loadable-segments -e _start "$(MLIBC_SYSROOT)/lib/crt1.o" \
+		$^ "$(MLIBC_SYSROOT)/lib/libc.a" -o $@
+
+BASH_BOOT = BUILD="$(BASH_IMAGE_BUILD)" BOOT_ELF="$(BASH_BUILD)/bash.elf" \
+	BOOT_CONFIG="$(BASH_CONFIG)" BOOT_MODULE=bash.elf BASH_CHECK=1 DWM_CHECK="$(DWM)" \
+	INITRAMFS_EXTRA="$(BASH_BUILD)/fastfetch $(BASH_BUILD)/fbtest $(BASH_BUILD)/doom $(DOOM_DATA) $(BASH_BUILD)/x11-demo $(BASH_STARTUP) $(filter-out $(DWM_BUILD)/dwm-font.ttf,$(DWM_EXTRA))" \
+	INITRAMFS_FONT="$(filter $(DWM_BUILD)/dwm-font.ttf,$(DWM_EXTRA))"
 
 .PHONY: bash run-bash check-bash check-bash-uefi
-bash: $(BASH_BUILD)/bash.elf $(BASH_BUILD)/fbtest $(BASH_BUILD)/doom doom-wad
+bash: $(BASH_BUILD)/bash.elf $(BASH_BUILD)/fbtest $(BASH_BUILD)/doom $(BASH_BUILD)/x11-demo $(DWM_EXTRA) doom-wad
 	$(MAKE) $(BASH_BOOT) all
 
 run-bash: bash
@@ -190,6 +207,25 @@ check-bash: bash
 
 check-bash-uefi: bash
 	$(MAKE) $(BASH_BOOT) check-uefi
+
+.PHONY: dwm
+dwm: $(DWM_BUILD)/dwm
+
+$(DWM_BUILD)/dwm: scripts/build-dwm.sh
+	sh $< "$(DWM_BUILD)" "$(DOCKER)"
+
+.PHONY: xeyes
+xeyes: $(DWM_BUILD)/xeyes
+
+$(DWM_BUILD)/xeyes: scripts/build-xeyes.sh
+	sh $< "$(DWM_BUILD)" "$(DOCKER)"
+
+ifeq ($(DWM),1)
+$(DWM_BUILD)/dwm-font.ttf: $(DWM_FONT)
+	@test -n "$(DWM_FONT)" || { echo "Set DWM_FONT to a TrueType font."; exit 1; }
+	mkdir -p "$(DWM_BUILD)"
+	cp -- "$(DWM_FONT)" "$@"
+endif
 
 $(BASH_BUILD)/bash.elf: scripts/build-bash.sh $(MLIBC_SYSROOT)/lib/libc.a
 	+sh $< "$(BASH_BUILD)" "$(MLIBC_BUILD)/sysroot" "$(CLANG)" "$(LLD)" "$(MLIBC_UAPI)"
