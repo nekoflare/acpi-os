@@ -1,1 +1,3 @@
 /target/
+/.local/
+/acpi-kernel/kernel.aml

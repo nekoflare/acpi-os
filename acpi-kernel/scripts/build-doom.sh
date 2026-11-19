@@ -8,7 +8,7 @@ clang=$4
 lld=$5
 source=$build/upstream
 revision=e257a09527062bfb986b6e5e0780839b6cbd5b71
-platform=$(pwd)/doomgeneric-asl.c
+platform=$(dirname "$(realpath "$0")")/../userspace/doomgeneric-asl.c
 
 mkdir -p "$build"
 if [ ! -d "$source/.git" ]; then

@@ -1,6 +1,6 @@
 BUILD := ../target/acpi-kernel
 BOOT_ELF = $(BUILD)/hello.elf
-BOOT_CONFIG = limine.conf
+BOOT_CONFIG = config/limine.conf
 BOOT_MODULE = hello.elf
 BASH_BUILD := $(abspath ../target/acpi-kernel-bash)
 MLIBC_BUILD := $(abspath ../target/acpi-kernel-mlibc)
@@ -60,14 +60,17 @@ BOOT_CHECK = awk '/ASL GDT loaded/ && stage == 0 { stage = 1 } \
 	           !(1 in examples) || !(2 in examples) || examples[1] == examples[2] }'
 
 .DELETE_ON_ERROR:
-.PHONY: all run run-uefi check check-uefi
+.PHONY: all run run-uefi check check-uefi copy-aml
 all: $(BUILD)/acpi-kernel.iso
 
 $(BUILD):
 	mkdir -p $@
 
-$(BUILD)/kernel.aml: kernel.asl font8x8.asl | $(BUILD)
-	$(IASL) -p $(basename $@) $<
+$(BUILD)/kernel.aml: kernel/kernel.asl kernel/font8x8.asl | $(BUILD)
+	$(IASL) -I kernel -p $(basename $@) $<
+
+copy-aml: $(BUILD)/kernel.aml
+	cp -- "$<" ./kernel.aml
 
 $(BUILD)/linked.ll: $(BUILD)/kernel.aml ../Cargo.toml ../Cargo.lock $(wildcard ../src/*)
 	AMLAOT_CLANG="$(CLANG)" cargo run --quiet --locked --manifest-path ../Cargo.toml -- --emit-llvm --freestanding $< > $@
@@ -79,22 +82,22 @@ $(BUILD)/kernel.bc: $(BUILD)/linked.ll Makefile
 $(BUILD)/aml.o: $(BUILD)/kernel.bc
 	$(CLANG) $(KERNEL_FLAGS) -c $< -o $@
 
-$(BUILD)/boot.o: boot.c ../src/runtime.h Makefile | $(BUILD)
+$(BUILD)/boot.o: kernel/boot.c ../src/runtime.h Makefile | $(BUILD)
 	$(CLANG) $(BOOT_FLAGS) -c $< -o $@
 
-$(BUILD)/early-memory.o: early-memory.c Makefile | $(BUILD)
+$(BUILD)/early-memory.o: kernel/early-memory.c Makefile | $(BUILD)
 	$(CLANG) $(BOOT_FLAGS) -c $< -o $@
 
-$(BUILD)/x86.o: x86.S Makefile | $(BUILD)
+$(BUILD)/x86.o: kernel/x86.S Makefile | $(BUILD)
 	$(CLANG) $(KERNEL_FLAGS) -c $< -o $@
 
-$(BUILD)/hello.o: hello.S Makefile | $(BUILD)
+$(BUILD)/hello.o: userspace/hello.S Makefile | $(BUILD)
 	$(CLANG) --target=x86_64-unknown-none-elf -c $< -o $@
 
 $(BUILD)/hello.elf: $(BUILD)/hello.o Makefile
 	$(LLD) -static -e _start $< -o $@
 
-$(BUILD)/ls.o: ls.c Makefile | $(BUILD)
+$(BUILD)/ls.o: userspace/ls.c Makefile | $(BUILD)
 	$(CLANG) --target=x86_64-unknown-none-elf -O2 -ffreestanding -fno-stack-protector \
 		-fno-pie -Wall -Wextra -Werror -c $< -o $@
 
@@ -103,14 +106,14 @@ $(BUILD)/ls: $(BUILD)/ls.o Makefile
 
 INITRAMFS_FILES := $(wildcard initramfs/*) $(BUILD)/ls $(INITRAMFS_EXTRA)
 
-$(BUILD)/initramfs.img: pack-initramfs.py initramfs $(INITRAMFS_FILES) Makefile | $(BUILD)
+$(BUILD)/initramfs.img: scripts/pack-initramfs.py initramfs $(INITRAMFS_FILES) Makefile | $(BUILD)
 	$(PYTHON) $< $@ $(INITRAMFS_FILES)
 
-$(BUILD)/initramfs.o: embed-initramfs.S $(BUILD)/initramfs.img Makefile
+$(BUILD)/initramfs.o: kernel/embed-initramfs.S $(BUILD)/initramfs.img Makefile
 	$(CLANG) $(KERNEL_FLAGS) -DINITRAMFS_IMAGE='"$(BUILD)/initramfs.img"' -c $< -o $@
 
-$(BUILD)/kernel.elf: $(BUILD)/boot.o $(BUILD)/early-memory.o $(BUILD)/aml.o $(BUILD)/x86.o $(BUILD)/initramfs.o link.ld
-	$(LLD) -static -T link.ld $(filter %.o,$^) -o $@
+$(BUILD)/kernel.elf: $(BUILD)/boot.o $(BUILD)/early-memory.o $(BUILD)/aml.o $(BUILD)/x86.o $(BUILD)/initramfs.o kernel/link.ld
+	$(LLD) -static -T kernel/link.ld $(filter %.o,$^) -o $@
 
 LIMINE_FILES := $(addprefix $(LIMINE_DIR)/,limine-bios-cd.bin limine-bios.sys limine-uefi-cd.bin)
 
@@ -126,24 +129,24 @@ $(BUILD)/acpi-kernel.iso: $(BUILD)/kernel.elf $(BOOT_ELF) $(BOOT_CONFIG) $(LIMIN
 		-eltorito-alt-boot -e boot/limine/limine-uefi-cd.bin -no-emul-boot \
 		$(BUILD)/iso -o $@
 
-run: all
+run: all copy-aml
 	$(QEMU) $(QEMU_FLAGS)
 
 run-uefi: bash
 	$(MAKE) $(BASH_BOOT) QEMU_CPU="$(or $(QEMU_CPU),host)" boot-uefi
 
 .PHONY: boot-uefi
-boot-uefi: all
+boot-uefi: all copy-aml
 	$(QEMU) $(QEMU_FLAGS) -drive if=pflash,format=raw,readonly=on,file="$(OVMF)"
 
 check: all
-	@if ! MLIBC_CHECK="$(MLIBC_CHECK)" BASH_CHECK="$(BASH_CHECK)" $(PYTHON) boot-check.py $(BUILD)/serial.log $(BUILD)/qemu.log $(QEMU) $(CHECK_QEMU_FLAGS) || \
+	@if ! MLIBC_CHECK="$(MLIBC_CHECK)" BASH_CHECK="$(BASH_CHECK)" $(PYTHON) scripts/boot-check.py $(BUILD)/serial.log $(BUILD)/qemu.log $(QEMU) $(CHECK_QEMU_FLAGS) || \
 		! $(BOOT_CHECK) root=RSDT bash_check="$(BASH_CHECK)" $(BUILD)/serial.log; then \
 		    cat $(BUILD)/serial.log $(BUILD)/qemu.log; exit 1; \
 		fi
 
 check-uefi: all
-	@if ! MLIBC_CHECK="$(MLIBC_CHECK)" BASH_CHECK="$(BASH_CHECK)" $(PYTHON) boot-check.py $(BUILD)/serial-uefi.log $(BUILD)/qemu-uefi.log $(QEMU) $(CHECK_QEMU_FLAGS) \
+	@if ! MLIBC_CHECK="$(MLIBC_CHECK)" BASH_CHECK="$(BASH_CHECK)" $(PYTHON) scripts/boot-check.py $(BUILD)/serial-uefi.log $(BUILD)/qemu-uefi.log $(QEMU) $(CHECK_QEMU_FLAGS) \
 		-drive if=pflash,format=raw,readonly=on,file="$(OVMF)" || \
 		! $(BOOT_CHECK) root=XSDT bash_check="$(BASH_CHECK)" $(BUILD)/serial-uefi.log; then \
 		    cat $(BUILD)/serial-uefi.log $(BUILD)/qemu-uefi.log; exit 1; \
@@ -162,17 +165,17 @@ check-mlibc: mlibc
 check-mlibc-uefi: mlibc
 	$(MAKE) BUILD="$(MLIBC_BUILD)" BOOT_ELF="$(MLIBC_BUILD)/hello-mlibc.elf" MLIBC_CHECK=1 check-uefi
 
-$(MLIBC_SYSROOT)/lib/libc.a: build-mlibc.sh
+$(MLIBC_SYSROOT)/lib/libc.a: scripts/build-mlibc.sh
 	sh $< "$(MLIBC_BUILD)" "$(MESON)" "$(CLANG)" "$(CLANGXX)" "$(MLIBC_UAPI)" "$(MLIBC_JOBS)"
 
-$(MLIBC_BUILD)/hello-mlibc.elf: hello-mlibc.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
+$(MLIBC_BUILD)/hello-mlibc.elf: userspace/hello-mlibc.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
 	$(CLANG) -O2 -march=x86-64 -fno-pie -Wall -Wextra -Werror -nostdinc \
 		-isystem "$(MLIBC_SYSROOT)/include" -c $< -o $(MLIBC_BUILD)/hello-mlibc.o
 	$(LLD) -static -z separate-loadable-segments -e _start "$(MLIBC_SYSROOT)/lib/crt1.o" \
 		$(MLIBC_BUILD)/hello-mlibc.o "$(MLIBC_SYSROOT)/lib/libc.a" -o $@
 
 BASH_BOOT = BUILD="$(BASH_BUILD)" BOOT_ELF="$(BASH_BUILD)/bash.elf" \
-	BOOT_CONFIG=limine-bash.conf BOOT_MODULE=bash.elf BASH_CHECK=1 \
+	BOOT_CONFIG=config/limine-bash.conf BOOT_MODULE=bash.elf BASH_CHECK=1 \
 	INITRAMFS_EXTRA="$(BASH_BUILD)/fastfetch $(BASH_BUILD)/fbtest $(BASH_BUILD)/doom $(DOOM_DATA)"
 
 .PHONY: bash run-bash check-bash check-bash-uefi
@@ -188,10 +191,10 @@ check-bash: bash
 check-bash-uefi: bash
 	$(MAKE) $(BASH_BOOT) check-uefi
 
-$(BASH_BUILD)/bash.elf: build-bash.sh $(MLIBC_SYSROOT)/lib/libc.a
+$(BASH_BUILD)/bash.elf: scripts/build-bash.sh $(MLIBC_SYSROOT)/lib/libc.a
 	+sh $< "$(BASH_BUILD)" "$(MLIBC_BUILD)/sysroot" "$(CLANG)" "$(LLD)" "$(MLIBC_UAPI)"
 
-$(BASH_BUILD)/fbtest: fbtest.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
+$(BASH_BUILD)/fbtest: userspace/fbtest.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
 	$(CLANG) -O2 -march=x86-64 -fno-pie -Wall -Wextra -Werror -nostdinc \
 		-isystem "$(MLIBC_SYSROOT)/include" -idirafter "$(if $(MLIBC_UAPI),$(MLIBC_UAPI),$(MLIBC_BUILD)/linux-uapi)" \
 		-c $< -o $(BASH_BUILD)/fbtest.o
@@ -203,7 +206,7 @@ $(BASH_BUILD)/fastfetch: $(FASTFETCH_BUILD)/fastfetch.elf
 	cp $< $@
 
 FASTFETCH_BOOT = BUILD="$(FASTFETCH_BUILD)" BOOT_ELF="$(FASTFETCH_BUILD)/fastfetch.elf" \
-	BOOT_CONFIG=limine-fastfetch.conf BOOT_MODULE=fastfetch.elf
+	BOOT_CONFIG=config/limine-fastfetch.conf BOOT_MODULE=fastfetch.elf
 
 .PHONY: fastfetch run-fastfetch
 fastfetch: $(FASTFETCH_BUILD)/fastfetch.elf
@@ -212,7 +215,7 @@ fastfetch: $(FASTFETCH_BUILD)/fastfetch.elf
 run-fastfetch: fastfetch
 	$(MAKE) $(FASTFETCH_BOOT) run
 
-$(FASTFETCH_BUILD)/fastfetch.elf: build-fastfetch.sh fastfetch-mlibc.patch fastfetch-cpu.patch $(MLIBC_SYSROOT)/lib/libc.a
+$(FASTFETCH_BUILD)/fastfetch.elf: scripts/build-fastfetch.sh scripts/patches/fastfetch-mlibc.patch scripts/patches/fastfetch-cpu.patch $(MLIBC_SYSROOT)/lib/libc.a
 	sh $< "$(FASTFETCH_BUILD)" "$(MLIBC_BUILD)/sysroot" "$(CLANG)" "$(LLD)" "$(MLIBC_UAPI)" "$(MLIBC_JOBS)"
 
 DOOM_BUILD := $(abspath ../target/acpi-kernel-doom)
@@ -224,7 +227,7 @@ ifeq ($(DOOM_WAD),$(DOOM_SHAREWARE_WAD))
 doom-wad: $(DOOM_SHAREWARE_WAD)
 endif
 DOOM_BOOT = BUILD="$(DOOM_BUILD)" BOOT_ELF="$(DOOM_BUILD)/doom.elf" \
-	BOOT_CONFIG=limine-doom.conf BOOT_MODULE=doom.elf INITRAMFS_EXTRA="$(DOOM_DATA)"
+	BOOT_CONFIG=config/limine-doom.conf BOOT_MODULE=doom.elf INITRAMFS_EXTRA="$(DOOM_DATA)"
 
 .PHONY: doom run-doom run-doom-uefi doom-wad
 doom: $(DOOM_BUILD)/doom.elf doom-wad
@@ -255,6 +258,6 @@ $(DOOM_SHAREWARE_ARCHIVE):
 $(DOOM_SHAREWARE_WAD): $(DOOM_SHAREWARE_ARCHIVE)
 	gzip -dc "$<" > "$@"
 
-$(DOOM_BUILD)/doom.elf: build-doom.sh doomgeneric-asl.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
+$(DOOM_BUILD)/doom.elf: scripts/build-doom.sh userspace/doomgeneric-asl.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
 	+sh $< "$(DOOM_BUILD)" "$(MLIBC_SYSROOT)" \
 		"$(abspath $(if $(MLIBC_UAPI),$(MLIBC_UAPI),$(MLIBC_BUILD)/linux-uapi))" "$(CLANG)" "$(LLD)"

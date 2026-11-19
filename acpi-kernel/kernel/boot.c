@@ -1,4 +1,4 @@
-#include "../src/runtime.h"
+#include "../../src/runtime.h"
 #include <stddef.h>
 
 #define REQUEST(section_name) __attribute__((used, section(section_name)))

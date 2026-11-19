@@ -17,7 +17,7 @@ if [ ! -d "$build/source/.git" ]; then
     git clone --depth 1 --branch "$version" https://github.com/fastfetch-cli/fastfetch.git "$build/source"
 fi
 test "$(git -C "$build/source" rev-parse HEAD)" = "$revision"
-patch_dir=$(dirname "$(realpath "$0")")
+patch_dir=$(dirname "$(realpath "$0")")/patches
 for patch in "$patch_dir/fastfetch-mlibc.patch" "$patch_dir/fastfetch-cpu.patch"; do
     if ! git -C "$build/source" apply --reverse --check "$patch" 2>/dev/null; then
         git -C "$build/source" apply "$patch"

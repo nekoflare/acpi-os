@@ -1,8 +1,16 @@
 # ACPI Kernel
 
-`kernel.asl` defines the kernel entry point `KERN` and the console drivers.
+| Directory | Contents |
+| --- | --- |
+| `kernel/` | ASL kernel, native boot and interrupt code, and linker script |
+| `userspace/` | Sample programs and the Doom platform backend |
+| `initramfs/` | Static files bundled into the initial filesystem |
+| `config/` | Limine configurations for the boot variants |
+| `scripts/` | Build, packaging, and boot-check scripts, with Fastfetch patches in `scripts/patches/` |
+
+`kernel/kernel.asl` defines the kernel entry point `KERN` and the console drivers.
 AMLAOT compiles the AML to native code. Limine loads the x86-64 ELF, and
-`boot.c` supplies the entry point, byte port I/O, and the handoff to ASL.
+`kernel/boot.c` supplies the entry point, byte port I/O, and the handoff to ASL.
 The kernel builds a GDT and all 256 IDT gates in ASL. It runs the
 breakpoint and memory smoke tests, lists ACPI tables and APICs, then
 calibrates and arms the boot CPU's periodic LAPIC timer.
@@ -262,7 +270,7 @@ case-sensitive and may have a leading slash.
 
 The build packs the flat files in `initramfs/` into a small archive and
 links it into the kernel's read-only ELF segment. The archive includes
-the standalone `/ls` executable, built from `ls.c`. ASL validates the
+the standalone `/ls` executable, built from `userspace/ls.c`. ASL validates the
 archive's record bounds at startup and adds the files to a read-only VFS
 tree with their data left in place. The same tree exposes `/proc/meminfo`.
 Each open of that file snapshots `MemTotal`, `MemFree`, and `MemAvailable`
@@ -294,7 +302,7 @@ make -C acpi-kernel check-uefi
 
 ## Static mlibc userspace
 
-The optional mlibc build boots `hello-mlibc.c` as `hello.elf`. It uses
+The optional mlibc build boots `userspace/hello-mlibc.c` as `hello.elf`. It uses
 mlibc 6.3.1's Linux syscall backend and standard static CRT. The build
 fetches the pinned sources and stages headers, `crt1.o`, and `libc.a` in
 `target/acpi-kernel-mlibc/sysroot/usr`. It needs Git, Meson, Ninja, Clang,
