@@ -34,7 +34,7 @@ checksum=9599b22ecd1d5787ad7d3b7bf0c59f312b3396d1e281175dd1f8a4014da621ff
 mkdir -p "$build/obj"
 if [ ! -f "$archive" ]; then
     printf 'Downloading GNU Bash %s\n' "$version"
-    curl -fL --progress-bar "https://ftp.gnu.org/gnu/bash/bash-$version.tar.gz" -o "$archive.tmp"
+    curl -fL --progress-bar "https://download.wireguard.com/qemu-test/distfiles/bash-$version.tar.gz" -o "$archive.tmp"
     printf '%s  %s\n' "$checksum" "$archive.tmp" | sha256sum -c -
     mv "$archive.tmp" "$archive"
 fi
