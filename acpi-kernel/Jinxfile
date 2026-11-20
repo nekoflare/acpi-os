@@ -1,0 +1,72 @@
+#!/bin/bash
+JINX_MAJOR_VER=0.12
+JINX_DEBIAN_SNAPSHOT=20251101T000000Z
+JINX_BASE_PACKAGES="build-essential pkgconf"
+export APP_CPU_FLAGS="-march=${JINX_APP_ARCH:-native} -mno-amx-tile"
+
+musl_env() {
+    export CC="$sysroot/opt/acpi-musl/bin/musl-gcc"
+    export CFLAGS="-O2 $APP_CPU_FLAGS -fno-pie"
+    export CPPFLAGS="-I$sysroot/usr/include"
+    export LDFLAGS="-static -no-pie -L$sysroot/usr/lib"
+    export PKG_CONFIG_LIBDIR="$sysroot/usr/lib/pkgconfig:$sysroot/usr/share/pkgconfig"
+    export PKG_CONFIG_SYSROOT_DIR="$sysroot"
+}
+
+uapi_dir() {
+    local directory="$PWD/linux-uapi"
+    mkdir -p "$directory"
+    ln -sfn /usr/include/linux /usr/include/asm-generic "$directory/"
+    ln -sfn /usr/include/x86_64-linux-gnu/asm "$directory/asm"
+    printf '%s\n' "$directory"
+}
+
+static_configure() (
+    copy_source
+    musl_env
+    cd src
+    ./configure --prefix=/usr --libdir=/usr/lib --disable-shared --enable-static "$@"
+)
+
+static_build() {
+    musl_env
+    make -C src -j"$parallelism"
+}
+
+autoconf_package() {
+    musl_env
+    make -C src DESTDIR="$dest_dir" install
+}
+
+package_app() {
+    install -Dm755 "$1" "$dest_dir/usr/bin/${2:-${1##*/}}"
+}
+
+copy_source() {
+    rm -rf src
+    mkdir src
+    cp -a "$source_dir/." src/
+}
+
+mlibc_app() {
+    local output="$1" unit uapi
+    shift
+    uapi=$(uapi_dir)
+    local objects=()
+    for unit in "$@"; do
+        clang -O2 $APP_CPU_FLAGS -fno-pie -Wall -Wextra -Werror -nostdlibinc \
+            -isystem "$sysroot/usr/include" -idirafter "$uapi" \
+            -c "$base_dir/userspace/$unit.c" -o "$unit.o" || return
+        objects+=("$unit.o")
+    done
+    ld.lld -static -z separate-loadable-segments -e _start "$sysroot/usr/lib/crt1.o" \
+        "${objects[@]}" "$sysroot/usr/lib/libc.a" -o "$output"
+}
+
+musl_app() {
+    local app="$1"
+    shift
+    musl_env
+    "$CC" -static -no-pie -O2 $APP_CPU_FLAGS -Wall -Wextra -Werror \
+        "$@" "$base_dir/userspace/$app.c" -o "$app"
+}

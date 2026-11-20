@@ -1,0 +1,17 @@
+version=2.7.3
+revision=1
+cross_compile=yes
+tarball_url="https://codeload.github.com/libexpat/libexpat/tar.gz/refs/tags/R_2_7_3"
+tarball_sha256=7c853a76f7c2a562c3edfd84ca47e487d9eff3966786191dfb60cc441daf82d6
+builddeps="musl"
+imagedeps="cmake ninja-build"
+
+configure() {
+    musl_env
+    cmake -S "$source_dir/expat" -B obj -G Ninja -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=Release \
+        -DEXPAT_SHARED_LIBS=OFF -DEXPAT_BUILD_TESTS=OFF \
+        -DEXPAT_BUILD_TOOLS=OFF -DEXPAT_BUILD_EXAMPLES=OFF -DEXPAT_BUILD_DOCS=OFF
+}
+build() { cmake --build obj -j"$parallelism"; }
+package() { DESTDIR="$dest_dir" cmake --install obj; }

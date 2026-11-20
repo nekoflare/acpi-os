@@ -5,12 +5,8 @@ BOOT_CONFIG = config/limine.conf
 BOOT_MODULE = hello.elf
 BASH_BUILD := $(abspath ../target/acpi-kernel-bash)
 MLIBC_BUILD := $(abspath ../target/acpi-kernel-mlibc)
-MLIBC_SYSROOT := $(MLIBC_BUILD)/sysroot/usr
-MESON ?= meson
-MLIBC_UAPI ?=
 MLIBC_JOBS ?= 8
 DWM ?= 0
-DOCKER ?= docker
 DWM_BUILD := $(abspath ../target/acpi-kernel-dwm)
 DWM_FONT ?= $(shell fc-match -f '%{file}' monospace)
 DWM_EXTRA = $(if $(filter 1,$(DWM)),$(DWM_BUILD)/dwm $(DWM_BUILD)/xeyes $(DWM_BUILD)/dwm-font.ttf config/dwm-fonts.conf)
@@ -18,7 +14,6 @@ BASH_IMAGE_BUILD = $(if $(DWM_EXTRA),$(DWM_BUILD),$(BASH_BUILD))
 BASH_CONFIG = $(if $(DWM_EXTRA),config/limine-dwm.conf,config/limine-bash.conf)
 BASH_STARTUP = $(if $(DWM_EXTRA),config/dwm-start.sh,config/x11-start.sh)
 CLANG ?= clang
-CLANGXX ?= clang++
 OPT ?= opt
 LLD ?= ld.lld
 IASL ?= iasl
@@ -30,14 +25,7 @@ PYTHON ?= python3
 OVMF ?= /usr/share/edk2/x64/OVMF_CODE.4m.fd
 
 APP_ARCH ?= native
-export APP_CPU_FLAGS := -march=$(APP_ARCH) -mno-amx-tile
-APP_CPU_CONFIG := $(MLIBC_BUILD)/app-cpu-flags
-
-.PHONY: force-app-cpu-config
-$(APP_CPU_CONFIG): force-app-cpu-config
-	@mkdir -p "$(@D)"
-	@printf '%s\n' '$(APP_CPU_FLAGS)' > "$@.tmp"
-	@if cmp -s "$@" "$@.tmp"; then unlink "$@.tmp"; else mv "$@.tmp" "$@"; fi
+include ports/Makefile
 
 KERNEL_FLAGS := -O2 -mcmodel=kernel -mno-red-zone -mgeneral-regs-only -fno-pic
 BOOT_FLAGS := $(KERNEL_FLAGS) -std=c17 -ffreestanding -fno-stack-protector -Wall -Wextra -Werror
@@ -85,7 +73,7 @@ all: $(BUILD)/acpi-kernel.iso
 $(BUILD):
 	mkdir -p $@
 
-$(BUILD)/kernel.aml: kernel/kernel.asl kernel/font8x8.asl | $(BUILD)
+$(BUILD)/kernel.aml: kernel/kernel.asl $(filter-out kernel/kernel.asl,$(wildcard kernel/*.asl)) | $(BUILD)
 	$(IASL) -I kernel -p $(basename $@) $<
 
 copy-aml: $(BUILD)/kernel.aml
@@ -110,23 +98,14 @@ $(BUILD)/early-memory.o: kernel/early-memory.c Makefile | $(BUILD)
 $(BUILD)/x86.o: kernel/x86.S Makefile | $(BUILD)
 	$(CLANG) $(KERNEL_FLAGS) -c $< -o $@
 
-$(BUILD)/hello.o: userspace/hello.S Makefile | $(BUILD)
-	$(CLANG) --target=x86_64-unknown-none-elf -c $< -o $@
+$(eval $(call jinx_artifact,$(BUILD)/hello.elf,hello,usr/bin/hello.elf))
 
-$(BUILD)/hello.elf: $(BUILD)/hello.o Makefile
-	$(LLD) -static -e _start $< -o $@
+$(eval $(call jinx_artifact,$(BUILD)/ls,ls,usr/bin/ls))
 
-$(BUILD)/ls.o: userspace/ls.c Makefile | $(BUILD)
-	$(CLANG) --target=x86_64-unknown-none-elf -O2 -ffreestanding -fno-stack-protector \
-		-fno-pie -Wall -Wextra -Werror -c $< -o $@
+INITRAMFS_FILES := $(if $(INITRAMFS_FSTAB),,$(wildcard initramfs/*) $(BUILD)/ls) $(INITRAMFS_EXTRA)
 
-$(BUILD)/ls: $(BUILD)/ls.o Makefile
-	$(LLD) -static -z separate-loadable-segments -e _start $< -o $@
-
-INITRAMFS_FILES := $(wildcard initramfs/*) $(BUILD)/ls $(INITRAMFS_EXTRA)
-
-$(BUILD)/initramfs.img: scripts/pack-initramfs.py initramfs $(INITRAMFS_FILES) $(INITRAMFS_FONT) Makefile | $(BUILD)
-	$(PYTHON) $< $@ $(INITRAMFS_FILES) $(if $(INITRAMFS_FONT),fonts/dwm-font.ttf=$(INITRAMFS_FONT))
+$(BUILD)/initramfs.img: scripts/pack-initramfs.py initramfs $(INITRAMFS_FILES) $(INITRAMFS_FSTAB) $(INITRAMFS_FONT) Makefile | $(BUILD)
+	$(PYTHON) $< $@ $(INITRAMFS_FILES) $(if $(INITRAMFS_FSTAB),etc/fstab=$(INITRAMFS_FSTAB)) $(if $(INITRAMFS_FONT),fonts/dwm-font.ttf=$(INITRAMFS_FONT))
 
 $(BUILD)/initramfs.o: kernel/embed-initramfs.S $(BUILD)/initramfs.img Makefile
 	$(CLANG) $(KERNEL_FLAGS) -DINITRAMFS_IMAGE='"$(BUILD)/initramfs.img"' -c $< -o $@
@@ -184,24 +163,9 @@ check-mlibc: mlibc
 check-mlibc-uefi: mlibc
 	$(MAKE) BUILD="$(MLIBC_BUILD)" BOOT_ELF="$(MLIBC_BUILD)/hello-mlibc.elf" MLIBC_CHECK=1 check-uefi
 
-$(MLIBC_SYSROOT)/lib/libc.a: scripts/build-mlibc.sh $(APP_CPU_CONFIG)
-	sh $< "$(MLIBC_BUILD)" "$(MESON)" "$(CLANG)" "$(CLANGXX)" "$(MLIBC_UAPI)" "$(MLIBC_JOBS)"
+$(eval $(call jinx_artifact,$(MLIBC_BUILD)/hello-mlibc.elf,hello-mlibc,usr/bin/hello-mlibc.elf))
 
-$(MLIBC_BUILD)/%.o: userspace/%.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
-	$(CLANG) -O2 $(APP_CPU_FLAGS) -fno-pie -Wall -Wextra -Werror -nostdlibinc \
-		-isystem "$(MLIBC_SYSROOT)/include" \
-		-idirafter "$(if $(MLIBC_UAPI),$(MLIBC_UAPI),$(MLIBC_BUILD)/linux-uapi)" -c $< -o $@
-
-$(MLIBC_BUILD)/x11-smoke.o: userspace/x11-cursor-font.h
-
-$(MLIBC_BUILD)/hello-mlibc.elf: $(MLIBC_BUILD)/hello-mlibc.o $(MLIBC_BUILD)/x11-smoke.o
-	$(LLD) -static -z separate-loadable-segments -e _start "$(MLIBC_SYSROOT)/lib/crt1.o" \
-		$^ "$(MLIBC_SYSROOT)/lib/libc.a" -o $@
-
-$(BASH_BUILD)/x11-demo: $(MLIBC_BUILD)/x11-demo.o $(MLIBC_BUILD)/x11-smoke.o
-	mkdir -p $(BASH_BUILD)
-	$(LLD) -static -z separate-loadable-segments -e _start "$(MLIBC_SYSROOT)/lib/crt1.o" \
-		$^ "$(MLIBC_SYSROOT)/lib/libc.a" -o $@
+$(eval $(call jinx_artifact,$(BASH_BUILD)/x11-demo,x11-demo,usr/bin/x11-demo))
 
 BASH_BOOT = BUILD="$(BASH_IMAGE_BUILD)" BOOT_ELF="$(BASH_BUILD)/bash.elf" \
 	BOOT_CONFIG="$(BASH_CONFIG)" BOOT_MODULE=bash.elf BASH_CHECK=1 DWM_CHECK="$(DWM)" \
@@ -227,52 +191,84 @@ XORG_IMAGE_BUILD ?= $(abspath ../target/acpi-kernel-xorg-probe)
 XORG_DESKTOP_BUILD ?= $(abspath ../target/acpi-kernel-xorg-desktop)
 XORG_DESKTOP_ASSETS ?= $(DWM_BUILD)
 ST_BUILD ?= $(abspath ../target/acpi-kernel-st)
-XKBCOMP ?= xkbcomp
 xorg-server: $(XORG_BUILD)/Xvfb
 
-$(XORG_BUILD)/Xvfb: scripts/build-xorg.sh $(APP_CPU_CONFIG) userspace/xorg-guest.c scripts/patches/xorg-guest-devices.patch \
-		scripts/patches/xorg-guest-keymap.patch scripts/patches/xtrans-guest-sockets.patch
-	sh $< "$(XORG_BUILD)" "$(MLIBC_JOBS)" "$(MESON)"
+$(eval $(call jinx_artifact,$(XORG_BUILD)/Xvfb,xvfb,usr/bin/Xvfb))
 
-$(XORG_BUILD)/xorg-default.xkm: config/xorg-default.xkb
-	mkdir -p "$(XORG_BUILD)"
-	$(XKBCOMP) -w 0 -xkm $< $@
+$(eval $(call jinx_artifact,$(XORG_BUILD)/xorg-default.xkm,xorg-keymap,usr/share/acpi-os/xorg-default.xkm))
 
-$(XORG_BUILD)/xorg-probe: userspace/xorg-probe.c $(XORG_BUILD)/Xvfb
-	"$(XORG_BUILD)/sysroot/musl/bin/musl-gcc" -static -no-pie -O2 $(APP_CPU_FLAGS) -Wall -Wextra -Werror $< -o $@
+$(eval $(call jinx_artifact,$(XORG_BUILD)/xorg-probe,xorg-probe,usr/bin/xorg-probe))
 
 st: $(ST_BUILD)/st
 
-$(ST_BUILD)/st: scripts/build-st.sh scripts/patches/st-guest-terminal.patch userspace/st-guest-poll.h $(XORG_BUILD)/Xvfb
-	+sh $< "$(ST_BUILD)" "$(XORG_BUILD)/sysroot" "$(MLIBC_JOBS)"
+$(eval $(call jinx_artifact,$(ST_BUILD)/st,st,usr/bin/st))
 
 xorg-image: $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/xorg-default.xkm
 	$(MAKE) BUILD="$(XORG_IMAGE_BUILD)" BOOT_ELF="$(XORG_BUILD)/xorg-probe" \
 		BOOT_CONFIG=config/limine-xorg.conf BOOT_MODULE=xorg-probe \
 		INITRAMFS_EXTRA="$(XORG_BUILD)/Xvfb $(XORG_BUILD)/xorg-default.xkm" all
 
-XORG_DESKTOP_BOOT = BUILD="$(XORG_DESKTOP_BUILD)" BOOT_ELF="$(XORG_BUILD)/xorg-probe" \
-	BOOT_CONFIG=config/limine-xorg.conf BOOT_MODULE=xorg-probe \
-	INITRAMFS_EXTRA="$(XORG_BUILD)/Xvfb $(XORG_BUILD)/xorg-default.xkm $(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(ST_BUILD)/st $(BASH_BUILD)/bash.elf $(BASH_BUILD)/fastfetch config/dwm-fonts.conf" \
-	INITRAMFS_FONT="$(XORG_DESKTOP_ASSETS)/dwm-font.ttf"
+XORG_FS_COMMANDS := cat cp mkdir mv rm rmdir
+XORG_FS_TOOLS := $(XORG_BUILD)/fs-tools
 
-xorg-desktop-image: $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/xorg-default.xkm $(ST_BUILD)/st $(BASH_BUILD)/bash.elf $(BASH_BUILD)/fastfetch
-	$(MAKE) $(XORG_DESKTOP_BOOT) all
+$(eval $(call jinx_artifact,$(XORG_FS_TOOLS),fs-tools,usr/bin/fs-tools))
+
+XORG_LS := $(XORG_BUILD)/busybox-ls
+
+$(eval $(call jinx_artifact,$(XORG_LS),busybox-ls,usr/bin/busybox-ls))
+
+XORG_DISK := $(XORG_DESKTOP_BUILD)/acpi-xorg.img
+XORG_APPS := $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/Xvfb $(XORG_BUILD)/xorg-default.xkm \
+	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(ST_BUILD)/st \
+	$(XORG_BUILD)/nsxiv \
+	$(BASH_BUILD)/bash.elf $(BASH_BUILD)/fastfetch config/dwm-fonts.conf \
+	$(wildcard initramfs/*)
+
+$(eval $(call jinx_artifact,$(XORG_BUILD)/nsxiv,nsxiv,usr/bin/nsxiv))
+XORG_FONT := $(XORG_DESKTOP_ASSETS)/dwm-font.ttf
+XORG_DISK_CONFIG := config/limine-xorg-disk.conf
+XORG_ACCEL ?= $(if $(wildcard /dev/kvm),kvm,tcg)
+XORG_CPU ?= $(if $(filter kvm,$(XORG_ACCEL)),$(or $(QEMU_CPU),host),max)
+
+ifneq ($(DWM),1)
+ifeq ($(XORG_DESKTOP_ASSETS),$(DWM_BUILD))
+$(DWM_BUILD)/dwm-font.ttf: $(DWM_FONT)
+	@test -n "$(DWM_FONT)" || { echo "Set DWM_FONT to a TrueType font."; exit 1; }
+	mkdir -p "$(@D)"
+	cp -- "$(DWM_FONT)" "$@"
+endif
+endif
+
+ifneq ($(BUILD),$(XORG_DESKTOP_BUILD))
+$(XORG_DESKTOP_BUILD)/kernel.elf: $(wildcard kernel/*) $(wildcard initramfs/*) config/fstab-xorg Makefile \
+	scripts/pack-initramfs.py $(wildcard ../src/*) ../Cargo.toml ../Cargo.lock
+	$(MAKE) BUILD="$(XORG_DESKTOP_BUILD)" INITRAMFS_FSTAB=config/fstab-xorg "$@"
+
+endif
+
+$(XORG_DISK): scripts/pack-xorg-disk.sh $(XORG_DESKTOP_BUILD)/kernel.elf $(LIMINE_DIR)/BOOTX64.EFI \
+	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) Makefile
+	sh $< "$@" "$(XORG_DESKTOP_BUILD)/kernel.elf" "$(LIMINE_DIR)/BOOTX64.EFI" \
+		"$(XORG_DISK_CONFIG)" $(XORG_APPS) ls=$(XORG_LS) $(foreach cmd,$(XORG_FS_COMMANDS),$(cmd)=$(XORG_FS_TOOLS)) \
+		fonts/dwm-font.ttf="$(XORG_FONT)"
+
+xorg-desktop-image: $(XORG_DISK)
 
 run-xorg-uefi: xorg-desktop-image
-	$(MAKE) $(XORG_DESKTOP_BOOT) QEMU_CPU="$(or $(QEMU_CPU),host)" boot-uefi
+	flock -n "$(XORG_DISK).lock" $(QEMU) -m 8G -accel $(XORG_ACCEL) -cpu $(XORG_CPU) -serial stdio -monitor none -no-reboot \
+		-drive if=pflash,format=raw,readonly=on,file="$(OVMF)" \
+		-drive if=none,id=system,format=raw,file="$(XORG_DISK)" \
+		-device virtio-blk-pci,drive=system,disable-modern=on,queue-size=16
 
 .PHONY: dwm
 dwm: $(DWM_BUILD)/dwm
 
-$(DWM_BUILD)/dwm: scripts/build-dwm.sh
-	sh $< "$(DWM_BUILD)" "$(DOCKER)"
+$(eval $(call jinx_artifact,$(DWM_BUILD)/dwm,dwm,usr/bin/dwm))
 
 .PHONY: xeyes
 xeyes: $(DWM_BUILD)/xeyes
 
-$(DWM_BUILD)/xeyes: scripts/build-xeyes.sh
-	sh $< "$(DWM_BUILD)" "$(DOCKER)"
+$(eval $(call jinx_artifact,$(DWM_BUILD)/xeyes,xeyes,usr/bin/xeyes))
 
 ifeq ($(DWM),1)
 $(DWM_BUILD)/dwm-font.ttf: $(DWM_FONT)
@@ -281,15 +277,9 @@ $(DWM_BUILD)/dwm-font.ttf: $(DWM_FONT)
 	cp -- "$(DWM_FONT)" "$@"
 endif
 
-$(BASH_BUILD)/bash.elf: scripts/build-bash.sh $(MLIBC_SYSROOT)/lib/libc.a
-	+sh $< "$(BASH_BUILD)" "$(MLIBC_BUILD)/sysroot" "$(CLANG)" "$(LLD)" "$(MLIBC_UAPI)"
+$(eval $(call jinx_artifact,$(BASH_BUILD)/bash.elf,bash,usr/bin/bash.elf))
 
-$(BASH_BUILD)/fbtest: userspace/fbtest.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
-	$(CLANG) -O2 $(APP_CPU_FLAGS) -fno-pie -Wall -Wextra -Werror -nostdinc \
-		-isystem "$(MLIBC_SYSROOT)/include" -idirafter "$(if $(MLIBC_UAPI),$(MLIBC_UAPI),$(MLIBC_BUILD)/linux-uapi)" \
-		-c $< -o $(BASH_BUILD)/fbtest.o
-	$(LLD) -static -z separate-loadable-segments "$(MLIBC_SYSROOT)/lib/crt1.o" \
-		$(BASH_BUILD)/fbtest.o "$(MLIBC_SYSROOT)/lib/libc.a" -o $@
+$(eval $(call jinx_artifact,$(BASH_BUILD)/fbtest,fbtest,usr/bin/fbtest))
 
 FASTFETCH_BUILD := $(abspath ../target/acpi-kernel/fastfetch)
 $(BASH_BUILD)/fastfetch: $(FASTFETCH_BUILD)/fastfetch.elf
@@ -305,8 +295,7 @@ fastfetch: $(FASTFETCH_BUILD)/fastfetch.elf
 run-fastfetch: fastfetch
 	$(MAKE) $(FASTFETCH_BOOT) run
 
-$(FASTFETCH_BUILD)/fastfetch.elf: scripts/build-fastfetch.sh scripts/patches/fastfetch-mlibc.patch scripts/patches/fastfetch-cpu.patch $(MLIBC_SYSROOT)/lib/libc.a
-	sh $< "$(FASTFETCH_BUILD)" "$(MLIBC_BUILD)/sysroot" "$(CLANG)" "$(LLD)" "$(MLIBC_UAPI)" "$(MLIBC_JOBS)"
+$(eval $(call jinx_artifact,$(FASTFETCH_BUILD)/fastfetch.elf,fastfetch,usr/bin/fastfetch.elf))
 
 DOOM_BUILD := $(abspath ../target/acpi-kernel-doom)
 DOOM_SHAREWARE_ARCHIVE := $(DOOM_BUILD)/doom-1.8.wad.gz
@@ -350,6 +339,4 @@ $(DOOM_SHAREWARE_WAD): $(DOOM_SHAREWARE_ARCHIVE)
 	@printf 'Extracting the Doom shareware WAD\n'
 	gzip -dc "$<" > "$@"
 
-$(DOOM_BUILD)/doom.elf: scripts/build-doom.sh userspace/doomgeneric-asl.c $(MLIBC_SYSROOT)/lib/libc.a Makefile
-	+sh $< "$(DOOM_BUILD)" "$(MLIBC_SYSROOT)" \
-		"$(abspath $(if $(MLIBC_UAPI),$(MLIBC_UAPI),$(MLIBC_BUILD)/linux-uapi))" "$(CLANG)" "$(LLD)"
+$(eval $(call jinx_artifact,$(DOOM_BUILD)/doom.elf,doomgeneric,usr/bin/doom.elf))

@@ -1,3 +1,6 @@
 /target/
 /.local/
 /acpi-kernel/kernel.aml
+/acpi-kernel/.jinx-cache/
+/acpi-kernel/sources/
+/acpi-kernel/host-sources/

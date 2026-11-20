@@ -1,0 +1,11 @@
+version=2.3.9
+revision=1
+cross_compile=yes
+tarball_url="https://www.x.org/releases/individual/lib/libXft-2.3.9.tar.xz"
+tarball_sha256=60a25b78945ed6932635b3bb1899a517d31df7456e69867ffba27f89ff3976f5
+builddeps=musl
+deps="freetype fontconfig libxrender"
+
+configure() { static_configure ; }
+build() { static_build; }
+package() { autoconf_package; }

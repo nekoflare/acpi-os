@@ -1,0 +1,11 @@
+version=1.8.13
+revision=1
+cross_compile=yes
+tarball_url="https://www.x.org/releases/individual/lib/libX11-1.8.13.tar.xz"
+tarball_sha256=69606f485c2c07c14ef64f75b7bb326d48587af33795d9ab3e607c0b5f94f11c
+builddeps=musl
+deps="libxcb xorgproto xtrans"
+
+configure() { static_configure --disable-xf86bigfont; }
+build() { static_build; }
+package() { autoconf_package; }

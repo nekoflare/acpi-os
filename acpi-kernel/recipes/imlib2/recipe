@@ -1,0 +1,16 @@
+version=1.12.6
+revision=1
+cross_compile=yes
+tarball_url="https://downloads.sourceforge.net/project/enlightenment/imlib2-src/1.12.6/imlib2-1.12.6.tar.xz"
+tarball_sha256=250f9752f69dc522e529a81aaa9395705f7fc312ff2453e5de59ac2ba1f2858f
+builddeps=musl
+deps="freetype libx11 libxext"
+
+configure() {
+    static_configure --disable-progs --disable-doc-build \
+        --x-includes="$sysroot/usr/include" --x-libraries="$sysroot/usr/lib" --without-x-shm-fd \
+        --without-gif --without-jpeg --without-png --without-tiff --without-webp \
+        --without-zlib --without-id3 --without-heif
+}
+build() { static_build; }
+package() { autoconf_package; }

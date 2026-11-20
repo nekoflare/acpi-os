@@ -1,0 +1,7 @@
+version=1.0
+imagedeps="x11-xkb-utils xkb-data"
+revision=1
+cross_compile=yes
+
+build() { xkbcomp -w 0 -xkm "$base_dir/config/xorg-default.xkb" xorg-default.xkm; }
+package() { install -Dm644 xorg-default.xkm "$dest_dir/usr/share/acpi-os/xorg-default.xkm"; }

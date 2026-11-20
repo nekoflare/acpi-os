@@ -1,0 +1,16 @@
+version=1.3.0
+revision=1
+cross_compile=yes
+tarball_url=https://www.x.org/releases/individual/app/xeyes-1.3.0.tar.xz
+tarball_sha256=0950c600bf33447e169a539ee6655ef9f36d6cebf2c1be67f7ab55dacb753023
+builddeps="musl libxi libxmu"
+
+configure() (
+    copy_source
+    musl_env
+    cd src
+    XEYES_LIBS="$(pkg-config --static --libs xi x11 xt xext xmu)" \
+        ./configure --prefix=/usr --without-xrender --without-present
+)
+build() { static_build; }
+package() { autoconf_package; }

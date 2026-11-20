@@ -1,0 +1,10 @@
+version=1.0
+imagedeps="clang lld"
+revision=1
+cross_compile=yes
+
+build() {
+    clang --target=x86_64-unknown-none-elf -c "$base_dir/userspace/hello.S" -o hello.o
+    ld.lld -static -e _start hello.o -o hello.elf
+}
+package() { package_app hello.elf; }

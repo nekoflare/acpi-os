@@ -1,0 +1,15 @@
+version=6.8
+tarball_url=https://dl.suckless.org/dwm/dwm-6.8.tar.gz
+tarball_sha256=bcf540589ad174d4073f4efa658828411e2f5ba63196cfaf6b71363700f590b7
+builddeps="musl libxft"
+revision=1
+cross_compile=yes
+
+build() {
+    copy_source
+    musl_env
+    make -C src -j"$parallelism" CC="$CC" XINERAMAFLAGS= XINERAMALIBS= \
+        INCS="$(pkg-config --cflags x11 xft fontconfig)" \
+        LDFLAGS="$LDFLAGS -Wl,-z,separate-code $(pkg-config --static --libs x11 xft fontconfig)"
+}
+package() { package_app src/dwm dwm; }

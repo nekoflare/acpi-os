@@ -1,0 +1,18 @@
+version=6.3.1
+revision=1
+cross_compile=yes
+git_url=https://github.com/managarm/mlibc.git
+commit=2444b0997c91c327b9989f25e4b8bd2c053d3194
+imagedeps="clang meson ninja-build linux-libc-dev"
+source_imagedeps=meson
+source_allow_network=yes
+
+prepare() { meson subprojects download; }
+
+configure() {
+    CC=clang CXX=clang++ meson setup obj "$source_dir" --prefix=/usr --libdir=lib --wrap-mode=nodownload \
+        -Ddefault_library=static -Dlinux_kernel_headers="$(uapi_dir)" \
+        -Dc_args="$APP_CPU_FLAGS" -Dcpp_args="$APP_CPU_FLAGS"
+}
+build() { meson compile -C obj -j"$parallelism"; }
+package() { DESTDIR="$dest_dir" meson install -C obj --no-rebuild; }

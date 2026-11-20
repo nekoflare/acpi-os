@@ -1,0 +1,25 @@
+version=21.1.21
+revision=1
+cross_compile=yes
+tarball_url="https://www.x.org/releases/individual/xserver/xorg-server-21.1.21.tar.xz"
+tarball_sha256=c0cbe5545b3f645bae6024b830d1d1154a956350683a4e52b2fff5b0fa1ab519
+builddeps="musl libmd xtrans libxau libxfont2 libxkbfile pixman"
+imagedeps="meson ninja-build linux-libc-dev"
+
+prepare() {
+    cp "$base_dir/userspace/xorg-guest.c" hw/vfb/amlaot-guest.c
+    sed -i "s/cc.has_function('epoll_create1') ? '1' : false/false/" include/meson.build
+    sed -i "s/cc.find_library('md', required: false)/dependency('libmd', required: false)/" meson.build
+}
+configure() {
+    musl_env
+    export CFLAGS="$CFLAGS -DAMLAOT_GUEST -I$sysroot/usr/include -idirafter $(uapi_dir)"
+    meson setup obj "$source_dir" --prefix=/usr --libdir=lib --default-library=static \
+        -Dprefer_static=true -Dxorg=false -Dxnest=false -Dxvfb=true -Dglx=false -Dudev=false \
+        -Dudev_kms=false -Dinput_thread=false -Dmitshm=false -Ddrm=false -Ddri1=false \
+        -Ddri2=false -Ddri3=false -Dxdmcp=false -Dxdm-auth-1=false -Dsecure-rpc=false \
+        -Dipv6=false -Dsha1=libmd -Ddocs=false -Ddevel-docs=false \
+        -Ddefault_font_path=built-ins -Dxkb_dir=/xkb -Dxkb_bin_dir=/ -Dxkb_output_dir=/tmp
+}
+build() { meson compile -C obj -j"$parallelism" Xvfb; }
+package() { package_app obj/hw/vfb/Xvfb; }

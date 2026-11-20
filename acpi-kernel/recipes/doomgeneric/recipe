@@ -1,0 +1,10 @@
+version=0.1
+git_url=https://github.com/ozkl/doomgeneric.git
+commit=e257a09527062bfb986b6e5e0780839b6cbd5b71
+builddeps=mlibc
+imagedeps="clang lld linux-libc-dev"
+revision=1
+cross_compile=yes
+
+build() { sh "$recipe_dir/build.sh" "$PWD" "$source_dir" "$sysroot/usr" "$(uapi_dir)" clang ld.lld; }
+package() { package_app doom.elf; }

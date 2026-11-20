@@ -443,6 +443,42 @@ extern void acpi_syscall_entry(void);
 extern void acpi_task_exit(void);
 extern void acpi_task_test(uint64_t *);
 
+uint64_t acpi_port_io(uint64_t address, uint64_t width, uint64_t value)
+{
+    uint16_t port = (uint16_t)address;
+    uint32_t word;
+    if (value == UINT64_MAX) {
+        switch (width) {
+        case 1: {
+            uint8_t byte;
+            __asm__ volatile("inb %1, %0" : "=a"(byte) : "Nd"(port) : "memory");
+            return byte;
+        }
+        case 2: {
+            uint16_t half;
+            __asm__ volatile("inw %1, %0" : "=a"(half) : "Nd"(port) : "memory");
+            return half;
+        }
+        case 4:
+            __asm__ volatile("inl %1, %0" : "=a"(word) : "Nd"(port) : "memory");
+            return word;
+        }
+    } else {
+        switch (width) {
+        case 1:
+            __asm__ volatile("outb %0, %1" : : "a"((uint8_t)value), "Nd"(port) : "memory");
+            break;
+        case 2:
+            __asm__ volatile("outw %0, %1" : : "a"((uint16_t)value), "Nd"(port) : "memory");
+            break;
+        case 4:
+            __asm__ volatile("outl %0, %1" : : "a"((uint32_t)value), "Nd"(port) : "memory");
+            break;
+        }
+    }
+    return 0;
+}
+
 uint64_t acpi_mmio_dword(uint64_t address, uint64_t value)
 {
     volatile uint32_t *word = (volatile uint32_t *)address;

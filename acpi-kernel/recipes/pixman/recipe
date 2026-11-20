@@ -1,0 +1,15 @@
+version=0.46.4
+revision=1
+cross_compile=yes
+tarball_url="https://www.cairographics.org/releases/pixman-0.46.4.tar.gz"
+tarball_sha256=d09c44ebc3bd5bee7021c79f922fe8fb2fb57f7320f55e97ff9914d2346a591c
+builddeps="musl"
+imagedeps="meson ninja-build"
+
+configure() {
+    musl_env
+    meson setup obj "$source_dir" --prefix=/usr --libdir=lib --default-library=static \
+        -Dtests=disabled -Ddemos=disabled -Dgtk=disabled
+}
+build() { meson compile -C obj -j"$parallelism"; }
+package() { DESTDIR="$dest_dir" meson install -C obj --no-rebuild; }

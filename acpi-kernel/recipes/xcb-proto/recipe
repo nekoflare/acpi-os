@@ -1,0 +1,10 @@
+version=1.17.0
+revision=1
+cross_compile=yes
+tarball_url="https://www.x.org/releases/individual/proto/xcb-proto-1.17.0.tar.xz"
+tarball_sha256=2c1bacd2110f4799f74de6ebb714b94cf6f80fb112316b1219480fd22562148c
+imagedeps="python3"
+
+configure() { "$source_dir/configure" --prefix=/usr; }
+build() { make -j"$parallelism"; }
+package() { make DESTDIR="$dest_dir" install; }

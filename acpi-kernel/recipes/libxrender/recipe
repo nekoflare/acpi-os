@@ -1,0 +1,11 @@
+version=0.9.12
+revision=1
+cross_compile=yes
+tarball_url="https://www.x.org/releases/individual/lib/libXrender-0.9.12.tar.xz"
+tarball_sha256=b832128da48b39c8d608224481743403ad1691bf4e554e4be9c174df171d1b97
+builddeps=musl
+deps="libx11"
+
+configure() { static_configure ; }
+build() { static_build; }
+package() { autoconf_package; }

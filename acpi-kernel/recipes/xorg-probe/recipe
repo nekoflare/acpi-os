@@ -1,0 +1,9 @@
+version=1.0
+builddeps=musl
+revision=1
+cross_compile=yes
+
+build() {
+    musl_app xorg-probe
+}
+package() { package_app xorg-probe; }

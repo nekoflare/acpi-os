@@ -1,0 +1,2 @@
+# device   mountpoint  type  options  dump  pass
+/dev/vda2  /           ext4  rw       0     0

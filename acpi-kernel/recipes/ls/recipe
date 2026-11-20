@@ -1,0 +1,11 @@
+version=1.0
+imagedeps="clang lld"
+revision=1
+cross_compile=yes
+
+build() {
+    clang --target=x86_64-unknown-none-elf -O2 -ffreestanding -fno-stack-protector \
+        -fno-pie -Wall -Wextra -Werror -c "$base_dir/userspace/ls.c" -o ls.o
+    ld.lld -static -z separate-loadable-segments -e _start ls.o -o ls
+}
+package() { package_app ls; }

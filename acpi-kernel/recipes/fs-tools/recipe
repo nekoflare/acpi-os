@@ -1,0 +1,9 @@
+version=1.0
+builddeps=musl
+revision=1
+cross_compile=yes
+
+build() {
+    musl_app fs-tools -D_GNU_SOURCE
+}
+package() { package_app fs-tools; }

@@ -1,0 +1,12 @@
+version=1.17.0
+revision=1
+cross_compile=yes
+tarball_url="https://www.x.org/releases/individual/lib/libxcb-1.17.0.tar.xz"
+tarball_sha256=599ebf9996710fea71622e6e184f3a8ad5b43d0e5fa8c4e407123c88a59a6d55
+builddeps="musl xcb-proto"
+deps="libxau libxdmcp xorgproto"
+imagedeps="python3 libxml2-utils"
+
+configure() { static_configure XCBPROTO_CFLAGS="-I$sysroot/usr/share/xcb" XCBPROTO_LIBS=-lm; }
+build() { static_build; }
+package() { autoconf_package; }

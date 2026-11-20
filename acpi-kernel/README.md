@@ -334,16 +334,31 @@ make -C acpi-kernel check
 make -C acpi-kernel check-uefi
 ```
 
+## Building userspace with Jinx
+
+```sh
+make -C acpi-kernel userspace
+```
+
+This builds all guest applications and static libraries from the recipes in
+`acpi-kernel/recipes`. The vendored Jinx 0.12 script creates a pinned Debian
+build container and writes XBPS packages to the selected build directory
+under `target/acpi-os-jinx`. Run the build as a regular Linux user with
+user and mount namespaces enabled. The first build downloads the container
+and upstream sources. Subsequent image builds stage the required files
+from these packages.
+
+Set `APP_ARCH=x86-64` for baseline x86-64 guest binaries. The default is
+`native`. Set `MLIBC_JOBS` to control parallel compilation within a
+package. Each input revision and CPU configuration has its own package
+directory, and Jinx shares its downloaded-archive cache across them.
+
 ## Static mlibc userspace
 
 The optional mlibc build boots `userspace/hello-mlibc.c` as `hello.elf`. It uses
-mlibc 6.3.1's Linux syscall backend and standard static CRT. The build
-fetches the pinned sources and stages headers, `crt1.o`, and `libc.a` in
-`target/acpi-kernel-mlibc/sysroot/usr`. It needs Git, Meson, Ninja, Clang,
-Clang++, and Linux x86-64 UAPI headers. Set `MESON` to the Meson
-executable if it is outside PATH. Set `MLIBC_UAPI` to an absolute path
-containing installed UAPI headers if they are outside the standard
-host include directories.
+mlibc's Linux syscall backend and standard static CRT. The Jinx mlibc
+recipe builds the headers, `crt1.o`, and `libc.a` used by the programs
+linked against it.
 
 ```sh
 make -C acpi-kernel mlibc
@@ -387,9 +402,9 @@ The wire format follows the [X Window System Protocol](https://xorg.freedesktop.
 The interactive UEFI image boots GNU Bash 5.2.37 and bundles Fastfetch
 Doom, and the X11 framebuffer demo in the initramfs. Run `make run-uefi` from the repository root or
 `make -C acpi-kernel run-uefi`. This launch uses KVM with host CPU
-passthrough so Fastfetch reports the host CPU model. The build uses the mlibc sysroot and
-needs curl, tar, and sha256sum in addition to the mlibc and Fastfetch
-build tools. The Doom data download also requires gzip. The Bash build omits
+passthrough so Fastfetch reports the host CPU model. Jinx builds Bash,
+Fastfetch, and Doom against mlibc. The Doom data download requires curl
+and gzip on the host. The Bash build omits
 Readline and job control.
 
 ```sh
@@ -434,9 +449,43 @@ The upstream X.Org desktop is available through:
 make -C acpi-kernel run-xorg-uefi
 ```
 
-This builds a static Xvfb with the host compiler, Meson, Ninja, and
-the host's X11 protocol and Linux UAPI headers. Host `xkbcomp` compiles
-the guest's US keyboard map into the image. On QEMU Standard VGA with
+The target boots `target/acpi-kernel-xorg-desktop/acpi-xorg.img` through OVMF.
+The GPT disk has a FAT32 EFI system partition with Limine and the kernel,
+and a journal-free ext4 partition with the desktop programs, fonts, and
+other guest files. Image creation uses `sfdisk`, `mkfs.fat`, mtools, and
+`mkfs.ext4`. Rebuilds use `qemu-img`, `debugfs`, and `e2fsck` to refresh
+the packaged files and boot partition while preserving other files on ext4.
+QEMU uses KVM when `/dev/kvm` is present and TCG otherwise.
+
+The bootstrap archive supplies `/etc/fstab` from `config/fstab-xorg`.
+The kernel mounts `/dev/vda2` at `/` before launching the desktop. fstab
+supports numbered GPT partitions `/dev/vda1` through `/dev/vda9`, existing
+mount directories, and options `rw`, `ro`, `defaults`, and `noauto`.
+The ext4 driver supports 4 KiB blocks and the `filetype` and `extent`
+features. The desktop's writable single-group volume supports creating,
+extending, appending, truncating, renaming, and deleting regular files and
+directories. Changes are written through virtio-blk and survive reboot.
+The volume has no journal, so interrupted metadata updates can require
+`e2fsck`.
+
+The desktop Bash session includes BusyBox `ls` with long, human-readable,
+and recursive listings. It also includes `cat`, `cp`, `mkdir` (including
+`-p`), `mv`, `rm` (including `-r` and `-f`), and `rmdir`. They use the
+Linux x86-64 syscall ABI.
+
+```sh
+mkdir -p work/data
+cd work
+cp /readme.txt data/input
+mv data/input data/notes
+cat data/notes
+rm -r data
+cd /
+rmdir work
+```
+
+Jinx builds static Xvfb with musl and the packaged X11 protocol headers.
+A build-container copy of `xkbcomp` compiles the guest's US keyboard map. On QEMU Standard VGA with
 room for two desktop scanout pages, X.Org copies each completed frame
 to the hidden page and flips the display to it. The console keeps its
 own page and is restored when X.Org closes the framebuffer. Other
@@ -448,8 +497,8 @@ The guest port sends
 line-edited input and shell output over a Unix stream. Programs that
 require Linux PTY ioctls or terminal job control remain unsupported.
 
-The first desktop build compiles st and its static X11 client libraries
-locally. It uses CMake, Ninja, and the host XCB protocol definitions.
+Jinx builds st and the static X11 client libraries from source, including
+the XCB protocol definitions.
 Set `XORG_DESKTOP_ASSETS` to a directory with existing
 static `dwm`, `xeyes`, and `dwm-font.ttf` artifacts. It defaults to
 `target/acpi-kernel-dwm`. This target uses the available artifacts
@@ -468,8 +517,8 @@ tags or change layouts. The session also starts xeyes. Press Escape to
 close the session and reach Bash.
 Run `x11-demo --dwm` in Bash to start it again.
 
-The build uses Docker and Alpine's static libraries to link dwm with
-musl. It bundles the host's default monospace font selected by
+Jinx builds dwm with musl and its source-built static libraries. The image
+bundles the host's default monospace font selected by
 `fc-match`. Set `DWM_FONT` to override it. The X11 server accepts dwm
 and one additional client in this session. Moving and resizing managed
 windows with the mouse still requires X11 pointer grabs.

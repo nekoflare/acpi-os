@@ -1372,6 +1372,7 @@ error:
             "XMEM" => Some(("acpi_read_memory", 2)),
             "XMAP" => Some(("acpi_page_range", 2)),
             "XCR3" => Some(("acpi_page_root", 0)),
+            "XPIO" => Some(("acpi_port_io", 3)),
             "XDWD" => Some(("acpi_mmio_dword", 2)),
             "XFBQ" => Some(("acpi_framebuffer_info", 1)),
             "XPRW" => Some(("acpi_pixel_row", 4)),

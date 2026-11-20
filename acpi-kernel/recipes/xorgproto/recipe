@@ -1,0 +1,9 @@
+version=2024.1
+revision=1
+cross_compile=yes
+tarball_url="https://www.x.org/releases/individual/proto/xorgproto-2024.1.tar.xz"
+tarball_sha256=372225fd40815b8423547f5d890c5debc72e88b91088fbfb13158c20495ccb59
+
+configure() { "$source_dir/configure" --prefix=/usr; }
+build() { make -j"$parallelism"; }
+package() { make DESTDIR="$dest_dir" install; }

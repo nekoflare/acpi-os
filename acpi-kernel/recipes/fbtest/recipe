@@ -1,0 +1,10 @@
+version=1.0
+builddeps=mlibc
+imagedeps="clang lld linux-libc-dev"
+revision=1
+cross_compile=yes
+
+build() {
+    mlibc_app fbtest fbtest
+}
+package() { package_app fbtest; }

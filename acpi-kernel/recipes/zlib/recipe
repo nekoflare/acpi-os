@@ -1,0 +1,15 @@
+version=1.3.1
+revision=1
+cross_compile=yes
+tarball_url="https://codeload.github.com/madler/zlib/tar.gz/refs/tags/v1.3.1"
+tarball_sha256=17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c
+builddeps="musl"
+
+configure() (
+    copy_source
+    musl_env
+    cd src
+    ./configure --prefix=/usr --static
+)
+build() { static_build; }
+package() { autoconf_package; }

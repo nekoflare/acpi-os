@@ -1,0 +1,11 @@
+version=1.1.2
+revision=1
+cross_compile=yes
+tarball_url="https://www.x.org/releases/individual/lib/libICE-1.1.2.tar.xz"
+tarball_sha256=974e4ed414225eb3c716985df9709f4da8d22a67a2890066bc6dfc89ad298625
+builddeps=musl
+deps="xorgproto xtrans"
+
+configure() { static_configure ; }
+build() { static_build; }
+package() { autoconf_package; }

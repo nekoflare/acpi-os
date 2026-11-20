@@ -1,0 +1,13 @@
+version=1.2.5
+revision=1
+cross_compile=yes
+tarball_url="https://codeload.github.com/ifduyue/musl/tar.gz/refs/tags/v1.2.5"
+tarball_sha256=83ff394502d1c334b040ea9bc66ec48bba453585e25b05f4bde3741d8245d883
+
+configure() { "$source_dir/configure" --prefix=/sysroot/opt/acpi-musl --disable-shared; }
+build() { make -j"$parallelism"; }
+package() {
+    make DESTDIR="$PWD/stage" install
+    mkdir -p "$dest_dir/opt"
+    cp -a "$PWD/stage/sysroot/opt/acpi-musl" "$dest_dir/opt/"
+}

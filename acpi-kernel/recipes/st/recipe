@@ -1,0 +1,17 @@
+version=0.9.3
+tarball_url=https://dl.suckless.org/st/st-0.9.3.tar.gz
+tarball_sha256=9ed9feabcded713d4ded38c8cebf36a3b08f0042ef7934a0e2b2409da56e649b
+builddeps="musl libxft"
+revision=1
+cross_compile=yes
+
+build() {
+    copy_source
+    musl_env
+    patch -d src -p1 < "$recipe_dir/st-guest-terminal.patch"
+    cp "$base_dir/userspace/st-guest-poll.h" src/amlaot-poll.h
+    make -C src -j"$parallelism" CC="$CC" CPPFLAGS="-D_GNU_SOURCE -include amlaot-poll.h" \
+        INCS="$(pkg-config --cflags xft)" LIBS="$(pkg-config --static --libs xft) -lm" \
+        CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS"
+}
+package() { package_app src/st st; }
