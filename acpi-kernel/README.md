@@ -38,6 +38,15 @@ enabled, bit 1 for online-capable). It reports the local APIC base address,
 including any MADT address override, and each I/O APIC's ID, MMIO address,
 and global system interrupt base.
 
+The boot protocol starts secondary processors through Limine's MP request.
+Every CPU loads a private GDT, TSS, and IDT, and has local interrupt and task
+dispatch state. The ASL scheduler keeps one shared runnable queue protected by
+a short scheduler lock. A CPU drops the lock while its task runs and reacquires
+it when an interrupt or syscall returns to the scheduler, so different tasks
+can execute on different CPUs at the same time. Local LAPIC timers preempt
+tasks on every CPU; the BSP alone owns legacy device IRQ routing and global
+timer accounting.
+
 The timer driver uses the MADT ISA IRQ 0 source override, including its
 polarity and trigger flags, to route PIT channel 0 through the matching
 I/O APIC pin to vector `0x20`. The ASL driver masks the legacy PIC on
@@ -336,7 +345,9 @@ name with Backspace, exit status zero, the ACPI and APIC reports, and
 the shell's directory listing, file read, and missing-file response.
 They also confirm the framebuffer changes and save captures as
 `serial.ppm` and `serial-uefi.ppm` under `target/acpi-kernel`. The UEFI
-target uses OVMF.
+target uses OVMF. QEMU defaults to four vCPUs. Both boot checks verify the
+requested CPUs come online and, with multiple vCPUs, that scheduler tasks
+execute concurrently. Set `SMP_CPUS=1` to test a uniprocessor boot.
 
 ```sh
 make -C acpi-kernel

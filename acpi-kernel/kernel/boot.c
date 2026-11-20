@@ -32,6 +32,24 @@ struct memory_map_response {
     const struct memory_map_entry *const *entries;
 };
 
+/* Limine MP (SMP) boot protocol. Keep the field order in sync with Limine. */
+struct limine_mp_info;
+typedef void (*limine_goto_address)(struct limine_mp_info *);
+struct limine_mp_info {
+    uint32_t processor_id;
+    uint32_t lapic_id;
+    uint64_t reserved;
+    limine_goto_address goto_address;
+    uint64_t extra_argument;
+};
+struct limine_mp_response {
+    uint64_t revision;
+    uint32_t flags;
+    uint32_t bsp_lapic_id;
+    uint64_t cpu_count;
+    struct limine_mp_info **cpus;
+};
+
 REQUEST(".limine_requests")
 static volatile struct {
     uint64_t id[4], revision;
@@ -49,6 +67,289 @@ static volatile struct {
     uint64_t id[4], revision;
     const struct memory_map_response *response;
 } memory_map_request = { .id = LIMINE_ID(0x67cf3d9d378a806f, 0xe304acdfc50c3c62) };
+
+REQUEST(".limine_requests")
+static volatile struct {
+    uint64_t id[4], revision;
+    const struct limine_mp_response *response;
+    uint64_t flags;
+} mp_request = { .id = LIMINE_ID(0x95a67b819a1b857e, 0xa0b61b723b6a73e0) };
+
+#define ACPI_MAX_CPUS 64
+#define ACPI_IDT_BYTES (256 * 16)
+#define ACPI_GDT_ENTRIES 7
+#define ACPI_TSS_BYTES 104
+
+/* The first eight qwords are the ABI consumed by x86.S using %gs offsets. */
+struct acpi_cpu_local {
+    uint64_t scheduler_stack;
+    uint64_t user_kernel_stack;
+    uint64_t user_rsp;
+    uint64_t kernel_cr3;
+    uint64_t user_fx_state;
+    uint64_t tss;
+    struct acpi_cpu_local *self;
+    volatile uint8_t irq_pending;
+    uint8_t padding[7];
+    uint64_t last_fault_vector;
+    uint64_t last_fault_error;
+    uint64_t last_fault_rip;
+    uint32_t lapic_id;
+    uint32_t index;
+    struct limine_mp_info *info;
+    uint64_t gdt[ACPI_GDT_ENTRIES];
+    uint8_t gdtr[10];
+    uint8_t idt[ACPI_IDT_BYTES];
+    uint8_t idtr[10];
+    _Alignas(16) uint8_t private_tss[ACPI_TSS_BYTES];
+};
+
+_Static_assert(offsetof(struct acpi_cpu_local, scheduler_stack) == 0, "GS ABI");
+_Static_assert(offsetof(struct acpi_cpu_local, user_kernel_stack) == 8, "GS ABI");
+_Static_assert(offsetof(struct acpi_cpu_local, user_rsp) == 16, "GS ABI");
+_Static_assert(offsetof(struct acpi_cpu_local, kernel_cr3) == 24, "GS ABI");
+_Static_assert(offsetof(struct acpi_cpu_local, user_fx_state) == 32, "GS ABI");
+_Static_assert(offsetof(struct acpi_cpu_local, tss) == 40, "GS ABI");
+_Static_assert(offsetof(struct acpi_cpu_local, self) == 48, "GS ABI");
+_Static_assert(offsetof(struct acpi_cpu_local, irq_pending) == 56, "GS ABI");
+
+static struct acpi_cpu_local cpu_locals[ACPI_MAX_CPUS];
+static uint64_t cpu_count = 1;
+static volatile uint64_t secondary_cpus_online;
+static uint8_t scheduler_lock;
+static volatile uint32_t smp_release;
+static volatile uint64_t scheduler_timer_ticks;
+static volatile uint64_t scheduler_lapic_virtual;
+static volatile uint32_t scheduler_x2apic;
+static uint64_t syscall_entry_address;
+static aml_context *kernel_context;
+
+extern void acpi_load_gdt(const void *gdtr, uint64_t code, uint64_t data);
+extern void acpi_load_cpu_tables(const void *gdt, const void *idt,
+                                 uint64_t tss_selector, void *local);
+extern void acpi_enable_cpu_features(void);
+extern int32_t aml_SSTP(aml_context *, uint64_t *);
+
+static _Noreturn void acpi_secondary_cpu(struct limine_mp_info *cpu);
+
+static struct acpi_cpu_local *current_cpu(void)
+{
+    struct acpi_cpu_local *local;
+    __asm__ volatile("movq %%gs:48, %0" : "=r"(local));
+    return local;
+}
+
+static void scheduler_acquire(void)
+{
+    while (__atomic_test_and_set(&scheduler_lock, __ATOMIC_ACQUIRE))
+        __asm__ volatile("pause" ::: "memory");
+
+    // Other CPUs can recycle kernel mappings while this CPU is unlocked.
+    // Task stacks and native task arguments remain mapped while in use.
+    uint64_t root;
+    __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=&r"(root) : : "memory");
+}
+
+static void scheduler_release(void)
+{
+    __atomic_clear(&scheduler_lock, __ATOMIC_RELEASE);
+}
+
+uint64_t acpi_scheduler_unlock(void)
+{
+    scheduler_release();
+    return 0;
+}
+
+uint64_t acpi_scheduler_lock(void)
+{
+    scheduler_acquire();
+    return 0;
+}
+
+uint64_t acpi_schedule_step(void)
+{
+    uint64_t result = 0;
+    scheduler_acquire();
+    if (kernel_context)
+        (void)aml_SSTP(kernel_context, &result);
+    scheduler_release();
+    return result;
+}
+
+uint64_t acpi_online_cpu_count(void)
+{
+    return 1 + __atomic_load_n(&secondary_cpus_online, __ATOMIC_ACQUIRE);
+}
+
+uint64_t acpi_current_cpu_id(void)
+{
+    struct acpi_cpu_local *local = current_cpu();
+    return local ? local->index : 0;
+}
+
+uint64_t acpi_last_fault_vector(void)
+{
+    struct acpi_cpu_local *local = current_cpu();
+    return local ? local->last_fault_vector : 0;
+}
+
+uint64_t acpi_last_fault_rip(void)
+{
+    struct acpi_cpu_local *local = current_cpu();
+    return local ? local->last_fault_rip : 0;
+}
+
+static void set_msr(uint32_t index, uint64_t value)
+{
+    __asm__ volatile("wrmsr" : : "a"((uint32_t)value),
+                     "d"((uint32_t)(value >> 32)), "c"(index) : "memory");
+}
+
+static uint64_t read_msr(uint32_t index)
+{
+    uint32_t low, high;
+    __asm__ volatile("rdmsr" : "=a"(low), "=d"(high) : "c"(index) : "memory");
+    return low | ((uint64_t)high << 32);
+}
+
+static void install_cpu_gs(struct acpi_cpu_local *local)
+{
+    set_msr(0xC0000101, (uintptr_t)local); // IA32_GS_BASE
+    set_msr(0xC0000102, 0);                // IA32_KERNEL_GS_BASE: user GS
+}
+
+static void make_tss_descriptor(struct acpi_cpu_local *local)
+{
+    uint64_t base = (uintptr_t)local->private_tss;
+    uint64_t limit = ACPI_TSS_BYTES - 1;
+    local->gdt[5] = (limit & 0xFFFF) | ((base & 0xFFFFFF) << 16) |
+                    (UINT64_C(0x89) << 40) | ((limit & 0xF0000) << 32) |
+                    ((base & UINT64_C(0xFF000000)) << 32);
+    local->gdt[6] = base >> 32;
+    *(uint16_t *)(local->private_tss + 102) = ACPI_TSS_BYTES;
+    *(uint16_t *)local->gdtr = sizeof(local->gdt) - 1;
+    *(uint64_t *)(local->gdtr + 2) = (uintptr_t)local->gdt;
+    *(uint16_t *)local->idtr = ACPI_IDT_BYTES - 1;
+    *(uint64_t *)(local->idtr + 2) = (uintptr_t)local->idt;
+}
+
+static void write_local_apic(uint32_t offset, uint32_t value)
+{
+    if (scheduler_x2apic) {
+        set_msr(0x800 + (offset >> 4), value);
+    } else {
+        volatile uint32_t *reg = (volatile uint32_t *)(scheduler_lapic_virtual + offset);
+        *reg = value;
+    }
+}
+
+static void configure_local_apic_timer(void)
+{
+    uint64_t apic_base = read_msr(0x1B);
+    apic_base |= UINT64_C(1) << 11;
+    if (scheduler_x2apic)
+        apic_base |= UINT64_C(1) << 10;
+    set_msr(0x1B, apic_base);
+    write_local_apic(0x80, 0);
+    write_local_apic(0x350, 0x10000);
+    write_local_apic(0x360, 0x10000);
+    write_local_apic(0x370, 0x10000 | 0xFE);
+    write_local_apic(0x3E0, 3); // divide by 16
+    write_local_apic(0x320, 0x20000 | 0x21); // periodic, scheduler tick
+    write_local_apic(0xF0, 0x100 | 0xFF); // enable local APIC
+    write_local_apic(0x380, (uint32_t)scheduler_timer_ticks);
+}
+
+static void configure_syscall_msrs(void)
+{
+    set_msr(0xC0000081, (UINT64_C(0x10) << 48) | (UINT64_C(0x08) << 32));
+    set_msr(0xC0000082, syscall_entry_address);
+    set_msr(0xC0000084, UINT32_MAX);
+    set_msr(0xC0000080, read_msr(0xC0000080) | 1);
+}
+
+static _Noreturn void acpi_secondary_cpu(struct limine_mp_info *cpu)
+{
+    __asm__ volatile("cli" ::: "memory");
+    struct acpi_cpu_local *local = NULL;
+    for (uint64_t i = 0; i < cpu_count; ++i)
+        if (cpu_locals[i].info == cpu) { local = &cpu_locals[i]; break; }
+    if (!local)
+        for (;;) __asm__ volatile("cli; hlt" ::: "memory");
+
+    acpi_load_cpu_tables(local->gdtr, local->idtr, 0x28, local);
+    acpi_enable_cpu_features();
+    configure_syscall_msrs();
+    __atomic_add_fetch(&secondary_cpus_online, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&smp_release, __ATOMIC_ACQUIRE))
+        __asm__ volatile("pause" ::: "memory");
+
+    configure_local_apic_timer();
+    for (;;)
+        (void)acpi_schedule_step();
+}
+
+uint64_t acpi_smp_init(uint64_t gdt_address, uint64_t idt_address,
+                       uint64_t bsp_tss_address, uint64_t syscall_entry)
+{
+    syscall_entry_address = syscall_entry;
+    const struct limine_mp_response *mp = mp_request.response;
+    uint64_t reported = mp && mp->cpus ? mp->cpu_count : 1;
+    cpu_count = reported < ACPI_MAX_CPUS ? reported : ACPI_MAX_CPUS;
+    if (!cpu_count) cpu_count = 1;
+
+    uint64_t bsp_id = mp ? mp->bsp_lapic_id : 0;
+    struct acpi_cpu_local *bsp = &cpu_locals[0];
+    bsp->self = bsp;
+    bsp->index = 0;
+    bsp->lapic_id = (uint32_t)bsp_id;
+    bsp->tss = bsp_tss_address;
+    uint64_t slot = 1;
+    for (uint64_t i = 0; i < reported && slot < cpu_count; ++i) {
+        struct limine_mp_info *info = mp && mp->cpus ? mp->cpus[i] : NULL;
+        if (!info || info->lapic_id == bsp_id) continue;
+        struct acpi_cpu_local *local = &cpu_locals[slot];
+        local->self = local;
+        local->index = (uint32_t)slot;
+        local->info = info;
+        local->lapic_id = info->lapic_id;
+        const uint64_t *source_gdt = (const uint64_t *)(uintptr_t)gdt_address;
+        for (unsigned j = 0; j < 5; ++j) local->gdt[j] = source_gdt[j];
+        const uint8_t *source_idt = (const uint8_t *)(uintptr_t)idt_address;
+        for (unsigned j = 0; j < ACPI_IDT_BYTES; ++j) local->idt[j] = source_idt[j];
+        local->tss = (uintptr_t)local->private_tss;
+        make_tss_descriptor(local);
+        ++slot;
+    }
+    cpu_count = slot;
+    install_cpu_gs(bsp);
+    for (uint64_t i = 1; i < cpu_count; ++i) {
+        struct acpi_cpu_local *local = &cpu_locals[i];
+        if (local->info)
+            __atomic_store_n(&local->info->goto_address, acpi_secondary_cpu,
+                             __ATOMIC_RELEASE);
+    }
+    for (volatile uint64_t spin = 0;
+         spin < UINT64_C(100000000) && acpi_online_cpu_count() < cpu_count;
+         ++spin)
+        __asm__ volatile("pause" ::: "memory");
+    return acpi_online_cpu_count();
+}
+
+uint64_t acpi_smp_timer(uint64_t ticks, uint64_t lapic_virtual, uint64_t x2apic)
+{
+    scheduler_timer_ticks = ticks;
+    scheduler_lapic_virtual = lapic_virtual;
+    scheduler_x2apic = (uint32_t)x2apic;
+    return 0;
+}
+
+uint64_t acpi_smp_release(void)
+{
+    __atomic_store_n(&smp_release, 1, __ATOMIC_RELEASE);
+    return acpi_online_cpu_count();
+}
 
 struct framebuffer {
     void *address;
@@ -374,7 +675,6 @@ uint64_t acpi_read_memory(uint64_t address, uint64_t width)
 }
 
 extern const unsigned char acpi_vector_entries[];
-volatile uint8_t acpi_irq_pending;
 
 static const struct module_file *boot_module(void)
 {
@@ -442,6 +742,34 @@ extern void acpi_syscall_entry(void);
 
 extern void acpi_task_exit(void);
 extern void acpi_task_test(uint64_t *);
+extern void acpi_smp_test_worker(uint64_t *);
+
+/* Test-only native tasks exercise the same SMP preemption path as kernel work. */
+void acpi_smp_test_worker(uint64_t *state)
+{
+    struct acpi_cpu_local *local = current_cpu();
+    uint64_t cpu = local ? local->index : 0;
+    uint64_t bit = UINT64_C(1) << cpu;
+    __atomic_fetch_or(&state[0], bit, __ATOMIC_RELEASE);
+    for (uint64_t spin = 0; spin < UINT64_C(10000000); ++spin) {
+        if (__atomic_load_n(&state[0], __ATOMIC_ACQUIRE) & ~bit)
+            break;
+        __asm__ volatile("pause" ::: "memory");
+    }
+
+    for (uint64_t sample = 0; sample < UINT64_C(300000); ++sample) {
+        uint64_t flags;
+        __asm__ volatile("pushfq; popq %0; cli" : "=r"(flags) : : "memory");
+        // Only another CPU can advance the counter within this sample.
+        uint64_t before = __atomic_load_n(&state[3], __ATOMIC_RELAXED);
+        uint64_t previous = __atomic_fetch_add(&state[3], 1, __ATOMIC_RELAXED);
+        if (before != previous)
+            __atomic_fetch_or(&state[1], UINT64_C(1) << current_cpu()->index,
+                              __ATOMIC_RELAXED);
+        __asm__ volatile("pushq %0; popfq" : : "r"(flags) : "memory", "cc");
+    }
+    __atomic_add_fetch(&state[2], 1, __ATOMIC_RELEASE);
+}
 
 uint64_t acpi_port_io(uint64_t address, uint64_t width, uint64_t value)
 {
@@ -518,17 +846,25 @@ static uint64_t read_tsc(void)
 /* Wait for an interrupt when no task is currently running. */
 uint64_t acpi_wait_irq(uint64_t cycles)
 {
-    acpi_irq_pending = 0;
+    struct acpi_cpu_local *local = current_cpu();
+    if (!local) return 0;
+    local->irq_pending = 0;
     if (cycles) {
         uint64_t start = read_tsc();
         __asm__ volatile("sti" : : : "memory");
-        while (!acpi_irq_pending && read_tsc() - start < cycles)
+        while (!local->irq_pending && read_tsc() - start < cycles)
             __asm__ volatile("pause");
         __asm__ volatile("cli" : : : "memory");
     } else {
         __asm__ volatile("sti; hlt; cli" : : : "memory");
     }
-    return acpi_irq_pending;
+    return local->irq_pending;
+}
+
+uint64_t acpi_smp_initialize(uint64_t gdt, uint64_t idt, uint64_t tss,
+                             uint64_t syscall_entry)
+{
+    return acpi_smp_init(gdt, idt, tss, syscall_entry);
 }
 
 static int32_t region_access(void *userdata, const char *path, uint8_t space,
@@ -603,6 +939,7 @@ _Noreturn void _start(void)
         aml_context *ctx = aml_context_create_with_host(&host);
         uint64_t result;
         if (ctx) {
+            kernel_context = ctx;
             const struct module_file *module = boot_module();
             /* Keep this order in sync with the ASL KERN boot handoff. */
             const uint64_t boot_addresses[] = {
@@ -611,6 +948,7 @@ _Noreturn void _start(void)
                 (uintptr_t)acpi_syscall_entry,
                 (uintptr_t)acpi_task_exit,
                 (uintptr_t)acpi_task_test,
+                (uintptr_t)acpi_smp_test_worker,
             };
             aml_KERN(ctx, &result, rsdp_physical, (uintptr_t)acpi_initramfs_start,
                      (uintptr_t)acpi_initramfs_end - (uintptr_t)acpi_initramfs_start,

@@ -21,6 +21,7 @@ IASL ?= iasl
 LIMINE_DIR ?= /usr/share/limine
 QEMU ?= qemu-system-x86_64
 QEMU_CPU ?= host
+SMP_CPUS ?= 4
 XORRISO ?= xorriso
 PYTHON ?= python3
 OVMF ?= /usr/share/edk2/x64/OVMF_CODE.4m.fd
@@ -30,10 +31,11 @@ guest_bins = $(foreach app,$(1),bin/$(notdir $(app))=$(app))
 APP_ARCH ?= native
 include ports/Makefile
 
-QEMU_FLAGS := -m 8G -boot d -cdrom $(BUILD)/acpi-kernel.iso -serial stdio -monitor none -no-reboot -enable-kvm $(if $(QEMU_CPU),-cpu $(QEMU_CPU))
-CHECK_QEMU_FLAGS := $(QEMU_FLAGS) -smp 4
-BOOT_CHECK = awk '/ASL GDT loaded/ && stage == 0 { stage = 1 } \
+QEMU_FLAGS := -m 8G -boot d -cdrom $(BUILD)/acpi-kernel.iso -serial stdio -monitor none -no-reboot -enable-kvm $(if $(QEMU_CPU),-cpu $(QEMU_CPU)) -smp $(SMP_CPUS)
+CHECK_QEMU_FLAGS := $(QEMU_FLAGS)
+BOOT_CHECK = awk -v cpus="$(SMP_CPUS)" '/ASL GDT loaded/ && stage == 0 { stage = 1 } \
 	/ASL IDT loaded with 256 gates/ && stage == 1 { stage = 2 } \
+	/^SMP CPUs online=0x/ && stage == 2 { sub(/\r$$/, ""); online = ($$3 == sprintf("online=0x%016x", cpus)) } \
 	/ASL breakpoint handler/ && stage == 2 { stage = 3 } \
 	stage == 3 && /^[A-Z0-9]+=0x[0-9a-f]+/ { split($$0, fields, "="); regs[fields[1]] = 1 } \
 	/ASL resumed after int3/ && stage == 3 { stage = 4; print } \
@@ -52,6 +54,7 @@ BOOT_CHECK = awk '/ASL GDT loaded/ && stage == 0 { stage = 1 } \
 	stage == 4 && /^LAPIC periodic timer delivered 3 interrupts\r?$$/ { timer = 1 } \
 	stage == 4 && timer && /^LAPIC tick counter reached 100\r?$$/ { ticks = 1 } \
 	stage == 4 && timer && /^PS\/2 keyboard IRQ ready\r?$$/ { keyboard = 1 } \
+	stage == 4 && /^SMP tasks ran simultaneously on multiple CPUs\r?$$/ { parallel = 1 } \
 	stage == 4 && ticks && keyboard && /^What is your name\?\r?$$/ { prompt = 1 } \
 	stage == 4 && prompt && /^Hello, Ada!\r?$$/ { hello = 1 } \
 	stage == 4 && hello && /^hello\.elf exited status=0x0000000000000000\r?$$/ { user_exit = 1 } \
@@ -60,7 +63,7 @@ BOOT_CHECK = awk '/ASL GDT loaded/ && stage == 0 { stage = 1 } \
 	stage == 4 && bash_source && /^bash\.elf exited status=0x0000000000000000\r?$$/ { user_exit = 1 } \
 	BEGIN { n = split("R15 R14 R13 R12 R11 R10 R9 R8 RDI RSI RBP RBX RDX RCX RAX RIP CS RFLAGS RSP SS", expected, " ") } \
 	END { for (i = 1; i <= n; ++i) if (!(expected[i] in regs)) exit 1; \
-	      for (i = 0; i < 4; ++i) if (!(sprintf("ID=0x%016x", i) in lapics)) exit 1; \
+	      if (length(lapics) != cpus || !online || (cpus > 1 && !parallel)) exit 1; \
 	      n = split("RSDP FACP FACS DSDT APIC HPET WAET", expected, " "); \
 	      for (i = 1; i <= n; ++i) if (!(expected[i] in tables)) exit 1; \
 	      if (!(root in tables)) exit 1; \
@@ -183,7 +186,7 @@ $(eval $(call jinx_artifact,$(XORG_LS),busybox-ls,usr/bin/busybox-ls))
 
 XORG_DISK := $(XORG_DESKTOP_BUILD)/acpi-xorg.img
 XORG_APPS := $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/Xvfb \
-	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(XORG_BUILD)/xsetroot $(XORG_BUILD)/date $(ST_BUILD)/st \
+	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(XORG_BUILD)/xsetroot $(XORG_BUILD)/date $(XORG_BUILD)/sleep $(ST_BUILD)/st \
 	$(XORG_BUILD)/nsxiv $(XORG_BUILD)/nano $(XORG_BUILD)/vim \
 	$(BASH_BUILD)/bash.elf $(BASH_BUILD)/fastfetch
 XORG_DATA := $(XORG_BUILD)/xorg-default.xkm config/dwm-fonts.conf $(wildcard initramfs/*)
@@ -193,6 +196,7 @@ $(eval $(call jinx_artifact,$(XORG_BUILD)/nano,nano,usr/bin/nano))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/vim,vim,usr/bin/vim))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/xsetroot,xsetroot,usr/bin/xsetroot))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/date,date,usr/bin/date))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/sleep,sleep,usr/bin/sleep))
 XORG_TERMINFO := $(XORG_BUILD)/terminfo/s/st-256color
 $(eval $(call jinx_artifact,$(XORG_TERMINFO),ncurses,usr/share/terminfo/s/st-256color))
 XORG_FONT := $(XORG_DESKTOP_ASSETS)/dwm-font.ttf
@@ -224,8 +228,9 @@ $(XORG_DISK): scripts/pack-xorg-disk.sh $(XORG_DESKTOP_BUILD)/kernel.elf $(LIMIN
 
 xorg-desktop-image: $(XORG_DISK)
 
+run-xorg-uefi: private SMP_CPUS = 6
 run-xorg-uefi: xorg-desktop-image
-	flock -n "$(XORG_DISK).lock" $(QEMU) -m 8G -accel $(XORG_ACCEL) -cpu $(XORG_CPU) -serial stdio -monitor none -no-reboot \
+	flock -n "$(XORG_DISK).lock" $(QEMU) -m 8G -accel $(XORG_ACCEL) -cpu $(XORG_CPU) -smp $(SMP_CPUS) -serial stdio -monitor none -no-reboot \
 		-drive if=pflash,format=raw,readonly=on,file="$(OVMF)" \
 		-drive if=none,id=system,format=raw,file="$(XORG_DISK)" \
 		-device virtio-blk-pci,drive=system,disable-modern=on,queue-size=16

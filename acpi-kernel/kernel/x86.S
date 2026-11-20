@@ -16,13 +16,20 @@ acpi_load_gdt:
     movw %ax, %fs
     movw %ax, %gs
 
+    call acpi_enable_cpu_features
+    retq
+.size acpi_load_gdt, .-acpi_load_gdt
+
+.global acpi_enable_cpu_features
+.type acpi_enable_cpu_features, @function
+acpi_enable_cpu_features:
     /* Enable x87 and SSE, then discover any XSAVE-managed vector state. */
     movq %cr0, %rax
     andq $~0x0c, %rax
     orq $0x22, %rax
     movq %rax, %cr0
     movq %cr4, %rax
-    andq $~0x50000, %rax
+    andq $~0x50080, %rax
     orq $0x600, %rax
     movq %rax, %cr4
 
@@ -56,7 +63,39 @@ acpi_load_gdt:
 .Lvector_ready:
     popq %rbx
     retq
-.size acpi_load_gdt, .-acpi_load_gdt
+.size acpi_enable_cpu_features, .-acpi_enable_cpu_features
+
+/* Install an AP's private GDT/TSS and IDT, then establish its GS-local base. */
+.global acpi_load_cpu_tables
+.type acpi_load_cpu_tables, @function
+acpi_load_cpu_tables:
+    movq %rcx, %r8
+    lgdt (%rdi)
+    pushq $0x08
+    leaq .Lcpu_reload_segments(%rip), %rax
+    pushq %rax
+    lretq
+.Lcpu_reload_segments:
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
+    xorw %ax, %ax
+    movw %ax, %fs
+    movw %ax, %gs
+    lidt (%rsi)
+    ltr %dx
+    movl $0xC0000101, %ecx
+    movq %r8, %rax
+    movq %rax, %rdx
+    shrq $32, %rdx
+    wrmsr
+    movl $0xC0000102, %ecx
+    xorl %eax, %eax
+    xorl %edx, %edx
+    wrmsr
+    retq
+.size acpi_load_cpu_tables, .-acpi_load_cpu_tables
 
 /* The controlled breakpoint passes its AML context in RDI. */
 .global acpi_trigger_breakpoint
@@ -123,19 +162,21 @@ acpi_breakpoint_entry:
     jmp .Lunexpected_breakpoint
 .size acpi_breakpoint_entry, .-acpi_breakpoint_entry
 
-/* The scheduler stack is nonzero only while a task owns the CPU. */
+/* Cpu-local GS offsets shared with struct acpi_cpu_local in boot.c. */
+.equ CPU_SCHEDULER_STACK, 0
+.equ CPU_USER_KERNEL_STACK, 8
+.equ CPU_USER_RSP, 16
+.equ CPU_KERNEL_CR3, 24
+.equ CPU_USER_FX_STATE, 32
+.equ CPU_TSS, 40
+.equ CPU_SELF, 48
+.equ CPU_IRQ_PENDING, 56
+.equ CPU_LAST_FAULT, 64
+.equ CPU_FAULT_ERROR, 72
+.equ CPU_FAULT_RIP, 80
+
 .bss
 .balign 8
-.Lscheduler_stack:
-    .quad 0
-.Luser_kernel_stack:
-    .quad 0
-.Luser_rsp:
-    .quad 0
-.Lkernel_cr3:
-    .quad 0
-.Luser_fx_state:
-    .quad 0
 .Lxsave_mask:
     .long 0
 
@@ -153,14 +194,19 @@ acpi_run_task:
     pushq %r14
     pushq %r15
     pushq %rsi
-    movq %rsp, .Lscheduler_stack(%rip)
-    movq %rdx, .Luser_kernel_stack(%rip)
+    movq %rsp, %gs:CPU_SCHEDULER_STACK
+    movq %rdx, %gs:CPU_USER_KERNEL_STACK
+    testq %rdx, %rdx
+    jz .Ltask_tss_ready
+    movq %gs:CPU_TSS, %rax
+    movq %rdx, 4(%rax)
+.Ltask_tss_ready:
     testq %rcx, %rcx
     jz .Lrestore_task
     movq %cr3, %rax
-    movq %rax, .Lkernel_cr3(%rip)
+    movq %rax, %gs:CPU_KERNEL_CR3
 
-    movq %r8, .Luser_fx_state(%rip)
+    movq %r8, %gs:CPU_USER_FX_STATE
     movl .Lxsave_mask(%rip), %eax
     testl %eax, %eax
     jz .Lrestore_legacy_vectors
@@ -171,7 +217,6 @@ acpi_run_task:
     fxrstor64 (%r8)
 .Luser_vectors_restored:
     xorl %eax, %eax
-    movw %ax, %gs
     movq %rcx, %cr3
 .Lrestore_task:
     movq %rdi, %rsp
@@ -190,12 +235,65 @@ acpi_run_task:
     popq %rdx
     popq %rcx
     popq %rax
+    testb $3, 8(%rsp)
+    jz .Ltask_kernel_gs
+    swapgs
+.Ltask_kernel_gs:
     iretq
 .size acpi_run_task, .-acpi_run_task
 
 .Ldevice_interrupt:
-    cmpq $0, .Lscheduler_stack(%rip)
-    je .Lreturn_interrupt
+    /* The stub pushed its vector so these common bytes fit every 16-byte IDT slot. */
+    testb $3, 16(%rsp)
+    jz .Ldevice_kernel_gs
+    swapgs
+.Ldevice_kernel_gs:
+    pushq %rax
+    pushq %rcx
+    pushq %rdx
+    pushq %rbx
+    pushq %rbp
+    pushq %rsi
+    pushq %rdi
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+    movzbl 120(%rsp), %eax
+    movb %al, %gs:CPU_IRQ_PENDING
+    cmpq $0, %gs:CPU_SCHEDULER_STACK
+    je .Ldevice_idle_return
+    /* Long mode saves RSP and SS even for a same-privilege interrupt.
+       Move the overlapping frame down one slot, starting at RIP. */
+    leaq 128(%rsp), %rsi
+    leaq 120(%rsp), %rdi
+    movl $5, %ecx
+    cld
+    rep movsq
+    movq %rsp, %rdx
+    jmp .Lresume_scheduler
+.Ldevice_idle_return:
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
+    popq %rdi
+    popq %rsi
+    popq %rbp
+    popq %rbx
+    popq %rdx
+    popq %rcx
+    popq %rax
+    addq $8, %rsp
+    iretq
 .Lsave_task:
     pushq %rax
     pushq %rcx
@@ -213,17 +311,17 @@ acpi_run_task:
     pushq %r14
     pushq %r15
     movq %rsp, %rdx
-    cmpb $0x82, acpi_irq_pending(%rip)
+    cmpb $0x82, %gs:CPU_IRQ_PENDING
     jne .Lresume_scheduler
     movq %cr2, %rax
     pushq %rax
 .Lresume_scheduler:
-    movq .Lkernel_cr3(%rip), %rax
+    movq %gs:CPU_KERNEL_CR3, %rax
     testq %rax, %rax
     jz .Lrestore_scheduler
     movq %rax, %cr3
-    movq $0, .Lkernel_cr3(%rip)
-    movq .Luser_fx_state(%rip), %rcx
+    movq $0, %gs:CPU_KERNEL_CR3
+    movq %gs:CPU_USER_FX_STATE, %rcx
     movl .Lxsave_mask(%rip), %eax
     testl %eax, %eax
     jz .Lsave_legacy_vectors
@@ -238,11 +336,10 @@ acpi_run_task:
 .Luser_vectors_saved:
     xorl %eax, %eax
     movw %ax, %fs
-    movw %ax, %gs
 .Lrestore_scheduler:
-    movq .Lscheduler_stack(%rip), %rsp
-    movq $0, .Lscheduler_stack(%rip)
-    movq $0, .Luser_kernel_stack(%rip)
+    movq %gs:CPU_SCHEDULER_STACK, %rsp
+    movq $0, %gs:CPU_SCHEDULER_STACK
+    movq $0, %gs:CPU_USER_KERNEL_STACK
     popq %rsi
     movq %rdx, (%rsi)
     popq %r15
@@ -251,7 +348,7 @@ acpi_run_task:
     popq %r12
     popq %rbx
     popq %rbp
-    movzbl acpi_irq_pending(%rip), %eax
+    movzbl %gs:CPU_IRQ_PENDING, %eax
     cld
     retq
 .Lreturn_interrupt:
@@ -261,18 +358,19 @@ acpi_run_task:
 .global acpi_syscall_entry
 .type acpi_syscall_entry, @function
 acpi_syscall_entry:
-    cmpq $0, .Luser_kernel_stack(%rip)
+    swapgs
+    cmpq $0, %gs:CPU_USER_KERNEL_STACK
     je .Lunhandled_vector
-    movq %rsp, .Luser_rsp(%rip)
-    movq .Luser_kernel_stack(%rip), %rsp
+    movq %rsp, %gs:CPU_USER_RSP
+    movq %gs:CPU_USER_KERNEL_STACK, %rsp
     pushq $0x1b
-    pushq .Luser_rsp(%rip)
+    pushq %gs:CPU_USER_RSP
     pushq %r11
     andq $0x240dd5, (%rsp)
     orq $0x202, (%rsp)
     pushq $0x23
     pushq %rcx
-    movb $0x80, acpi_irq_pending(%rip)
+    movb $0x80, %gs:CPU_IRQ_PENDING
     jmp .Lsave_task
 .size acpi_syscall_entry, .-acpi_syscall_entry
 
@@ -280,37 +378,57 @@ acpi_syscall_entry:
     /* Only ring-3 non-present data reads and writes can grow the stack. */
     testb $3, 16(%rsp)
     jz .Lkernel_page_fault
-    cmpq $0, .Lscheduler_stack(%rip)
+    swapgs
+    cmpq $0, %gs:CPU_SCHEDULER_STACK
     je .Lkernel_page_fault
     cmpq $4, (%rsp)
     je .Lstack_fault
     cmpq $6, (%rsp)
-    jne .Lfault_with_error
+    jne .Luser_page_fault
 .Lstack_fault:
     addq $8, %rsp
-    movb $0x82, acpi_irq_pending(%rip)
+    movb $0x82, %gs:CPU_IRQ_PENDING
     jmp .Lsave_task
+.Luser_page_fault:
+    movl $14, %eax
+    jmp .Lfault_error_kernel_gs
 .Lkernel_page_fault:
     movl $14, %eax
     jmp .Lunhandled_vector
 
 .Lfault_with_error:
     testb $3, 16(%rsp)
+    jz .Lfault_error_kernel_gs
+    swapgs
+.Lfault_error_kernel_gs:
+    movq %rax, %gs:CPU_LAST_FAULT
+    movq (%rsp), %rax
+    movq %rax, %gs:CPU_FAULT_ERROR
+    movq 8(%rsp), %rax
+    movq %rax, %gs:CPU_FAULT_RIP
+    testb $3, 16(%rsp)
     jmp .Lcheck_fault
 .Lfault_without_error:
     testb $3, 8(%rsp)
+    jz .Lfault_noerror_kernel_gs
+    swapgs
+.Lfault_noerror_kernel_gs:
+    movq %rax, %gs:CPU_LAST_FAULT
+    movq $0, %gs:CPU_FAULT_ERROR
+    movq (%rsp), %rax
+    movq %rax, %gs:CPU_FAULT_RIP
 .Lcheck_fault:
     jz .Lunhandled_vector
-    cmpq $0, .Lscheduler_stack(%rip)
+    cmpq $0, %gs:CPU_SCHEDULER_STACK
     je .Lunhandled_vector
-    movb $0x81, acpi_irq_pending(%rip)
+    movb $0x81, %gs:CPU_IRQ_PENDING
     xorl %edx, %edx
     jmp .Lresume_scheduler
 
 .Lexit_interrupt:
-    cmpq $0, .Lscheduler_stack(%rip)
+    cmpq $0, %gs:CPU_SCHEDULER_STACK
     je .Lunhandled_vector
-    movb $0, acpi_irq_pending(%rip)
+    movb $0, %gs:CPU_IRQ_PENDING
     xorl %edx, %edx
     jmp .Lresume_scheduler
 
@@ -352,7 +470,7 @@ acpi_vector_entries:
         jmp acpi_breakpoint_entry
     .elseif vector == 0x20 || vector == 0x21 || vector == 0x23 || vector == 0x24
         /* Interrupt gates clear IF. Leave the EOI to the ASL dispatcher. */
-        movb $vector, acpi_irq_pending(%rip)
+        pushq $vector
         jmp .Ldevice_interrupt
     .elseif vector == 0x22
         jmp .Lexit_interrupt

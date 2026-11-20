@@ -14,7 +14,7 @@ $(BUILD)/linked.ll: $(BUILD)/kernel.aml ../Cargo.toml ../Cargo.lock $(wildcard .
 	AMLAOT_CLANG="$(CLANG)" cargo run --locked --manifest-path ../Cargo.toml -- --emit-llvm --freestanding $< > $@
 
 $(BUILD)/kernel.bc: $(BUILD)/linked.ll kernel/build.mk
-	$(OPT) -force-attribute=noredzone -internalize-public-api-list=aml_context_create_with_host,aml_KERN,aml_interrupt_BRKP \
+	$(OPT) -force-attribute=noredzone -internalize-public-api-list=aml_context_create_with_host,aml_KERN,aml_SSTP,aml_interrupt_BRKP \
 		-passes='forceattrs,internalize,always-inline,default<O2>,globaldce,verify' $< -o $@
 
 $(BUILD)/aml.o: $(BUILD)/kernel.bc

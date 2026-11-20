@@ -8,6 +8,16 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     External (XPRW, MethodObj)
     External (XFBL, MethodObj)
     External (XAPC, MethodObj)
+    External (XCPU, MethodObj)
+    External (XIDX, MethodObj)
+    External (XFLT, MethodObj)
+    External (XFRP, MethodObj)
+    External (XSMP, MethodObj)
+    External (XSCT, MethodObj)
+    External (XSGO, MethodObj)
+    External (XSTP, MethodObj)
+    External (XSUL, MethodObj)
+    External (XSLK, MethodObj)
     External (XMSR, MethodObj)
     External (XWAI, MethodObj)
     External (XRUN, MethodObj)
@@ -82,6 +92,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (SYEA, Zero)
     Name (TEXA, Zero)
     Name (TSTA, Zero)
+    Name (SMTA, Zero)
 
     Name (FBAD, Zero)
     Name (FBPT, Zero)
@@ -1186,14 +1197,20 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     {
         If (Arg0 == LAVC)
         {
-            Increment (TICK)
-            SWAK ()
+            If (XIDX () == Zero)
+            {
+                Increment (TICK)
+                SWAK ()
+            }
         }
         Local0 = Zero
         If (Arg0 == KBVC || Arg0 == MSVC) { Local0 = KIRQ () }
         If (Arg0) { LREG (0xB0, Zero) }
         If (Local0) { KWAK () }
-        If (Arg0 == LAVC || Arg0 == KBVC || Arg0 == MSVC) { PWAK () }
+        If ((Arg0 == KBVC || Arg0 == MSVC) || (Arg0 == LAVC && XIDX () == Zero))
+        {
+            PWAK ()
+        }
     }
 
     Method (TMRS, 3, NotSerialized)
@@ -1222,6 +1239,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         LREG (0xB0, Zero)
         LREG (0x380, Zero)
         If (!Local2) { Return (Zero) }
+        XSCT (Local2, LAVA, X2EN)
 
         PNUM ("PIT routed through IOAPIC GSI=0x", Local0)
         PUTS ("")
@@ -1822,6 +1840,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Name (SQHD, Zero)
     Name (SQTL, Zero)
+    Name (SACT, Zero) // Tasks executing outside the scheduler lock
     Name (TSIZ, 0x6000)
     // Task record: next pointer, saved frame pointer, entry argument.
     Name (TSFR, 8)
@@ -5269,7 +5288,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local0 = SQHD
         If (!Local0)
         {
-            TACK (XWAI (Zero))
+            XSUL ()
+            Local1 = XWAI (Zero)
+            XSLK ()
+            TACK (Local1)
             Return (Zero)
         }
 
@@ -5278,7 +5300,6 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local2 = Zero
         Local4 = XVWD (Local0 + TSCR, Ones)
         If (Local4) { Local2 = Local0 + TSIZ }
-        XVWD (XADR (TSSA) + 8, Local2)
         While (One)
         {
             Local3 = XVWD (Local0 + TSFR, Ones)
@@ -5302,8 +5323,18 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 UKRN (Local4)
                 XMSR (0xC0000100, XVWD (Local0 + TSFS, Ones))
             }
+            Increment (SACT)
+            XSUL ()
             Local1 = XRUN (Local3, Local0 + TSFR, Local2, Local4, Local0 + TSFX)
             If (Local4) { XMSR (0xC0000100, Zero) }
+            XSLK ()
+            Decrement (SACT)
+            If (Local1 == UFEV)
+            {
+                PNUM ("Userspace exception vector=0x", XFLT ())
+                PNUM (" RIP=0x", XFRP ())
+                PUTS ("")
+            }
             If (Local1 == PIVC || Local1 == KBVC || Local1 == MSVC)
             {
                 TACK (Local1)
@@ -5371,7 +5402,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 If (!SQHD) { Return (Zero) }
                 If (XVWD (SQHD + TSAR, Ones) != Local1) { Return (Zero) }
-                If (SSTP () != LAVC) { Return (Zero) }
+                If (XSTP () != LAVC) { Return (Zero) }
                 If (XVWD (Local1, Ones) == One) { Increment (Local5) }
                 Local1 += 8
             }
@@ -5391,7 +5422,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Local4 = SQHD
             Local1 = XVWD (Local4 + TSAR, Ones)
-            If (!SSTP ())
+            If (!XSTP ())
             {
                 If (XVWD (Local1, Ones) != 3 ||
                     (VPRB (Local3, Local4, NOEX) & PRES)) { Return (Zero) }
@@ -5399,6 +5430,36 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             }
         }
         Return (Local5 == 32 && !SQTL && VUNM (Local0, PGSZ))
+    }
+
+    // Keep the test state rooted even when a worker outlives the timeout.
+    Name (SMTS, Buffer (39) {})
+    // Require multiple CPUs to observe another CPU's heartbeat during a
+    // local interrupt-disabled sample window.
+    Method (SMPT, 0, NotSerialized)
+    {
+        XSLK ()
+        Local0 = XCPU ()
+        If (Local0 < 2 || !SMTA) { XSUL () Return (Zero) }
+        If (Local0 > 4) { Local0 = 4 }
+        Local1 = (XADR (SMTS) + 7) & ~7
+        Local2 = Zero
+        While (Local2 < Local0)
+        {
+            If (!SSPN (SMTA, Local1)) { Break }
+            Increment (Local2)
+        }
+        Local4 = TICK + 200
+        While (XVWD (Local1 + 16, Ones) < Local2)
+        {
+            If (TICK >= Local4) { XSUL () Return (Zero) }
+            XSUL ()
+            XSTP ()
+            XSLK ()
+        }
+        Local3 = XVWD (Local1 + 8, Ones)
+        XSUL ()
+        Return (Local2 == Local0 && (Local3 & (Local3 - One)))
     }
 
     Name (SHBF, Buffer (80) {})
@@ -5712,11 +5773,19 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local0 = XADR (SHBF)
         Local1 = Zero
         Local2 = Zero
+        XSLK ()
         PUTS ("ASL shell. Type help.")
         PUTT ("asl> ")
+        XSUL ()
         While (One)
         {
-            While (KBHD == KBTL) { SSTP () }
+            XSLK ()
+            If (KBHD == KBTL)
+            {
+                XSUL ()
+                XSTP ()
+                Continue
+            }
             Local3 = XBYT (XADR (KBUF) + KBHD)
             KBHD = (KBHD + One) & 127
             If (Local3 == 0x0A)
@@ -5746,6 +5815,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                     PUTC (Local3)
                 }
             }
+            XSUL ()
         }
     }
 
@@ -5759,6 +5829,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         SYEA = XVWD (Arg5 + 16, Ones)
         TEXA = XVWD (Arg5 + 24, Ones)
         TSTA = XVWD (Arg5 + 32, Ones)
+        SMTA = XVWD (Arg5 + 40, Ones)
 
         IENA = Zero
         LINE = 0x80
@@ -5769,11 +5840,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         MODE = 0x0B
         FINI ()
         PUTS ("ASL kernel booted")
-
         SGDT ()
         PUTS ("ASL GDT loaded")
         SIDT ()
         PUTS ("ASL IDT loaded with 256 gates")
+        XSMP (XADR (GDTA), XADR (IDTA), XADR (TSSA) + 4, SYEA)
+        PNUM ("SMP CPUs online=0x", XCPU ())
+        PUTS ("")
         XBRK ()
         PUTS ("ASL resumed after int3")
         PMAP ()
@@ -5837,19 +5910,39 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                     KCAN = One
                 }
             }
+            XSGO ()
+            If (XCPU () > One)
+            {
+                Local3 = SMPT ()
+                XSLK ()
+                If (Local3) { PUTS ("SMP tasks ran simultaneously on multiple CPUs") }
+                Else { PUTS ("SMP parallel scheduler test failed") }
+                XSUL ()
+            }
+            XSLK ()
             If (!USPN (Local0, Local2)) { PUTS ("Userspace module load failed") }
-            While (SQHD || KRHD || SLHD || PLHD || SKWH) { SSTP () }
+            XSUL ()
+            While (One)
+            {
+                XSLK ()
+                Local1 = SACT || SQHD || KRHD || SLHD || PLHD || SKWH
+                XSUL ()
+                If (!Local1) { Break }
+                XSTP ()
+            }
+            XSLK ()
             If (KCAN)
             {
                 KCAN = Zero
                 KBHD = KBTL
                 KEND = KBTL
             }
+            XSUL ()
             If (KRDY)
             {
                 SHLL ()
             }
-            While (One) { SSTP () }
+            While (One) { XSTP () }
         }
         Return (Zero)
     }
