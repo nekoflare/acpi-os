@@ -36,7 +36,7 @@ cmake -S "$source" -B "$build/obj" -G Ninja \
     -DCMAKE_C_FLAGS="-DFF_ACPI_MLIBC $app_cpu_flags -fno-pie -idirafter \"$uapi\"" \
     -DCMAKE_TOOLCHAIN_FILE="$build/toolchain.cmake" -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_DISABLE_FIND_PACKAGE_PkgConfig=ON -DBUILD_FLASHFETCH=OFF -DSET_TWEAK=OFF \
-    -DMODULE_DISABLE_LOCALIP=ON -DDEFAULT_STRUCTURE=Title:Version:Kernel:CPU:Memory "$@"
+    -DMODULE_DISABLE_LOCALIP=ON -DDEFAULT_STRUCTURE=Title:Version:Kernel:Uptime:Shell:WM:CPU:Memory "$@"
 printf 'Compiling Fastfetch\n'
 cmake --build "$build/obj" --target fastfetch --parallel "$jobs"
 cp "$build/obj/fastfetch" "$build/fastfetch.elf"

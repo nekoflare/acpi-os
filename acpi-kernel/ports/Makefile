@@ -1,5 +1,5 @@
 # Jinx caches by package version. Give each set of local inputs its own
-# package repository and source tree, while sharing downloads and host tools.
+# package repository and source tree. Reuse binaries with matching package inputs.
 JINX := $(abspath ports/jinx)
 JINX_INPUTS := $(shell find recipes userspace -type f | LC_ALL=C sort) \
 	Jinxfile ports/jinx ports/Makefile ports/stage.sh config/xorg-default.xkb
@@ -8,6 +8,7 @@ JINX_ROOT := $(abspath ../target/acpi-os-jinx)
 JINX_BUILD := $(JINX_ROOT)/$(JINX_ID)/build
 JINX_SOURCE := $(JINX_ROOT)/$(JINX_ID)/source
 JINX_CONFIG := $(JINX_BUILD)/.jinx-parameters
+export ACPI_JINX_PACKAGE_CACHE := $(JINX_ROOT)/packages
 export JINX_CACHE_DIR := $(abspath .jinx-cache)
 export JINX_PARALLELISM := $(MLIBC_JOBS)
 
@@ -26,7 +27,7 @@ userspace: $(JINX_CONFIG)
 	cd "$(JINX_BUILD)" && flock "$(JINX_ROOT)/.lock" "$(JINX)" update -b '*'
 
 define jinx_artifact
-ifneq ($(JINX_ID),$(shell cat "$(1).jinx-id" 2>/dev/null))
+ifneq ($(JINX_ID),$(shell head -n 1 "$(1).jinx-id" 2>/dev/null))
 $(1): jinx-restage
 endif
 $(1): | $(JINX_CONFIG)

@@ -570,7 +570,8 @@ static int32_t region_access(void *userdata, const char *path, uint8_t space,
         !((address >= 0x3F8 && address <= 0x3FF) ||
           address == 0x40 || address == 0x43 ||
           address == 0x60 || address == 0x64 ||
-          address == 0x21 || address == 0xA1))
+          address == 0x21 || address == 0xA1 ||
+          address == 0x70 || address == 0x71))
         return AML_INVALID_ARGUMENT;
 
     uint16_t port = (uint16_t)address;

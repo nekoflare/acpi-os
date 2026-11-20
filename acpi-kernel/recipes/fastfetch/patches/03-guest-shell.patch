@@ -1,0 +1,31 @@
+diff --git a/src/detection/terminalshell/terminalshell_linux.c b/src/detection/terminalshell/terminalshell_linux.c
+--- a/src/detection/terminalshell/terminalshell_linux.c
++++ b/src/detection/terminalshell/terminalshell_linux.c
+@@ -292,6 +292,12 @@
+ }
+ 
+ static void setShellInfoDetails(FFShellResult* result) {
++#ifdef FF_ACPI_MLIBC
++    if (ffStrEquals(result->exeName, "bash.elf")) {
++        ffStrbufInitStatic(&result->prettyName, "bash");
++        return;
++    }
++#endif
+     if (ffStrbufEqualS(&result->processName, "pwsh")) {
+         ffStrbufInitStatic(&result->prettyName, "PowerShell");
+     } else if (ffStrbufEqualS(&result->processName, "nu")) {
+diff --git a/src/detection/terminalshell/terminalshell.c b/src/detection/terminalshell/terminalshell.c
+--- a/src/detection/terminalshell/terminalshell.c
++++ b/src/detection/terminalshell/terminalshell.c
+@@ -405,6 +405,11 @@
+         return false;
+     }
+ 
++#ifdef FF_ACPI_MLIBC
++    if (ffStrEquals(exeName, "bash.elf")) {
++        return getShellVersionBash(exe, version);
++    }
++#endif
+     if (ffStrEqualsIgnCase(exeName, "bash")) {
+         return getShellVersionBash(exe, version);
+     }

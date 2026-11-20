@@ -52,7 +52,7 @@ static int start_client(const char *path, char *const arguments[])
     if (!process) {
         char *const environment[] = {
             "DISPLAY=:0", "FONTCONFIG_FILE=/dwm-fonts.conf", "HOME=/",
-            "PATH=/", "SHELL=/bash.elf", NULL,
+            "PATH=/bin", "SHELL=/bin/bash.elf", "XDG_CURRENT_DESKTOP=dwm", NULL,
         };
         execve(path, arguments, environment);
         perror(path);
@@ -74,7 +74,7 @@ int main(void)
             "-ac", "-nolisten", "tcp", "-noreset", NULL,
         };
         char *const environment[] = {NULL};
-        execve("/Xvfb", arguments, environment);
+        execve("/bin/Xvfb", arguments, environment);
         perror("exec Xvfb");
         return 1;
     }
@@ -105,14 +105,9 @@ int main(void)
         return 1;
     }
     puts("Upstream X.Org accepted an X11 client");
-    if (!access("/dwm", X_OK)) {
+    if (!access("/bin/dwm", X_OK)) {
         char *const dwm[] = {"dwm", NULL};
-        // Clip the widget to its eyes so dwm resizes leave no stale pixels in the gap.
-        char *const xeyes[] = {"xeyes", "-shape", NULL};
-        if (start_client("/dwm", dwm) || start_client("/xeyes", xeyes))
-            return 1;
-        char *const terminal[] = {"st", NULL};
-        if (!access("/st", X_OK) && start_client("/st", terminal))
+        if (start_client("/bin/dwm", dwm))
             return 1;
     }
     return 0;

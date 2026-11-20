@@ -1,0 +1,24 @@
+version=9.2.1373
+revision=1
+cross_compile=yes
+tarball_url=https://codeload.github.com/vim/vim/tar.gz/refs/tags/v9.2.1373
+tarball_sha256=1530e7f53811c5c1000410b6f9831d15a3f1e258d6dc4fbd7ab3dca344fb541f
+builddeps=musl
+deps=ncurses
+imagedeps=linux-libc-dev
+
+configure() {
+    copy_source
+    musl_env
+    CPPFLAGS="$CPPFLAGS -idirafter $(uapi_dir)"
+    cd src/src
+    ./configure --prefix=/usr --mandir=/usr/share/man \
+        --with-tlib=ncursesw --enable-multibyte --disable-gui \
+        --without-x --disable-netbeans --disable-channel \
+        --disable-pythoninterp --disable-python3interp \
+        --disable-perlinterp --disable-rubyinterp --disable-luainterp \
+        --disable-tclinterp
+}
+
+build() { make -C src/src -j"$parallelism"; }
+package() { make -C src/src DESTDIR=/build_dir/pkgs/vim install; }

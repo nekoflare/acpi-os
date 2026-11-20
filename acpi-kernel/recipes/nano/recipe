@@ -1,0 +1,19 @@
+version=9.3
+revision=1
+cross_compile=yes
+tarball_url=https://ftp.gnu.org/gnu/nano/nano-9.3.tar.xz
+tarball_sha256=a9affc52c9596ee0682bcdd4ceb3c0b235eb221d83d733dfd9b0dff45897cb0d
+builddeps=musl
+deps=ncurses
+imagedeps=linux-libc-dev
+
+configure() {
+    copy_source
+    musl_env
+    CPPFLAGS="$CPPFLAGS -idirafter $(uapi_dir)"
+    cd src
+    ./configure --prefix=/usr --libdir=/usr/lib \
+        --disable-shared --enable-static --disable-nls --enable-utf8
+}
+build() { static_build; }
+package() { make -C src DESTDIR=/build_dir/pkgs/nano install; }

@@ -1,1 +1,1 @@
-/x11-demo --desktop
+/bin/x11-demo --desktop

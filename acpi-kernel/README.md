@@ -207,8 +207,9 @@ startup.
 
 The default ISO boots `hello.elf` as a Limine module. ASL validates its ELF64
 headers, loads its `PT_LOAD` segments at their declared user addresses,
-zeros memory beyond the file bytes, and creates a 64 KiB user stack
-with a guard page below it. The loader accepts static x86-64
+zeros memory beyond the file bytes, and reserves a 4 MiB user stack
+with a guard page below it. The loader backs the top page for startup arguments.
+Additional stack pages are zeroed and mapped on first access. The loader accepts static x86-64
 `ET_EXEC` images with disjoint load pages. The static runtime handles any TLS metadata
 in the program headers. It rejects writable executable segments and applies execute
 disable where the CPU supports it.
@@ -239,7 +240,8 @@ and `close` (3) and `lseek` (8) for open VFS files. Console seeks return
 `ppoll` (271) for up to 1,024 entries. Console stdin and `/dev/kbd` report
 readability when input is queued. The scheduler wakes waiting callers on
 keyboard input or timer ticks. `ppoll` accepts a null signal mask.
-Other supported calls include `mmap` (9) for private anonymous memory,
+Other supported calls include `pipe` (22) and `pipe2` (293) for anonymous
+byte streams (`pipe2` accepts `O_CLOEXEC` and `O_NONBLOCK`), `mmap` (9) for private anonymous memory,
 `mprotect` (10) for anonymous pages with no access, read-only access, or
 read/write access, `munmap`
 (11) for a complete mapped range, `ioctl` (16) with `TIOCGWINSZ` on console
@@ -252,6 +254,8 @@ init process has PID and TID 0. Other boot processes have PID and TID 1.
 Each process can open up to 16 VFS files or directories.
 `getrlimit` and `prlimit64` report the fixed `RLIMIT_NOFILE` for the
 calling process, including its three console descriptors.
+`clock_gettime` (228) supports `CLOCK_REALTIME` from the CMOS RTC and
+`CLOCK_MONOTONIC`/`CLOCK_BOOTTIME` from the LAPIC tick counter.
 The working directory is the VFS root. Reads with an empty
 input queue block until a keystroke arrives. `uname` reports `ASL kernel`
 as the system name and `x86_64` as the machine type. Reads and writes may return
@@ -311,7 +315,7 @@ case-sensitive and may have a leading slash.
 
 The build packs the flat files in `initramfs/` into a small archive and
 links it into the kernel's read-only ELF segment. The archive includes
-the standalone `/ls` executable, built from `userspace/ls.c`. ASL validates the
+the standalone `/bin/ls` executable, built from `userspace/ls.c`. ASL validates the
 archive's record bounds at startup and adds the files to a read-only VFS
 tree with their data left in place. The same tree exposes `/proc/meminfo`.
 Each open of that file snapshots `MemTotal`, `MemFree`, and `MemAvailable`
@@ -357,8 +361,9 @@ from these packages.
 
 Set `APP_ARCH=x86-64` for baseline x86-64 guest binaries. The default is
 `native`. Set `MLIBC_JOBS` to control parallel compilation within a
-package. Each input revision and CPU configuration has its own package
-directory, and Jinx shares its downloaded-archive cache across them.
+package. Each input snapshot has an isolated Jinx repository. Snapshots share
+downloaded archives and reuse binary packages when the recipe, its local inputs,
+build dependencies, and CPU configuration match.
 
 ## Static mlibc userspace
 
@@ -420,14 +425,14 @@ make -C acpi-kernel run-bash
 make -C acpi-kernel -j2 check-bash check-bash-uefi
 ```
 
-The Bash Limine entry starts Bash as PID 0 and runs `/x11-demo --desktop`
+The Bash Limine entry starts Bash as PID 0 and runs `/bin/x11-demo --desktop`
 from its startup script. The desktop shows a framed teal window on a
 dark background. The X11 server and client stay connected while the
 desktop is open. Press Escape in QEMU to close it and reach Bash.
 Run `x11-demo --desktop` to reopen the desktop or `x11-demo` for the
 one-shot drawing demo. The desktop supports one local client window
 and uses the keyboard to exit. The kernel echoes the keys and handles Backspace. Run `ls /` to list the root or `ls -a /` to include the dot
-entries. Bash starts with `PATH=/` and runs the bundled `/ls` as a
+entries. Bash starts with `PATH=/bin` and runs the bundled `/bin/ls` as a
 separate process. Type `fastfetch` to run the bundled system summary.
 Run `echo $$` to check the PID or `source /boot-test.sh`
 to run the bundled script. `exit` hands control to the ASL shell.
@@ -458,10 +463,12 @@ make -C acpi-kernel run-xorg-uefi
 
 The target boots `target/acpi-kernel-xorg-desktop/acpi-xorg.img` through OVMF.
 The GPT disk has a FAT32 EFI system partition with Limine and the kernel,
-and a journal-free ext4 partition with the desktop programs, fonts, and
-other guest files. Image creation uses `sfdisk`, `mkfs.fat`, mtools, and
+and a journal-free ext4 partition with the desktop programs in `/bin`,
+plus fonts and other guest files. Image creation uses `sfdisk`, `mkfs.fat`, mtools, and
 `mkfs.ext4`. Rebuilds use `qemu-img`, `debugfs`, and `e2fsck` to refresh
 the packaged files and boot partition while preserving other files on ext4.
+The first rebuild with the `/bin` layout removes legacy root-level ELF
+copies at the packaged command paths.
 QEMU uses KVM when `/dev/kvm` is present and TCG otherwise.
 
 The bootstrap archive supplies `/etc/fstab` from `config/fstab-xorg`.
@@ -498,9 +505,9 @@ pending redraws for each page. It copies the affected rectangle to the hidden pa
 display to it. Each page starts with a full copy, and large redraws also use
 a full copy. The console keeps its own page and is restored when X.Org
 closes the framebuffer. Other framebuffers use writes to changed rows.
-X.Org reads PS/2 events from `/dev/kbd` and `/dev/mouse`. The desktop image launches dwm, xeyes,
-and suckless st on its local display. st opens Bash on startup.
-Run `fastfetch` in st to see the guest's kernel, CPU, and memory.
+X.Org reads PS/2 events from `/dev/kbd` and `/dev/mouse`. The desktop image
+starts dwm with no application windows. Press Ctrl+Alt+T to open st, then
+run `fastfetch` to see the guest's kernel, CPU, and memory.
 The guest port sends
 line-edited input and shell output over a Unix stream. Programs that
 require Linux PTY ioctls or terminal job control remain unsupported.
@@ -521,7 +528,7 @@ over the guest's Unix socket and prints its result to serial.
 Run `make run-uefi DWM=1` from the repository root to boot into the
 dwm 6.8 session. The guest X11 server draws the bar and the active X.Org
 cursor to `/dev/fb0`. Move the PS/2 mouse and click the bar to select
-tags or change layouts. The session also starts xeyes. Press Escape to
+tags or change layouts. Press Escape to
 close the session and reach Bash.
 Run `x11-demo --dwm` in Bash to start it again.
 
@@ -550,7 +557,8 @@ make -C acpi-kernel run-fastfetch
 The executable and boot ISO are under `target/acpi-kernel/fastfetch/`.
 This port uses a short default module list and disables Local IP detection
 because mlibc's Linux `getifaddrs()` requires netlink support. Fastfetch
-reads the ASL kernel identity through `uname()`.
+reads the ASL kernel identity through `uname()` and gets uptime from
+`CLOCK_BOOTTIME`.
 CPU and memory detection depend on Linux-style `/proc` data.
 
 ## Doom

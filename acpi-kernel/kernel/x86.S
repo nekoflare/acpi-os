@@ -213,6 +213,10 @@ acpi_run_task:
     pushq %r14
     pushq %r15
     movq %rsp, %rdx
+    cmpb $0x82, acpi_irq_pending(%rip)
+    jne .Lresume_scheduler
+    movq %cr2, %rax
+    pushq %rax
 .Lresume_scheduler:
     movq .Lkernel_cr3(%rip), %rax
     testq %rax, %rax
@@ -271,6 +275,24 @@ acpi_syscall_entry:
     movb $0x80, acpi_irq_pending(%rip)
     jmp .Lsave_task
 .size acpi_syscall_entry, .-acpi_syscall_entry
+
+.Lpage_fault:
+    /* Only ring-3 non-present data reads and writes can grow the stack. */
+    testb $3, 16(%rsp)
+    jz .Lkernel_page_fault
+    cmpq $0, .Lscheduler_stack(%rip)
+    je .Lkernel_page_fault
+    cmpq $4, (%rsp)
+    je .Lstack_fault
+    cmpq $6, (%rsp)
+    jne .Lfault_with_error
+.Lstack_fault:
+    addq $8, %rsp
+    movb $0x82, acpi_irq_pending(%rip)
+    jmp .Lsave_task
+.Lkernel_page_fault:
+    movl $14, %eax
+    jmp .Lunhandled_vector
 
 .Lfault_with_error:
     testb $3, 16(%rsp)
@@ -334,7 +356,9 @@ acpi_vector_entries:
         jmp .Ldevice_interrupt
     .elseif vector == 0x22
         jmp .Lexit_interrupt
-    .elseif vector == 10 || vector == 11 || vector == 12 || vector == 13 || vector == 14 || vector == 17 || vector == 21 || vector == 29 || vector == 30
+    .elseif vector == 14
+        jmp .Lpage_fault
+    .elseif vector == 10 || vector == 11 || vector == 12 || vector == 13 || vector == 17 || vector == 21 || vector == 29 || vector == 30
         movl $vector, %eax
         jmp .Lfault_with_error
     .elseif vector < 32 && vector != 2 && vector != 8 && vector != 18

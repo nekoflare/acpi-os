@@ -2744,11 +2744,11 @@ int run_guest_dwm(void)
         close(keyboard);
         char *const args[] = {"dwm", NULL};
         char *const environment[] = {
-            "PATH=/", "DISPLAY=:0", "XAUTHORITY=/dev/null",
-            "FONTCONFIG_FILE=/dwm-fonts.conf", NULL,
+            "PATH=/bin", "DISPLAY=:0", "XAUTHORITY=/dev/null",
+            "FONTCONFIG_FILE=/dwm-fonts.conf", "XDG_CURRENT_DESKTOP=dwm", NULL,
         };
-        execve("/dwm", args, environment);
-        perror("dwm session: exec /dwm");
+        execve("/bin/dwm", args, environment);
+        perror("dwm session: exec /bin/dwm");
         _exit(127);
     }
 
@@ -2770,28 +2770,10 @@ int run_guest_dwm(void)
         if (ready.revents & POLLIN) {
             int fd = accept(listener, NULL, NULL);
             if (fd >= 0) {
-                pid_t eyes = fork();
-                if (eyes == 0) {
-                    close(fd);
-                    close(listener);
-                    close(keyboard);
-                    close(fb.fd);
-                    char geometry[32];
-                    snprintf(geometry, sizeof(geometry), "220x144+%u+%u",
-                             (fb.mode.xres - 220) / 2, (fb.mode.yres - 144) / 2);
-                    char *const args[] = {"xeyes", "+shape", "-bw", "0", "-geometry", geometry, NULL};
-                    char *const environment[] = {"PATH=/", "DISPLAY=:0", "XAUTHORITY=/dev/null", NULL};
-                    execve("/xeyes", args, environment);
-                    perror("dwm session: exec /xeyes");
-                    _exit(127);
-                }
-                if (eyes > 0)
-                    result = serve_x11(fd, &fb, keyboard, listener);
+                result = serve_x11(fd, &fb, keyboard, listener);
                 close(fd);
                 close(listener);
                 listener = -1;
-                if (eyes > 0)
-                    waitpid(eyes, NULL, 0);
             }
         }
         if (listener >= 0) {

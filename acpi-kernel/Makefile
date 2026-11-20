@@ -9,7 +9,8 @@ MLIBC_JOBS ?= 8
 DWM ?= 0
 DWM_BUILD := $(abspath ../target/acpi-kernel-dwm)
 DWM_FONT ?= $(shell fc-match -f '%{file}' monospace)
-DWM_EXTRA = $(if $(filter 1,$(DWM)),$(DWM_BUILD)/dwm $(DWM_BUILD)/xeyes $(DWM_BUILD)/dwm-font.ttf config/dwm-fonts.conf)
+DWM_APPS = $(if $(filter 1,$(DWM)),$(DWM_BUILD)/dwm $(DWM_BUILD)/xeyes)
+DWM_EXTRA = $(if $(DWM_APPS),$(DWM_APPS) $(DWM_BUILD)/dwm-font.ttf config/dwm-fonts.conf)
 BASH_IMAGE_BUILD = $(if $(DWM_EXTRA),$(DWM_BUILD),$(BASH_BUILD))
 BASH_CONFIG = $(if $(DWM_EXTRA),config/limine-dwm.conf,config/limine-bash.conf)
 BASH_STARTUP = $(if $(DWM_EXTRA),config/dwm-start.sh,config/x11-start.sh)
@@ -24,11 +25,11 @@ XORRISO ?= xorriso
 PYTHON ?= python3
 OVMF ?= /usr/share/edk2/x64/OVMF_CODE.4m.fd
 
+guest_bins = $(foreach app,$(1),bin/$(notdir $(app))=$(app))
+
 APP_ARCH ?= native
 include ports/Makefile
 
-KERNEL_FLAGS := -O2 -mcmodel=kernel -mno-red-zone -mgeneral-regs-only -fno-pic
-BOOT_FLAGS := $(KERNEL_FLAGS) -std=c17 -ffreestanding -fno-stack-protector -Wall -Wextra -Werror
 QEMU_FLAGS := -m 8G -boot d -cdrom $(BUILD)/acpi-kernel.iso -serial stdio -monitor none -no-reboot -enable-kvm $(if $(QEMU_CPU),-cpu $(QEMU_CPU))
 CHECK_QEMU_FLAGS := $(QEMU_FLAGS) -smp 4
 BOOT_CHECK = awk '/ASL GDT loaded/ && stage == 0 { stage = 1 } \
@@ -70,48 +71,11 @@ BOOT_CHECK = awk '/ASL GDT loaded/ && stage == 0 { stage = 1 } \
 .PHONY: all run run-uefi check check-uefi copy-aml
 all: $(BUILD)/acpi-kernel.iso
 
-$(BUILD):
-	mkdir -p $@
-
-$(BUILD)/kernel.aml: kernel/kernel.asl $(filter-out kernel/kernel.asl,$(wildcard kernel/*.asl)) | $(BUILD)
-	$(IASL) -I kernel -p $(basename $@) $<
-
-copy-aml: $(BUILD)/kernel.aml
-	cp -- "$<" ./kernel.aml
-
-$(BUILD)/linked.ll: $(BUILD)/kernel.aml ../Cargo.toml ../Cargo.lock $(wildcard ../src/*)
-	AMLAOT_CLANG="$(CLANG)" cargo run --locked --manifest-path ../Cargo.toml -- --emit-llvm --freestanding $< > $@
-
-$(BUILD)/kernel.bc: $(BUILD)/linked.ll Makefile
-	$(OPT) -force-attribute=noredzone -internalize-public-api-list=aml_context_create_with_host,aml_KERN,aml_interrupt_BRKP \
-		-passes='forceattrs,internalize,always-inline,default<O2>,globaldce,verify' $< -o $@
-
-$(BUILD)/aml.o: $(BUILD)/kernel.bc
-	$(CLANG) $(KERNEL_FLAGS) -c $< -o $@
-
-$(BUILD)/boot.o: kernel/boot.c ../src/runtime.h Makefile | $(BUILD)
-	$(CLANG) $(BOOT_FLAGS) -c $< -o $@
-
-$(BUILD)/early-memory.o: kernel/early-memory.c Makefile | $(BUILD)
-	$(CLANG) $(BOOT_FLAGS) -c $< -o $@
-
-$(BUILD)/x86.o: kernel/x86.S Makefile | $(BUILD)
-	$(CLANG) $(KERNEL_FLAGS) -c $< -o $@
+include kernel/build.mk
 
 $(eval $(call jinx_artifact,$(BUILD)/hello.elf,hello,usr/bin/hello.elf))
 
 $(eval $(call jinx_artifact,$(BUILD)/ls,ls,usr/bin/ls))
-
-INITRAMFS_FILES := $(if $(INITRAMFS_FSTAB),,$(wildcard initramfs/*) $(BUILD)/ls) $(INITRAMFS_EXTRA)
-
-$(BUILD)/initramfs.img: scripts/pack-initramfs.py initramfs $(INITRAMFS_FILES) $(INITRAMFS_FSTAB) $(INITRAMFS_FONT) Makefile | $(BUILD)
-	$(PYTHON) $< $@ $(INITRAMFS_FILES) $(if $(INITRAMFS_FSTAB),etc/fstab=$(INITRAMFS_FSTAB)) $(if $(INITRAMFS_FONT),fonts/dwm-font.ttf=$(INITRAMFS_FONT))
-
-$(BUILD)/initramfs.o: kernel/embed-initramfs.S $(BUILD)/initramfs.img Makefile
-	$(CLANG) $(KERNEL_FLAGS) -DINITRAMFS_IMAGE='"$(BUILD)/initramfs.img"' -c $< -o $@
-
-$(BUILD)/kernel.elf: $(BUILD)/boot.o $(BUILD)/early-memory.o $(BUILD)/aml.o $(BUILD)/x86.o $(BUILD)/initramfs.o kernel/link.ld
-	$(LLD) -static -T kernel/link.ld $(filter %.o,$^) -o $@
 
 LIMINE_FILES := $(addprefix $(LIMINE_DIR)/,limine-bios-cd.bin limine-bios.sys limine-uefi-cd.bin)
 
@@ -169,11 +133,11 @@ $(eval $(call jinx_artifact,$(BASH_BUILD)/x11-demo,x11-demo,usr/bin/x11-demo))
 
 BASH_BOOT = BUILD="$(BASH_IMAGE_BUILD)" BOOT_ELF="$(BASH_BUILD)/bash.elf" \
 	BOOT_CONFIG="$(BASH_CONFIG)" BOOT_MODULE=bash.elf BASH_CHECK=1 DWM_CHECK="$(DWM)" \
-	INITRAMFS_EXTRA="$(BASH_BUILD)/fastfetch $(BASH_BUILD)/fbtest $(BASH_BUILD)/doom $(DOOM_DATA) $(BASH_BUILD)/x11-demo $(BASH_STARTUP) $(filter-out $(DWM_BUILD)/dwm-font.ttf,$(DWM_EXTRA))" \
+	INITRAMFS_EXTRA="$(call guest_bins,$(BASH_BUILD)/fastfetch $(BASH_BUILD)/fbtest $(BASH_BUILD)/doom $(BASH_BUILD)/x11-demo $(DWM_APPS)) $(DOOM_DATA) $(BASH_STARTUP) $(filter %.conf,$(DWM_EXTRA))" \
 	INITRAMFS_FONT="$(filter $(DWM_BUILD)/dwm-font.ttf,$(DWM_EXTRA))"
 
 .PHONY: bash run-bash check-bash check-bash-uefi
-bash: $(BASH_BUILD)/bash.elf $(BASH_BUILD)/fbtest $(BASH_BUILD)/doom $(BASH_BUILD)/x11-demo $(DWM_EXTRA) doom-wad
+bash: $(BASH_BUILD)/bash.elf $(BASH_BUILD)/fastfetch $(BASH_BUILD)/fbtest $(BASH_BUILD)/doom $(BASH_BUILD)/x11-demo $(DWM_EXTRA) doom-wad
 	$(MAKE) $(BASH_BOOT) all
 
 run-bash: bash
@@ -203,10 +167,10 @@ st: $(ST_BUILD)/st
 
 $(eval $(call jinx_artifact,$(ST_BUILD)/st,st,usr/bin/st))
 
-xorg-image: $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/xorg-default.xkm
+xorg-image: $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/Xvfb $(XORG_BUILD)/xorg-default.xkm
 	$(MAKE) BUILD="$(XORG_IMAGE_BUILD)" BOOT_ELF="$(XORG_BUILD)/xorg-probe" \
 		BOOT_CONFIG=config/limine-xorg.conf BOOT_MODULE=xorg-probe \
-		INITRAMFS_EXTRA="$(XORG_BUILD)/Xvfb $(XORG_BUILD)/xorg-default.xkm" all
+		INITRAMFS_EXTRA="$(call guest_bins,$(XORG_BUILD)/Xvfb) $(XORG_BUILD)/xorg-default.xkm" all
 
 XORG_FS_COMMANDS := cat cp mkdir mv rm rmdir
 XORG_FS_TOOLS := $(XORG_BUILD)/fs-tools
@@ -218,13 +182,19 @@ XORG_LS := $(XORG_BUILD)/busybox-ls
 $(eval $(call jinx_artifact,$(XORG_LS),busybox-ls,usr/bin/busybox-ls))
 
 XORG_DISK := $(XORG_DESKTOP_BUILD)/acpi-xorg.img
-XORG_APPS := $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/Xvfb $(XORG_BUILD)/xorg-default.xkm \
-	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(ST_BUILD)/st \
-	$(XORG_BUILD)/nsxiv \
-	$(BASH_BUILD)/bash.elf $(BASH_BUILD)/fastfetch config/dwm-fonts.conf \
-	$(wildcard initramfs/*)
+XORG_APPS := $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/Xvfb \
+	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(XORG_BUILD)/xsetroot $(XORG_BUILD)/date $(ST_BUILD)/st \
+	$(XORG_BUILD)/nsxiv $(XORG_BUILD)/nano $(XORG_BUILD)/vim \
+	$(BASH_BUILD)/bash.elf $(BASH_BUILD)/fastfetch
+XORG_DATA := $(XORG_BUILD)/xorg-default.xkm config/dwm-fonts.conf $(wildcard initramfs/*)
 
 $(eval $(call jinx_artifact,$(XORG_BUILD)/nsxiv,nsxiv,usr/bin/nsxiv))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/nano,nano,usr/bin/nano))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/vim,vim,usr/bin/vim))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/xsetroot,xsetroot,usr/bin/xsetroot))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/date,date,usr/bin/date))
+XORG_TERMINFO := $(XORG_BUILD)/terminfo/s/st-256color
+$(eval $(call jinx_artifact,$(XORG_TERMINFO),ncurses,usr/share/terminfo/s/st-256color))
 XORG_FONT := $(XORG_DESKTOP_ASSETS)/dwm-font.ttf
 XORG_DISK_CONFIG := config/limine-xorg-disk.conf
 XORG_ACCEL ?= $(if $(wildcard /dev/kvm),kvm,tcg)
@@ -240,16 +210,16 @@ endif
 endif
 
 ifneq ($(BUILD),$(XORG_DESKTOP_BUILD))
-$(XORG_DESKTOP_BUILD)/kernel.elf: $(wildcard kernel/*) $(wildcard initramfs/*) config/fstab-xorg Makefile \
-	scripts/pack-initramfs.py $(wildcard ../src/*) ../Cargo.toml ../Cargo.lock
+$(XORG_DESKTOP_BUILD)/kernel.elf: kernel-build-force
 	$(MAKE) BUILD="$(XORG_DESKTOP_BUILD)" INITRAMFS_FSTAB=config/fstab-xorg "$@"
 
 endif
 
 $(XORG_DISK): scripts/pack-xorg-disk.sh $(XORG_DESKTOP_BUILD)/kernel.elf $(LIMINE_DIR)/BOOTX64.EFI \
-	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) catflare.gif Makefile
+	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_DATA) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) catflare.gif Makefile
 	sh $< "$@" "$(XORG_DESKTOP_BUILD)/kernel.elf" "$(LIMINE_DIR)/BOOTX64.EFI" \
-		"$(XORG_DISK_CONFIG)" $(XORG_APPS) ls=$(XORG_LS) $(foreach cmd,$(XORG_FS_COMMANDS),$(cmd)=$(XORG_FS_TOOLS)) \
+		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_DATA) usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
+		bin/ls=$(XORG_LS) $(foreach cmd,$(XORG_FS_COMMANDS),bin/$(cmd)=$(XORG_FS_TOOLS)) \
 		fonts/dwm-font.ttf="$(XORG_FONT)" catflare.gif=catflare.gif
 
 xorg-desktop-image: $(XORG_DISK)

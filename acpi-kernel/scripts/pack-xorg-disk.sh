@@ -73,6 +73,26 @@ if [ -f "$output" ]; then
             debugfs -R "dump \"/$name\" \"$work/current\"" "$work/apps.img"
             cmp "$name" "$work/current"
         done
+
+        # Retire the old root-level copies after their /bin replacements
+        # are in place. Leave unrelated files at those paths alone.
+        printf '\177ELF' > "$work/elf-magic"
+        for spec do
+            case "$spec" in
+                bin/*=*) legacy=${spec%%=*}; legacy=${legacy#bin/} ;;
+                *) continue ;;
+            esac
+            case "$legacy" in */*) continue ;; esac
+            entry=$(debugfs -R "stat \"/$legacy\"" "$work/apps.img" 2>/dev/null)
+            case "$entry" in *"Type: regular"*) ;; *) continue ;; esac
+            : > "$work/current"
+            debugfs -R "dump \"/$legacy\" \"$work/current\"" "$work/apps.img"
+            if head -c 4 "$work/current" | cmp -s "$work/elf-magic" -; then
+                debugfs -w -R "rm \"/$legacy\"" "$work/apps.img"
+                entry=$(debugfs -R "stat \"/$legacy\"" "$work/apps.img" 2>/dev/null)
+                [ -z "$entry" ]
+            fi
+        done
     )
     e2fsck -fn "$work/apps.img"
 else

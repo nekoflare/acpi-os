@@ -195,12 +195,10 @@ def boot(serial_path, qemu_log, qemu_command):
                                 "Bash sourcing the initramfs script",
                             )
                             root_listing = (
-                                rb"boot-test\.sh\ndoom\ndoom\.wad\n"
-                                + (rb"dwm\ndwm-fonts\.conf\ndwm-start\.sh\n" if dwm_check else b"")
-                                + rb"fastfetch\nfbtest\n"
-                                + (rb"fonts\n" if dwm_check else b"")
-                                + rb"ls\nreadme\.txt\nwelcome\.txt\nx11-demo\n"
-                                + (rb"xeyes\n" if dwm_check else rb"x11-start\.sh\n")
+                                rb"bin\nboot-test\.sh\ndoom\.wad\n"
+                                + (rb"dwm-fonts\.conf\ndwm-start\.sh\nfonts\n" if dwm_check else b"")
+                                + rb"readme\.txt\nwelcome\.txt\n"
+                                + (b"" if dwm_check else rb"x11-start\.sh\n")
                                 + rb"dev\nproc\n"
                                 + re.escape(bash_prompt)
                             )
@@ -210,7 +208,7 @@ def boot(serial_path, qemu_log, qemu_command):
                                 lambda: re.search(root_listing, serial_path.read_bytes().replace(b"\r\n", b"\n")),
                                 "Bash running the standalone ls executable",
                             )
-                            send_keys(stream, ("slash", *"ls", "spc", "minus", "a", "spc", "slash", "ret"))
+                            send_keys(stream, ("slash", *"bin", "slash", *"ls", "spc", "minus", "a", "spc", "slash", "ret"))
                             wait_for(
                                 process, deadline,
                                 lambda: re.search(rb"\.\n\.\.\n" + root_listing, serial_path.read_bytes().replace(b"\r\n", b"\n")),
@@ -241,10 +239,11 @@ def boot(serial_path, qemu_log, qemu_command):
                                 lambda: (b"fastfetch " in (output := serial_path.read_bytes())
                                          and b"ASL kernel 0.1.0" in output
                                          and re.search(rb"(?:\x1b\[[0-9;]*m)*root(?:\x1b\[[0-9;]*m)*@(?:\x1b\[[0-9;]*m)*localhost", output)
+                                         and re.search(rb"Shell[^\n]*: (?:\x1b\[[0-9;]*m)*bash\b", output)
                                          and re.search(rb"CPU[^\n]*: (?:\x1b\[[0-9;]*m)*[A-Za-z0-9]", output)
                                          and re.search(rb"Memory[^\n]*[0-9] (?:KiB|MiB|GiB) / [1-9]", output)
                                          and output.endswith(bash_prompt)),
-                                "Fastfetch reporting the ASL kernel identity, CPU model, and memory",
+                                "Fastfetch reporting the ASL kernel identity, shell, CPU model, and memory",
                             )
                             send_keys(stream, (*"echo", "spc", "shift-4", "shift-slash", "ret"))
                             wait_for(
@@ -262,11 +261,7 @@ def boot(serial_path, qemu_log, qemu_command):
                         )
                         send_keys(stream, ("l", "x", "backspace", "s", "spc", "slash", "ret"))
                         listing = b"welcome.txt\r\n"
-                        if bash_check:
-                            listing += b"x11-demo\r\n"
-                        if dwm_check:
-                            listing += b"xeyes\r\n"
-                        elif bash_check:
+                        if bash_check and not dwm_check:
                             listing += b"x11-start.sh\r\n"
                         listing += b"dev\r\nproc\r\nasl> "
                         wait_for(

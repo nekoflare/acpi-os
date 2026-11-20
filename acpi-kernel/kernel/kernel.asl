@@ -43,6 +43,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         PCMD, 8
     }
 
+    OperationRegion (RTC0, SystemIO, 0x70, 2)
+    Field (RTC0, ByteAcc, NoLock, Preserve)
+    {
+        RTCI, 8,
+        RTCD, 8
+    }
+
     OperationRegion (PICM, SystemIO, 0x21, 1)
     Field (PICM, ByteAcc, NoLock, Preserve) { MIMR, 8 }
     OperationRegion (PICS, SystemIO, 0xA1, 1)
@@ -1859,9 +1866,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (UTSN, Buffer (390) {}) // Linux new_utsname, six 65-byte fields
     Name (UTID, Package () {"ASL kernel", "localhost", "0.1.0", "AMLAOT", "x86_64"})
     Name (USTP, 0x0000008000000000)
-    Name (USSZ, 0x10000) // 64 KiB per userspace task
+    Name (USSZ, 0x400000) // 4 MiB of user stack address space
     Name (SYEV, 0x80)
     Name (UFEV, 0x81)
+    Name (PFEV, 0x82)
 
     Method (SYIN, 0, NotSerialized)
     {
@@ -1918,11 +1926,38 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (Zero)
     }
 
+    // The stack has a fixed reservation and sparse backing in the task's root.
+    // Return the new page's direct-map address.
+    Method (USPG, 2, NotSerialized)
+    {
+        If (Arg1 < USTP - USSZ || Arg1 >= USTP) { Return (Zero) }
+        Local0 = XVWD (Arg0 + TSCR, Ones)
+        If (!Local0) { Return (Zero) }
+        Local1 = PALC ()
+        If (!Local1) { Return (Zero) }
+        Local2 = HHDO + Local1
+        Local3 = PRES | USER | WRIT | VOWN
+        If (XNXE ()) { Local3 |= NOEX }
+        XCLR (Local2)
+        If (!VPTE (HHDO + Local0, 39, Arg1, Local1 | Local3))
+        {
+            PDEL (Local1)
+            Return (Zero)
+        }
+        Return (Local2)
+    }
+
     // Translate a validated user address while staying in the kernel root.
     Method (UPHY, 3, NotSerialized)
     {
         Local0 = UPTE (Arg0, Arg1)
-        If (!Local0) { Return (Zero) }
+        If (!Local0)
+        {
+            // Kernel copies use the direct map, so they cannot fault in stack pages.
+            Local1 = USPG (Arg0, Arg1)
+            If (!Local1) { Return (Zero) }
+            Return (Local1 + (Arg1 & (PGSZ - One)))
+        }
         Local1 = XVWD (Local0, Ones)
         Local2 = USER | Arg2
         If ((Local1 & Local2) != Local2) { Return (Zero) }
@@ -2007,7 +2042,16 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         VREL (VCWD (Arg0))
         While (XVWD (Arg0 + TSUL, Ones)) { UDEL (Arg0, Arg0 + TSUL) }
-        If (Local0) { PDEL (Local0) }
+        If (Local0)
+        {
+            Local1 = USTP - USSZ
+            While (Local1 < USTP)
+            {
+                If (UPTE (Arg0, Local1)) { VRMV (HHDO + Local0, 39, Local1, One) }
+                Local1 += PGSZ
+            }
+            PDEL (Local0)
+        }
         Return (VUNM (Arg0, TSIZ))
     }
 
@@ -2118,9 +2162,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Decrement (Local3)
         }
         If (!Local4) { Return (Zero) }
-        Local7 = WRIT
-        If (XNXE ()) { Local7 |= NOEX }
-        If (!UMAP (Arg0, USTP - USSZ, USSZ, Local7, Zero, Zero, Zero)) { Return (Zero) }
+        If (!USPG (Arg0, USTP - PGSZ)) { Return (Zero) }
         Return (Local1)
     }
 
@@ -3093,9 +3135,20 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Method (SYIO, 4, NotSerialized)
     {
-        If (!UFDL (Arg0, Arg1) && !SSTD (Arg0, Arg1))
+        Local0 = UFDL (Arg0, Arg1)
+        If (!Local0 && !SSTD (Arg0, Arg1))
         {
             Return (Zero - 9) // EBADF
+        }
+        If (Local0)
+        {
+            If (XVWD (Local0, Ones) == XADR (SKND))
+            {
+                If (Arg2 == 0x54F0 || XVWD (Local0 + STTY, Ones))
+                {
+                    Return (STIO (Arg0, Local0, Arg2, Arg3))
+                }
+            }
         }
         If (Arg2 == 0x5413)
         {
@@ -3212,6 +3265,18 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 Local2 += PGSZ
             }
             Local0 = XVWD (Local1, Ones)
+        }
+        Local2 = USTP - USSZ
+        While (Local2 < USTP)
+        {
+            Local4 = UPTE (Arg0, Local2)
+            If (Local4)
+            {
+                Local5 = USPG (Arg1, Local2)
+                If (!Local5) { Return (Zero) }
+                XMOV (Local5, HHDO + (XVWD (Local4, Ones) & PMSK), PGSZ)
+            }
+            Local2 += PGSZ
         }
         Return (One)
     }
@@ -3516,6 +3581,87 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (TSDL, 704) // Wake tick, immediately after the descriptor array
     Name (TMVL, Buffer (16) {})
 
+    Method (RCMR, 1, NotSerialized)
+    {
+        RTCI = Arg0
+        Return (RTCD)
+    }
+
+    // Days since 1970-01-01 for a Gregorian date.
+    Method (SYDT, 3, NotSerialized)
+    {
+        Local0 = Arg0 - One
+        Local1 = (Arg0 - 1970) * 365 + Local0 / 4 - 492 -
+            (Local0 / 100 - 19) + (Local0 / 400 - 4)
+        Local2 = One
+        While (Local2 < Arg1)
+        {
+            If (Local2 == 2)
+            {
+                Local1 += 28
+                If (!(Arg0 % 4) && ((Arg0 % 100) || !(Arg0 % 400))) { Local1 += One }
+            }
+            ElseIf (Local2 == 4 || Local2 == 6 || Local2 == 9 || Local2 == 11)
+            {
+                Local1 += 30
+            }
+            Else { Local1 += 31 }
+            Increment (Local2)
+        }
+        Return (Local1 + Arg2 - One)
+    }
+
+    // Read the CMOS clock as Unix seconds. Return Ones if the RTC is unavailable.
+    Method (SYTM, 0, Serialized)
+    {
+        Local0 = Zero
+        While (Local0 < 10000)
+        {
+            If (!(RCMR (0x0A) & 0x80)) { Break } // Wait for update-in-progress to clear.
+            Increment (Local0)
+        }
+        If (Local0 == 10000 || !(RCMR (0x0D) & 0x80)) { Return (Ones) }
+
+        Local0 = RCMR (0x0B) // Status B
+        Local1 = RCMR (0x00) // Seconds
+        Local2 = RCMR (0x02) // Minutes
+        Local3 = RCMR (0x04) // Hours
+        Local4 = RCMR (0x07) // Day
+        Local5 = RCMR (0x08) // Month
+        Local6 = RCMR (0x09) // Year within century
+        Local7 = RCMR (0x32) // Century
+        If (!(Local0 & 0x04)) // BCD mode
+        {
+            Local1 = (Local1 & 0x0F) + ((Local1 >> 4) * 10)
+            Local2 = (Local2 & 0x0F) + ((Local2 >> 4) * 10)
+            Local3 = (((Local3 & 0x7F) & 0x0F) + (((Local3 & 0x7F) >> 4) * 10)) | (Local3 & 0x80)
+            Local4 = (Local4 & 0x0F) + ((Local4 >> 4) * 10)
+            Local5 = (Local5 & 0x0F) + ((Local5 >> 4) * 10)
+            Local6 = (Local6 & 0x0F) + ((Local6 >> 4) * 10)
+            Local7 = (Local7 & 0x0F) + ((Local7 >> 4) * 10)
+        }
+        If (!(Local0 & 0x02)) // 12-hour mode
+        {
+            Local0 = Local3 & 0x80
+            Local3 &= 0x7F
+            If (Local3 == 12) { Local3 = Zero }
+            If (Local0) { Local3 += 12 }
+        }
+        If (!Local7)
+        {
+            If (Local6 >= 70) { Local7 = 19 }
+            Else { Local7 = 20 }
+        }
+        Local7 = Local7 * 100 + Local6
+        If (Local7 < 1970 || Local7 > 9999 || Local5 < 1 || Local5 > 12 ||
+            Local4 < 1 || Local4 > 31 || Local3 > 23 || Local2 > 59 || Local1 > 60)
+        {
+            Return (Ones)
+        }
+        Local1 = SYDT (Local7, Local5, Local4) * 86400 + Local3 * 3600 + Local2 * 60 + Local1
+        Return (Local1)
+    }
+
     // Wake elapsed nanosleeps. The scheduler owns this ordered list.
     Method (SWAK, 0, NotSerialized)
     {
@@ -3684,10 +3830,77 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (SKRH, 120) // Receive ring head
     Name (SKRT, 128) // Receive ring tail
     Name (SKNM, 136) // sockaddr_un
+    Name (SKPI, 144) // Anonymous pipe endpoint: 1 read end, 2 write end
     Name (SKRX, 256) // Receive ring data
     Name (SKMS, 2047) // One ring slot remains empty.
+    Name (STTY, 2304) // Terminal stream role: 1 master, 2 slave
+    Name (STTM, 2312) // Slave's Linux x86-64 termios (36 bytes)
+    Name (STWS, 2352) // Slave's struct winsize (8 bytes)
+    Name (STDF, Buffer (36)
+    {
+        0x00, 0x05, 0x00, 0x00, // ICRNL | IXON
+        0x05, 0x00, 0x00, 0x00, // OPOST | ONLCR
+        0xBF, 0x00, 0x00, 0x00, // B38400 | CS8 | CREAD
+        0x3B, 0x8A, 0x00, 0x00, // ISIG | ICANON | ECHO | ECHOE | ECHOK | ECHOCTL | ECHOKE | IEXTEN
+        0, 3, 28, 127, 21, 4, 0, 1, 0, 17, 19, 26, 0, 18, 15, 23, 22, 0, 0, 0
+    })
     Name (SKWH, Zero) // Tasks waiting for socket I/O
     Name (SKCH, Zero) // A socket state change can unblock a waiter.
+
+    // The terminal emulator handles input editing on the master side.
+    Method (STIO, 4, NotSerialized)
+    {
+        Local0 = XVWD (Arg1 + STTY, Ones)
+        Local1 = XVWD (Arg1 + SKPR, Ones)
+        If (Arg2 == 0x54F0) // Create a terminal on a fresh socket pair.
+        {
+            If (!Local1) { Return (Zero - 22) }
+            If (Local0 || XVWD (Local1 + STTY, Ones) ||
+                XVWD (Arg1 + SKST, Ones) != 2 || XVWD (Local1 + SKST, Ones) != 2)
+            {
+                Return (Zero - 22)
+            }
+            XSTQ (Arg1 + STTY, One)
+            XSTQ (Local1 + STTY, 2)
+            XMOV (Local1 + STTM, XADR (STDF), SizeOf (STDF))
+            XSTQ (Local1 + STWS, 25 | (80 << 16))
+            Return (Zero)
+        }
+        If (!Local0) { Return (Zero - 25) }
+        Local2 = Arg1
+        If (Local0 == One)
+        {
+            If (!Local1) { Return (Zero - 5) }
+            Local2 = Local1
+        }
+        If (Arg2 == 0x5401) // TCGETS
+        {
+            If (!UCOP (Arg0, Arg3, Local2 + STTM, SizeOf (STDF))) { Return (Zero - 14) }
+            Return (Zero)
+        }
+        If (Local0 == 2 && Arg2 >= 0x5402 && Arg2 <= 0x5404) // TCSETS, TCSETSW, TCSETSF
+        {
+            If (!URNG (Arg0, Arg3, SizeOf (STDF), Zero)) { Return (Zero - 14) }
+            If (!UCPY (Arg0, Local2 + STTM, Arg3, SizeOf (STDF))) { Return (Zero - 14) }
+            If (Arg2 == 0x5404)
+            {
+                XSTQ (Local2 + SKRH, XVWD (Local2 + SKRT, Ones))
+                SKCH = One
+            }
+            Return (Zero)
+        }
+        If (Arg2 == 0x5413) // TIOCGWINSZ
+        {
+            If (!UCOP (Arg0, Arg3, Local2 + STWS, 8)) { Return (Zero - 14) }
+            Return (Zero)
+        }
+        If (Arg2 == 0x5414 && Local0 == One) // TIOCSWINSZ
+        {
+            If (!UCPY (Arg0, Local2 + STWS, Arg3, 8)) { Return (Zero - 14) }
+            Return (Zero)
+        }
+        Return (Zero - 25)
+    }
 
     Method (SKFD, 2, NotSerialized)
     {
@@ -3796,6 +4009,48 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         XSTQ (Local1 + SKST, 2)
         XSTQ (Local0 + SKPR, Local1)
         XSTQ (Local1 + SKPR, Local0)
+        XSTQ (XADR (SKPF), Local2 | (Local3 << 32))
+        If (!UCOP (Arg0, Arg2, XADR (SKPF), 8))
+        {
+            FDCL (Arg0 + TSFD + Local2 * 8)
+            FDCL (Arg0 + TSFD + Local3 * 8)
+            Return (Zero - 14)
+        }
+        Return (Zero)
+    }
+
+    Method (SYPI, 4, NotSerialized)
+    {
+        If (Arg3 & ~0x80800) { Return (Zero - 22) }
+        If (!URNG (Arg0, Arg2, 8, WRIT)) { Return (Zero - 14) }
+        Local0 = SKNW (Arg3)
+        If (!Local0) { Return (Zero - 12) }
+        Local1 = SKNW (Arg3)
+        If (!Local1)
+        {
+            SKUP (Local0)
+            Return (Zero - 12)
+        }
+        XSTQ (Local0 + SKPI, One)
+        XSTQ (Local1 + SKPI, 2)
+        XSTQ (Local0 + SKST, 2)
+        XSTQ (Local1 + SKST, 2)
+        XSTQ (Local0 + SKPR, Local1)
+        XSTQ (Local1 + SKPR, Local0)
+        Local2 = FINS (Arg0, Local0, Arg3)
+        If (Local2 >= Zero - 4095)
+        {
+            SKUP (Local0)
+            SKUP (Local1)
+            Return (Local2)
+        }
+        Local3 = FINS (Arg0, Local1, Arg3)
+        If (Local3 >= Zero - 4095)
+        {
+            FDCL (Arg0 + TSFD + Local2 * 8)
+            SKUP (Local1)
+            Return (Local3)
+        }
         XSTQ (XADR (SKPF), Local2 | (Local3 << 32))
         If (!UCOP (Arg0, Arg2, XADR (SKPF), 8))
         {
@@ -3971,6 +4226,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     // Read or write a contiguous segment of the receive ring.
     Method (SKRW, 5, NotSerialized)
     {
+        Local6 = XVWD (Arg1 + SKPI, Ones)
+        If ((Arg4 & One) && Local6 == One) { Return (Zero - 9) }
+        If (!(Arg4 & One) && Local6 == 2) { Return (Zero - 9) }
         If (XVWD (Arg1 + SKST, Ones) != 2) { Return (Zero - 107) }
         If (!Arg3) { Return (Zero) }
         Local0 = Arg1
@@ -4028,6 +4286,24 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Method (SKRD, 1, NotSerialized)
     {
+        Local1 = XVWD (Arg0 + SKPI, Ones)
+        If (Local1 == One)
+        {
+            Local2 = Zero
+            If (XVWD (Arg0 + SKRH, Ones) != XVWD (Arg0 + SKRT, Ones)) { Local2 = 0x41 }
+            If (!XVWD (Arg0 + SKPR, Ones)) { Local2 |= 0x10 }
+            Return (Local2)
+        }
+        If (Local1 == 2)
+        {
+            Local2 = XVWD (Arg0 + SKPR, Ones)
+            If (!Local2) { Return (0x18) }
+            If (((XVWD (Local2 + SKRT, Ones) - XVWD (Local2 + SKRH, Ones)) & SKMS) < SKMS)
+            {
+                Return (0x104)
+            }
+            Return (Zero)
+        }
         Local0 = XVWD (Arg0 + SKST, Ones)
         If (Local0 == One)
         {
@@ -4194,13 +4470,15 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Name (RLBV, Buffer (16) {})
 
-    // The descriptor table has a fixed size. Report that limit to libc.
+    // Report the fixed stack and descriptor limits to libc.
     Method (SYRL, 3, NotSerialized)
     {
-        If (Arg1 != 7) { Return (Zero - 22) } // RLIMIT_NOFILE
+        If (Arg1 == 3) { Local1 = USSZ } // RLIMIT_STACK
+        ElseIf (Arg1 == 7) { Local1 = FDLM } // RLIMIT_NOFILE
+        Else { Return (Zero - 22) }
         Local0 = XADR (RLBV)
-        XSTQ (Local0, FDLM)
-        XSTQ (Local0 + 8, FDLM)
+        XSTQ (Local0, Local1)
+        XSTQ (Local0 + 8, Local1)
         If (Arg2 && !UCOP (Arg0, Arg2, Local0, 16)) { Return (Zero - 14) }
         Return (Zero)
     }
@@ -4447,6 +4725,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Local3 = SYOP (Arg0, 0xFFFFFF9C, Local2, XVWD (Local0 + 9 * 8, Ones), XVWD (Local0 + 12 * 8, Ones))
         }
+        ElseIf (Local1 == 22) // pipe
+        {
+            Local3 = SYPI (Arg0, Local0, Local2, Zero)
+        }
         ElseIf (Local1 == 3)
         {
             Local2 &= 0xFFFFFFFF
@@ -4561,10 +4843,26 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 Return (Zero)
             }
         }
-        ElseIf (Local1 == 228) // clock_gettime(CLOCK_MONOTONIC)
+        ElseIf (Local1 == 228) // clock_gettime
         {
             Local3 = Zero - 22
-            If ((Local2 & 0xFFFFFFFF) == One)
+            Local4 = Local2 & 0xFFFFFFFF
+            If (Local4 == Zero)
+            {
+                Local5 = SYTM ()
+                Local3 = Zero - 5 // EIO if the CMOS clock is unavailable.
+                If (Local5 != Ones)
+                {
+                    XSTQ (XADR (TMVL), Local5)
+                    XSTQ (XADR (TMVL) + 8, Zero)
+                    Local3 = Zero - 14
+                    If (UCOP (Arg0, XVWD (Local0 + 9 * 8, Ones), XADR (TMVL), 16))
+                    {
+                        Local3 = Zero
+                    }
+                }
+            }
+            ElseIf (Local4 == One || Local4 == 7) // MONOTONIC and BOOTTIME
             {
                 XSTQ (XADR (TMVL), TICK / 100)
                 XSTQ (XADR (TMVL) + 8, (TICK % 100) * 10000000)
@@ -4597,6 +4895,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                     XSTQ (Arg0 + TSCE, XVWD (Arg0 + TSCE, Ones) | (One << Local4))
                 }
             }
+        }
+        ElseIf (Local1 == 293) // pipe2
+        {
+            Local3 = SYPI (Arg0, Local0, Local2, XVWD (Local0 + 9 * 8, Ones))
         }
         ElseIf (Local1 == 53) // socketpair
         {
@@ -4884,9 +5186,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (Local0)
     }
 
-    Name (EPTH, Buffer (7) {0x50, 0x41, 0x54, 0x48, 0x3D, 0x2F, 0})
+    Name (EPTH, Buffer () { "PATH=/bin" })
 
-    // Build argc/argv, PATH=/, and a minimal auxiliary vector.
+    // Build argc/argv, PATH=/bin, and a minimal auxiliary vector.
     // The first '|' in the module string separates two optional arguments.
     Method (USTK, 2, NotSerialized)
     {
@@ -4919,8 +5221,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             }
         }
         XSTQ (Local1, Local2)
-        XMOV (Local1 + 144, XADR (EPTH), SizeOf (EPTH))
-        XSTQ (Local1 + (Local2 + 2) * 8, Local0 + 144)
+        XMOV (Local1 + 136, XADR (EPTH), SizeOf (EPTH))
+        XSTQ (Local1 + (Local2 + 2) * 8, Local0 + 136)
         UXAV (Arg0, Local1 + (Local2 + 4) * 8)
         Return (Local0)
     }
@@ -5006,6 +5308,14 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 TACK (Local1)
                 Continue
+            }
+            If (Local1 == PFEV)
+            {
+                // CR2 is stored just below the saved frame for this event.
+                If (USPG (Local0, XVWD (XVWD (Local0 + TSFR, Ones) - 8, Ones)))
+                {
+                    Continue
+                }
             }
             If (Local1 == SYEV)
             {
@@ -5439,7 +5749,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
     }
 
-    Name (XINI, Buffer () { "xorg-probe" })
+    Name (XINI, Buffer () { "bin/xorg-probe" })
 
     Method (KERN, 6, NotSerialized)
     {
@@ -5514,7 +5824,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                     PUTS ("Desktop init missing from ext4")
                     Return (Zero)
                 }
-                Arg3 = XADR (XINI)
+                Arg3 = XADR (XINI) + 4 // Skip bin/ for the process name
             }
             UPNM = Arg3
             Local0 = Arg4

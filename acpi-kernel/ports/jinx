@@ -256,7 +256,7 @@ fi
 
 # Checked before anything below can take the lock or rebuild the cache.
 case "$1" in
-    build|update|regenerate|regen|purge|rebuild|revbump|install|rebuild-cache|closure|download|run-in)
+    build|update|regenerate|regen|purge|rebuild|revbump|install|rebuild-cache|closure|download|run-in|local-package-key)
         ;;
     internal-*)
         if [[ ${in_container} == false ]]; then
@@ -830,6 +830,17 @@ jinx_prepare_container() {
 
     jinx_get_hostdeps_file
     jinx_get_builddeps_file
+
+    if [[ -n ${ACPI_JINX_PACKAGE_CACHE-} ]]; then
+        local required dep
+        required=$(jinx_runtime_closure "${!_deps_collected[@]}")
+        for dep in ${required}; do
+            jinx_do_build_if_needed recipes "${dep}"
+        done
+        for dep in "${!_hostdeps_collected[@]}"; do
+            jinx_do_build_if_needed host-recipes "${dep}"
+        done
+    fi
 
     local _bpd_of _bpd
     for _bpd_of in "${!_deps_collected[@]}"; do
@@ -1680,6 +1691,114 @@ jinx_pkg_file() {
     fi
 }
 
+# The ACPI build keeps version-based repositories isolated per input snapshot.
+# Share completed packages across snapshots only when their inputs also match.
+jinx_local_package_key() (
+    local namespace="$1" package="$2"
+    local memo="${recipe_info_cache}/keys/${namespace}/${package}"
+    if [[ -f ${memo} ]]; then
+        cat "${memo}"
+        exit
+    fi
+
+    jinx_enter_build "${namespace}/${package}"
+    eval "$(jinx_recipe_info "${namespace}" "${package}")"
+
+    cd "${base_dir}"
+    local input_dir="${namespace}/${package}"
+    local -a inputs=("${input_dir}")
+    if [[ -n ${from_source} ]]; then
+        inputs+=("${_from_source_dir}/${from_source}")
+    fi
+    local -a files=(Jinxfile)
+    if [[ ${namespace} == recipes ]]; then
+        case "${package}" in
+            hello) files+=(userspace/hello.S) ;;
+            ls|fbtest|fs-tools|xorg-probe) files+=("userspace/${package}.c") ;;
+            hello-mlibc|x11-demo)
+                files+=("userspace/${package}.c" userspace/x11-smoke.c userspace/x11-cursor-font.h)
+                ;;
+            doomgeneric) files+=(userspace/doomgeneric-asl.c) ;;
+            st) files+=(userspace/st-guest-poll.h) ;;
+            xvfb) files+=(userspace/xorg-guest.c) ;;
+            xorg-keymap) files+=(config/xorg-default.xkb) ;;
+        esac
+    fi
+
+    set -o pipefail
+    local key dep
+    key=$(
+        printf '%s\n' "${JINX_ARCH}" "${host_arch}" "${JINX_APP_ARCH-}" || exit
+        sha256sum < "${script}" || exit
+        sha256sum "${files[@]}" || exit
+        find "${inputs[@]}" -type f -print0 | sort -z | xargs -0 sha256sum || exit
+        for dep in ${deps} ${builddeps} ${source_deps}; do
+            jinx_local_package_key recipes "${dep}" || exit
+        done
+        for dep in ${hostdeps} ${hostrundeps} ${source_hostdeps}; do
+            jinx_local_package_key host-recipes "${dep}" || exit
+        done
+        # Binary-only dependencies can form cycles. Their bootstrap flag
+        # affects package metadata, but they supply no build inputs.
+        for dep in ${binpkgdeps}; do
+            sha256sum "recipes/${dep}/recipe" || exit
+        done
+    ) || exit
+    key=$(printf '%s\n' "${key}" | sha256sum)
+    mkdir -p "${memo%/*}"
+    printf '%s\n' "${key%% *}" > "${memo}"
+    cat "${memo}"
+)
+
+jinx_local_package_cache() {
+    local action="$1" namespace="$2" package="$3" pkg="$4"
+    [[ -n ${ACPI_JINX_PACKAGE_CACHE-} ]] || return 1
+    local key cached
+    key=$(jinx_local_package_key "${namespace}" "${package}") || die "could not fingerprint ${namespace}/${package}"
+    cached="${ACPI_JINX_PACKAGE_CACHE}/${key}/${pkg##*/}"
+
+    if [[ ${action} == save ]]; then
+        mkdir -p "${cached%/*}"
+        if [[ ! -f ${cached} ]]; then
+            local temporary
+            temporary=$(mktemp "${cached}.XXXXXX") || die "could not stage ${package}"
+            if ! cp --reflink=auto --preserve=mode -- "${pkg}" "${temporary}" ||
+               ! mv -f -- "${temporary}" "${cached}"; then
+                rm -f -- "${temporary}"
+                die "could not cache ${package}"
+            fi
+        fi
+    else
+        [[ -f ${cached} ]] || return 1
+        mkdir -p "${pkg%/*}"
+        local temporary
+        temporary=$(mktemp "${pkg}.XXXXXX") || die "could not stage ${package}"
+        if ! cp --reflink=auto --preserve=mode -- "${cached}" "${temporary}" ||
+           ! mv -f -- "${temporary}" "${pkg}"; then
+            rm -f -- "${temporary}"
+            die "could not restore ${package}"
+        fi
+        local arch="${JINX_ARCH}"
+        if [[ ${namespace} == host-recipes ]]; then
+            arch="${host_arch}"
+        fi
+        if ! XBPS_ARCH=invalid XBPS_TARGET_ARCH="${arch}" xbps-rindex -a "${pkg}" -f; then
+            rm -f -- "${pkg}"
+            die "could not index cached package ${package}"
+        fi
+    fi
+}
+
+jinx_have_package() {
+    if [[ -f $3 ]]; then
+        if [[ -n ${ACPI_JINX_PACKAGE_CACHE-} ]]; then
+            jinx_local_package_cache save "$1" "$2" "$3"
+        fi
+        return 0
+    fi
+    jinx_local_package_cache restore "$1" "$2" "$3"
+}
+
 # Builds the package of recipe $2 from $1 (recipes or host-recipes).
 jinx_do_pkg() {
     local _recipes_dir="$1"
@@ -1807,6 +1926,10 @@ jinx_do_pkg() {
         -a "${_pkg}" \
         -f
 
+    if [[ -n ${ACPI_JINX_PACKAGE_CACHE-} ]]; then
+        jinx_local_package_cache save "${_recipes_dir}" "${name}" "${_pkg}"
+    fi
+
     jinx_remove_superseded_pkgs "${name}" "${build_dir}/${_kind}pkgs" "${_arch}" "${_pkg}"
 
     if [[ ${JINX_CLEAN_WORKDIRS} == yes ]]; then
@@ -1913,7 +2036,7 @@ jinx_cmd_build() {
 jinx_do_build_if_needed() {
     local pkg
     pkg="$(jinx_pkg_file "$1" "$2")"
-    if [[ ! -f ${pkg} ]]; then
+    if ! jinx_have_package "$1" "$2" "${pkg}"; then
         jinx_tracked_subshell 'jinx_do_pkg "'$1'" "'$2'"'
     fi
 }
@@ -1963,7 +2086,7 @@ jinx_do_update() {
     local pkg
     pkg="$(jinx_pkg_file recipes "$1")"
 
-    if [[ -f ${pkg} ]]; then
+    if jinx_have_package recipes "$1" "${pkg}"; then
         return 0
     fi
 
@@ -1997,7 +2120,7 @@ jinx_do_host_update() {
     local pkg
     pkg="$(jinx_pkg_file host-recipes "$1")"
 
-    if [[ -f ${pkg} ]]; then
+    if jinx_have_package host-recipes "$1" "${pkg}"; then
         return 0
     fi
 
@@ -2737,13 +2860,19 @@ jinx_cmd_install() {
     local all_files="${tmp}"
 
     local pkg_path
-    for pkg in ${pkgs_to_install}; do
+    # Imported packages can exist before their runtime dependencies have
+    # been added to this snapshot's XBPS repository.
+    local packages_to_check="${pkgs_to_install}"
+    if [[ -n ${ACPI_JINX_PACKAGE_CACHE-} ]]; then
+        packages_to_check=$(jinx_runtime_closure ${pkgs_to_install})
+    fi
+    for pkg in ${packages_to_check}; do
         pkg_path="$(jinx_pkg_file recipes "${pkg}")"
-        if [[ ! -f ${pkg_path} ]]; then
+        if ! jinx_have_package recipes "${pkg}" "${pkg_path}"; then
             if [[ $(id -u) == 0 ]]; then
                 die "a package needs to be built, but Jinx was invoked as root"
             fi
-            jinx_tracked_subshell 'jinx_do_pkg recipes "${pkg}"'
+            jinx_tracked_subshell 'jinx_do_update yes "${pkg}"'
         fi
 
         jinx_pkg_file_list "${pkg_path}" >>"${all_files}"
@@ -3104,6 +3233,9 @@ if [[ ${in_container} == false && $1 != rebuild-cache ]]; then
 fi
 
 case "$1" in
+    local-package-key)
+        jinx_local_package_key recipes "$2"
+        ;;
     internal-prepare)
         jinx_do_prepare "$2" "$3"
         ;;

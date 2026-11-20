@@ -38,6 +38,13 @@ sed -i 's|^#define PPROMPT .*|#define PPROMPT "root@localhost:~# "|' \
 sed -i 's|set_if_not ("PS1", current_user.euid == 0 ? "# " : primary_prompt);|set_if_not ("PS1", primary_prompt);|' \
     "$source/variables.c"
 
+# Export the guest shell path when Bash was started without a login environment.
+sed -i '/^set_shell_var ()/,/^}/ {
+    s|bind_variable ("SHELL", current_user.shell, 0)|bind_variable ("SHELL", "/bin/bash.elf", 0)|
+    /^#if 0$/d
+    /^#endif$/d
+}' "$source/variables.c"
+
 cd "$build/obj"
 printf 'Configuring GNU Bash\n'
 CC="sh $script --cc" CFLAGS="-O2 $app_cpu_flags -fno-pie -std=gnu17" \

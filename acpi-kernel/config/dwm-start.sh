@@ -1,1 +1,1 @@
-/x11-demo --dwm
+/bin/x11-demo --dwm
