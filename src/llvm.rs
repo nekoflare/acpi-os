@@ -1436,6 +1436,7 @@ error:
             "XFBQ" => Some(("acpi_framebuffer_info", 1)),
             "XPRW" => Some(("acpi_pixel_row", 4)),
             "XFBL" => Some(("acpi_framebuffer_blit", 3)),
+            "XFBM" => Some(("acpi_framebuffer_copy", 3)),
             "XAPC" => Some(("acpi_has_apic", 0)),
             "XCPU" => Some(("acpi_online_cpu_count", 0)),
             "XFRQ" => Some(("acpi_cpu_base_frequency_mhz", 0)),

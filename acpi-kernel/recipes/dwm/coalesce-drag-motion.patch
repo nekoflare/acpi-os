@@ -1,0 +1,41 @@
+--- a/dwm.c
++++ b/dwm.c
+@@ -1148,8 +1148,8 @@
+ 	int x, y, ocx, ocy, nx, ny;
+ 	Client *c;
+ 	Monitor *m;
+-	XEvent ev;
+-	Time lasttime = 0;
++	XEvent ev, next;
++	long dragmask = MOUSEMASK|ExposureMask|SubstructureRedirectMask;
+ 
+ 	if (!(c = selmon->sel))
+ 		return;
+@@ -1164,7 +1164,7 @@
+ 	if (!getrootptr(&x, &y))
+ 		return;
+ 	do {
+-		XMaskEvent(dpy, MOUSEMASK|ExposureMask|SubstructureRedirectMask, &ev);
++		XMaskEvent(dpy, dragmask, &ev);
+ 		switch(ev.type) {
+ 		case ConfigureRequest:
+ 		case Expose:
+@@ -1172,9 +1172,15 @@
+ 			handler[ev.type](&ev);
+ 			break;
+ 		case MotionNotify:
+-			if ((ev.xmotion.time - lasttime) <= (1000 / refreshrate))
+-				continue;
+-			lasttime = ev.xmotion.time;
++			/* Use the same event filter as the drag loop. Events
++			 * outside this mask must not hide queued motion. */
++			while (XCheckMaskEvent(dpy, dragmask, &next)) {
++				if (next.type != MotionNotify) {
++					XPutBackEvent(dpy, &next);
++					break;
++				}
++				ev = next;
++			}
+ 
+ 			nx = ocx + (ev.xmotion.x - x);
+ 			ny = ocy + (ev.xmotion.y - y);

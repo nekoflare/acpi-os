@@ -538,6 +538,13 @@ static void framebuffer_transfer(uint64_t destination, uint64_t source, uint64_t
     }
 }
 
+/* Copy between a mapped scanout page and a validated kernel source. */
+uint64_t acpi_framebuffer_copy(uint64_t destination, uint64_t source, uint64_t bytes)
+{
+    framebuffer_transfer(destination, source, bytes);
+    return 0;
+}
+
 static uint64_t shadow_address(uint64_t address)
 {
     return framebuffer_shadow + (address - (uintptr_t)console_framebuffer->address);

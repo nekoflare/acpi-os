@@ -233,7 +233,8 @@ xorg-desktop-image: $(XORG_DISK)
 
 run-xorg-uefi: private SMP_CPUS = 6
 run-xorg-uefi: xorg-desktop-image
-	flock -n "$(XORG_DISK).lock" $(QEMU) -m 8G -accel $(XORG_ACCEL) -cpu $(XORG_CPU) -smp $(SMP_CPUS) -serial stdio -monitor none -no-reboot \
+	flock -n "$(XORG_DISK).lock" $(QEMU) -m 8G -accel $(XORG_ACCEL) -cpu $(XORG_CPU) -smp $(SMP_CPUS) -monitor none -no-reboot \
+		-chardev stdio,id=serial,logfile="$(XORG_DESKTOP_BUILD)/serial.log",logappend=off -serial chardev:serial \
 		-drive if=pflash,format=raw,readonly=on,file="$(OVMF)" \
 		-drive if=none,id=system,format=raw,file="$(XORG_DISK)" \
 		-device virtio-blk-pci,drive=system,disable-modern=on,queue-size=16

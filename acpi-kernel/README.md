@@ -57,7 +57,7 @@ destination ID.
 
 The PIT runs at approximately 100 Hz. The driver measures four PIT
 periods with the LAPIC countdown timer at divide-by-16, then masks the
-PIT route and programs the periodic LAPIC timer on vector `0x21`. The
+PIT route and programs the periodic LAPIC timer on vector `0x21` at approximately 1 kHz. The
 boot check requires three LAPIC timer interrupts during setup and a
 later report that the tick counter reached 100. The kernel continues to
 wait for and acknowledge interrupts, incrementing the ASL integer
@@ -200,7 +200,7 @@ The boot CPU runs a preemptive round-robin scheduler. `SSPN (Entry, Arg)`
 queues a trusted native kernel task with a single 64-bit argument. Each
 task gets a 16 KiB allocation for its record and stack. The linked run
 queue grows with available memory and has no fixed task count. Each
-delivered LAPIC tick preempts the current task and moves it to the back
+delivered LAPIC tick (nominally every 1 ms) preempts the current task and moves it to the back
 of the queue. Returning from the entry function exits through vector
 `0x22` and allows the scheduler to reclaim the task's pages. An empty
 queue idles until the next interrupt.
@@ -264,7 +264,9 @@ Each process can open up to 16 VFS files or directories.
 `getrlimit` and `prlimit64` report the fixed `RLIMIT_NOFILE` for the
 calling process, including its three console descriptors.
 `clock_gettime` (228) supports `CLOCK_REALTIME` from the CMOS RTC and
-`CLOCK_MONOTONIC`/`CLOCK_BOOTTIME` from the LAPIC tick counter.
+`CLOCK_MONOTONIC`/`CLOCK_BOOTTIME` from the PIT-calibrated TSC.
+`getitimer` (36) and `setitimer` (38) support `ITIMER_REAL` and deliver
+`SIGALRM` when the BSP's timer checks find that the deadline has passed.
 The working directory is the VFS root. Reads with an empty
 input queue block until a keystroke arrives. `uname` reports `ASL kernel`
 as the system name and `x86_64` as the machine type. Reads and writes may return
@@ -604,6 +606,5 @@ and an extended-key flag (1 for an E0 prefix). An empty queue returns
 `EAGAIN`. The console resumes receiving characters when the device
 is released. Pixel output uses the existing `/dev/fb0` interface.
 
-`clock_gettime(CLOCK_MONOTONIC)` reports elapsed LAPIC ticks at roughly
-10 ms resolution. `nanosleep` parks the calling task on the scheduler's
-sleep queue until its deadline, rounded to timer ticks.
+`nanosleep`, `poll`, and `ppoll` use monotonic nanosecond deadlines.
+The BSP checks for expired deadlines on its nominal 1 ms LAPIC tick.

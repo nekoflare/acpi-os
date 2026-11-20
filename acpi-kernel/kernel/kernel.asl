@@ -7,6 +7,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     External (XFBQ, MethodObj)
     External (XPRW, MethodObj)
     External (XFBL, MethodObj)
+    External (XFBM, MethodObj)
     External (XAPC, MethodObj)
     External (XCPU, MethodObj)
     External (XFRQ, MethodObj)
@@ -133,6 +134,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (FBPG, Zero) // Scanout page, with page zero reserved for the console
     Name (FBOW, Zero) // Open file description owning the visible desktop
     Name (FBCK, Zero) // Probe the display only once
+    Name (FBRM, 64)
+    Name (FBRL, Buffer (512) {}) // Up to 64 packed damage rectangles
     Name (FBRQ, Buffer (16) {}) // Pixel pointer and four 16-bit rectangle coordinates
     Name (FBIO, Buffer (4096) {})
     Name (FBVS, Buffer (160) {})
@@ -680,6 +683,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (LAVC, 0x21)
     Name (KBVC, 0x23)
     Name (MSVC, 0x24)
+    Name (RSVC, 0x25)
     Name (MSBA, Zero)
     Name (MSRE, Zero)
     Name (MSFL, Zero)
@@ -1168,6 +1172,22 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     }
 
     Name (CTMH, Zero)
+    Name (TMBS, Zero) // TSC at timer startup
+    Name (TMNS, Zero) // Last monotonic timestamp, protected by the scheduler lock
+
+    Method (MNOW, 0, NotSerialized)
+    {
+        If (!CTMH || !TMBS) { Return (Zero) }
+        Local0 = XTSC ()
+        If (Local0 > TMBS)
+        {
+            Local0 -= TMBS
+            // Convert calibrated TSC cycles to ns without scaling the full count.
+            Local1 = (Local0 / CTMH) * 1000 + ((Local0 % CTMH) * 1000) / CTMH
+            If (Local1 > TMNS) { TMNS = Local1 }
+        }
+        Return (TMNS)
+    }
 
     Method (PCAL, 0, NotSerialized)
     {
@@ -1207,6 +1227,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (XIDX () == Zero)
             {
                 Increment (TICK)
+                ITWK ()
                 SWAK ()
             }
         }
@@ -1246,14 +1267,18 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         LREG (0xB0, Zero)
         LREG (0x380, Zero)
         If (!Local2) { Return (Zero) }
-        XSCT (Local2, LAVA, X2EN)
+        // The PIT is the 10 ms calibration reference; schedule every 1 ms.
+        Local4 = (Local2 + 5) / 10
+        If (!Local4 || !CTMH) { Return (Zero) }
+        XSCT (Local4, LAVA, X2EN)
 
         PNUM ("PIT routed through IOAPIC GSI=0x", Local0)
         PUTS ("")
         PNUM ("LAPIC timer calibrated ticks per PIT period=0x", Local2)
         PUTS ("")
         LREG (0x320, 0x20000 | LAVC)
-        LREG (0x380, Local2)
+        TMBS = XTSC ()
+        LREG (0x380, Local4)
 
         While (TICK < 3)
         {
@@ -1848,6 +1873,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (SQHD, Zero)
     Name (SQTL, Zero)
     Name (SACT, Zero) // Tasks executing outside the scheduler lock
+    Name (SIDL, Zero) // Idle CPUs that have not been sent a wake IPI
+    Name (SIDS, Buffer (64 * 8) {}) // LAPIC IDs by CPU index (ACPI_MAX_CPUS)
     Name (TSIZ, 0x6000)
     // Task record: next pointer, saved frame pointer, entry argument.
     Name (TSFR, 8)
@@ -1862,6 +1889,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (PRPA, 24) // Parent process record
     Name (PRST, 32) // Encoded wait status
     Name (PRWT, 40) // Blocked in wait4
+    Name (PRIT, 48) // ITIMER_REAL deadline in ns, zero when disarmed
+    Name (PRIR, 56) // ITIMER_REAL interval in ns
+    Name (ITNX, Ones) // Earliest deadline to check on the BSP
+    Name (ITBF, Buffer (32) {}) // Linux x86-64 struct itimerval
     Name (UPNM, Zero) // Boot module basename
     Name (TSFS, 40) // User FS base
     Name (TSFX, 0x1000) // Page-aligned XSAVE or FXSAVE area
@@ -3096,6 +3127,65 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (WRIT | Local2)
     }
 
+    // Copy a strided rectangle whose bounds FBPR has checked. Source
+    // addresses only advance, so rows can share the last page translation.
+    Method (FBRC, 5, NotSerialized)
+    {
+        Local0 = Zero // End of the cached user page
+        Local1 = Zero // Direct-map address of the cached page
+        While (Arg4)
+        {
+            Local2 = Arg2
+            Local3 = Arg2 + Arg3
+            While (Local2 < Local3)
+            {
+                If (Local2 >= Local0)
+                {
+                    Local4 = Local2 & ~(PGSZ - One)
+                    Local1 = UPHY (Arg0, Local4, Zero)
+                    If (!Local1) { Return (Zero) }
+                    Local0 = Local4 + PGSZ
+                }
+                Local4 = Local3
+                If (Local0 < Local4) { Local4 = Local0 }
+                XFBM (Arg1 + Local2 - Arg2,
+                    Local1 + (Local2 & (PGSZ - One)), Local4 - Local2)
+                Local2 = Local4
+            }
+            Arg1 += FBPT
+            Arg2 += FBPT
+            Decrement (Arg4)
+        }
+        Return (One)
+    }
+
+    // Decode a packed rectangle and copy it into the selected back buffer.
+    Method (FBCR, 4, NotSerialized)
+    {
+        Local0 = Arg3 & 0xFFFF
+        Local1 = (Arg3 >> 16) & 0xFFFF
+        Local2 = (Arg3 >> 32) & 0xFFFF
+        Local3 = Arg3 >> 48
+        If (Local0 >= Local2 || Local1 >= Local3 || Local2 > FBWD || Local3 > FBHT)
+        {
+            Return (Zero - 22)
+        }
+        Local4 = Local1 * FBPT + Local0 * 4
+        Local5 = (Local2 - Local0) * 4
+        If (Local5 == FBPT)
+        {
+            If (!UCPY (Arg0, Arg1 + Local4, Arg2 + Local4, (Local3 - Local1) * FBPT))
+            {
+                Return (Zero - 14)
+            }
+        }
+        ElseIf (!FBRC (Arg0, Arg1 + Local4, Arg2 + Local4, Local5, Local3 - Local1))
+        {
+            Return (Zero - 14)
+        }
+        Return (Zero)
+    }
+
     Method (FBPR, 4, NotSerialized)
     {
         If (!FBCK) { FBFP () }
@@ -3103,46 +3193,45 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (FBOW && FBOW != Arg1) { Return (Zero - 16) } // EBUSY
         Local0 = One
         If (FBPG == One) { Local0 = 2 }
+        If (Arg3 == 3)
+        {
+            If (!FBPG || FBOW != Arg1) { Return (Zero - 25) }
+            Local0 = FBPG
+        }
         Local1 = FBVA + (Local0 - One) * FBYT * FBPT
         If (Arg3)
         {
             If (!UCPY (Arg0, XADR (FBRQ), Arg2, SizeOf (FBRQ))) { Return (Zero - 14) }
-            Arg2 = XVWD (XADR (FBRQ), Ones)
-            // Check the base before adding any offsets to it.
-            If (Arg2 < PGSZ || Arg2 >= USTP || FBSZ > USTP - Arg2) { Return (Zero - 14) }
-            Local2 = XVWD (XADR (FBRQ) + 8, Ones)
-            Local3 = Local2 & 0xFFFF
-            Local4 = (Local2 >> 16) & 0xFFFF
-            Local5 = (Local2 >> 32) & 0xFFFF
-            Local6 = Local2 >> 48
-            If (Local3 >= Local5 || Local4 >= Local6 || Local5 > FBWD || Local6 > FBHT)
+            Local2 = XVWD (XADR (FBRQ), Ones)
+            If (Local2 < PGSZ || Local2 >= USTP || FBSZ > USTP - Local2)
             {
-                Return (Zero - 22)
+                Return (Zero - 14)
             }
-            Local7 = Local4 * FBPT + Local3 * 4
-            Local5 = (Local5 - Local3) * 4
-            If (Local5 == FBPT)
+
+            Local3 = XADR (FBRQ) + 8
+            Local4 = One
+            If (Arg3 >= 2)
             {
-                If (!UCPY (Arg0, Local1 + Local7, Arg2 + Local7, (Local6 - Local4) * FBPT))
+                Local4 = XVWD (Local3, Ones)
+                If (!Local4 || Local4 > FBRM) { Return (Zero - 22) }
+                Local3 = XADR (FBRL)
+                If (!UCPY (Arg0, Local3, Arg2 + SizeOf (FBRQ), Local4 * 8))
                 {
                     Return (Zero - 14)
                 }
             }
-            Else
+            While (Local4)
             {
-                While (Local4 < Local6)
-                {
-                    If (!UCPY (Arg0, Local1 + Local7, Arg2 + Local7, Local5))
-                    {
-                        Return (Zero - 14)
-                    }
-                    Local7 += FBPT
-                    Increment (Local4)
-                }
+                Local5 = FBCR (Arg0, Local1, Local2, XVWD (Local3, Ones))
+                If (Local5) { Return (Local5) }
+                Local3 += 8
+                Decrement (Local4)
             }
         }
         ElseIf (!UCPY (Arg0, Local1, Arg2, FBSZ)) { Return (Zero - 14) }
 
+        // The visible page already has this scanout offset.
+        If (Arg3 == 3) { Return (Zero) }
         Local2 = Local0 * FBYT
         VBIX = 9
         VBDT = Local2
@@ -3196,11 +3285,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Return (Zero - 25) // ENOTTY
         }
-        // Private fbdev requests. 46F0 takes packed pixels, 46F1 takes a
+        // Private fbdev requests. 46F2 flips a rectangle list, 46F3 updates it in place.
+        // 46F0 takes packed pixels, 46F1 takes a
         // pointer and an exclusive-end rectangle for the next scanout page.
-        If (Arg2 == 0x46F0 || Arg2 == 0x46F1)
+        If (Arg2 >= 0x46F0 && Arg2 <= 0x46F3)
         {
-            Return (FBPR (Arg0, Local0, Arg3, Arg2 == 0x46F1))
+            Return (FBPR (Arg0, Local0, Arg3, Arg2 - 0x46F0))
         }
         If (Arg2 == 0x4600)
         {
@@ -3604,7 +3694,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     }
 
     Name (SLHD, Zero)
-    Name (TSDL, 704) // Wake tick, immediately after the descriptor array
+    Name (TSDL, 704) // Monotonic wake deadline in ns, immediately after the descriptor array
     Name (TMVL, Buffer (16) {})
 
     Method (RCMR, 1, NotSerialized)
@@ -3691,9 +3781,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     // Wake elapsed nanosleeps. The scheduler owns this ordered list.
     Method (SWAK, 0, NotSerialized)
     {
+        If (!SLHD) { Return () }
+        Local1 = MNOW ()
         While (SLHD)
         {
-            If (XVWD (SLHD + TSDL, Ones) > TICK) { Break }
+            If (XVWD (SLHD + TSDL, Ones) > Local1) { Break }
             Local0 = SLHD
             SLHD = XVWD (Local0, Ones)
             SQAP (Local0)
@@ -3705,13 +3797,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (!UCPY (Arg0, XADR (TMVL), Arg1, 16)) { Return (Zero - 14) }
         Local0 = XVWD (XADR (TMVL), Ones)
         Local1 = XVWD (XADR (TMVL) + 8, Ones)
-        If (Local0 > 0x7FFFFFFFFFFFFFFF / 100 || Local1 >= 1000000000)
+        If (Local0 > 0x7FFFFFFFFFFFFFFF / 1000000000 || Local1 >= 1000000000)
         {
             Return (Zero - 22)
         }
         If (!(Local0 || Local1)) { Return (Zero) }
-        // Round up and allow for the partial tick at the start.
-        Local2 = TICK + Local0 * 100 + (Local1 + 9999999) / 10000000 + One
+        Local2 = MNOW () + Local0 * 1000000000 + Local1
         XSTQ (Arg0 + TSDL, Local2)
         Local3 = Zero
         Local4 = SLHD
@@ -3785,13 +3876,15 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     {
         Local0 = Zero
         Local1 = PLHD
+        If (!Local1) { Return () }
+        Local5 = MNOW ()
         While (Local1)
         {
             Local2 = XVWD (Local1, Ones)
             Local3 = XVWD (Local1 + TSFR, Ones)
             Local4 = PSCN (Local1, XVWD (Local3 + 8 * 8, Ones),
                 XVWD (Local3 + 9 * 8, Ones))
-            If (Local4 || TICK >= XVWD (Local1 + TSDL, Ones))
+            If (Local4 || Local5 >= XVWD (Local1 + TSDL, Ones))
             {
                 If (Local0) { XSTQ (Local0, Local2) }
                 Else { PLHD = Local2 }
@@ -3808,7 +3901,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     {
         Local0 = PSCN (Arg0, XVWD (Arg1 + 8 * 8, Ones),
             XVWD (Arg1 + 9 * 8, Ones))
-        If (Local0 || Arg2 <= TICK) { Return (Local0) }
+        If (Local0 || Arg2 <= MNOW ()) { Return (Local0) }
         XSTQ (Arg0 + TSDL, Arg2)
         XSTQ (Arg0, PLHD)
         PLHD = Arg0
@@ -3825,15 +3918,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (!UCPY (Arg0, XADR (TMVL), Local0, 16)) { Return (Zero - 14) }
             Local2 = XVWD (XADR (TMVL), Ones)
             Local3 = XVWD (XADR (TMVL) + 8, Ones)
-            If (Local2 > 0x7FFFFFFFFFFFFFFF / 100 || Local3 >= 1000000000)
+            If (Local2 > 0x7FFFFFFFFFFFFFFF / 1000000000 || Local3 >= 1000000000)
             {
                 Return (Zero - 22)
             }
-            Local1 = TICK
-            If (Local2 || Local3)
-            {
-                Local1 += Local2 * 100 + (Local3 + 9999999) / 10000000 + One
-            }
+            Local1 = MNOW () + Local2 * 1000000000 + Local3
         }
         Return (SYPL (Arg0, Arg1, Local1))
     }
@@ -4701,6 +4790,91 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (One)
     }
 
+    // Queue SIGALRM and advance periodic timers from their original deadline.
+    Method (ITWK, 0, NotSerialized)
+    {
+        If (ITNX == Ones) { Return () }
+        Local0 = MNOW ()
+        If (Local0 < ITNX) { Return () }
+        ITNX = Ones
+        Local1 = PRHD
+        While (Local1)
+        {
+            Local2 = XVWD (Local1 + PRTK, Ones)
+            Local3 = XVWD (Local1 + PRIT, Ones)
+            If (Local2 && Local3)
+            {
+                If (Local3 <= Local0)
+                {
+                    Local4 = XVWD (Local1 + PRIR, Ones)
+                    Local5 = Zero
+                    If (Local4) { Local5 = Local0 + Local4 - ((Local0 - Local3) % Local4) }
+                    Local3 = Local5
+                    XSTQ (Local1 + PRIT, Local3)
+                    SGQU (Local2, 14)
+                    If (SGPN (Local2)) { SGWK (Local2) }
+                }
+                If (Local3 && Local3 < ITNX) { ITNX = Local3 }
+            }
+            Local1 = XVWD (Local1, Ones)
+        }
+    }
+
+    Method (ITNS, 1, NotSerialized)
+    {
+        Local0 = XVWD (Arg0, Ones)
+        Local1 = XVWD (Arg0 + 8, Ones)
+        If (Local0 > 0x7FFFFFFFFFFFFFFF / 1000000000 || Local1 >= 1000000)
+        {
+            Return (Ones)
+        }
+        Return (Local0 * 1000000000 + Local1 * 1000)
+    }
+
+    Method (ITTV, 2, NotSerialized)
+    {
+        Local0 = (Arg1 + 999) / 1000
+        XSTQ (Arg0, Local0 / 1000000)
+        XSTQ (Arg0 + 8, Local0 % 1000000)
+    }
+
+    // getitimer and setitimer support ITIMER_REAL.
+    Method (SYIT, 5, NotSerialized)
+    {
+        If (Arg1) { Return (Zero - 22) }
+        Local0 = XVWD (Arg0 + TSPR, Ones)
+        Local1 = Zero
+        Local2 = Zero
+        If (Arg4 && Arg2)
+        {
+            If (!UCPY (Arg0, XADR (ITBF), Arg2, 32)) { Return (Zero - 14) }
+            Local1 = ITNS (XADR (ITBF))
+            Local2 = ITNS (XADR (ITBF) + 16)
+            If (Local1 == Ones || Local2 == Ones) { Return (Zero - 22) }
+        }
+        Local3 = MNOW ()
+        If (Arg3 || !Arg4)
+        {
+            Local4 = XVWD (Local0 + PRIT, Ones)
+            Local5 = Zero
+            If (Local4 > Local3) { Local5 = Local4 - Local3 }
+            ITTV (XADR (ITBF), XVWD (Local0 + PRIR, Ones))
+            ITTV (XADR (ITBF) + 16, Local5)
+            If (!UCOP (Arg0, Arg3, XADR (ITBF), 32)) { Return (Zero - 14) }
+        }
+        If (Arg4)
+        {
+            If (Local2)
+            {
+                Local2 += Local3
+                If (Local2 < ITNX) { ITNX = Local2 }
+            }
+            XSTQ (Local0 + PRIT, Local2)
+            XSTQ (Local0 + PRIR, Local1)
+        }
+        Return (Zero)
+    }
+
     Method (SYSC, 1, NotSerialized)
     {
         Local0 = XVWD (Arg0 + TSFR, Ones)
@@ -4724,7 +4898,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 PNUM (" exited status=0x", Local3)
                 PUTS ("")
             }
-            Return (Zero)
+            Return (2) // Task freed by PREX
         }
         Local3 = Zero - 38 // ENOSYS
         If (!Local1)
@@ -4785,8 +4959,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Local5 = Ones
             If (!(Local4 >> 31))
             {
-                Local5 = TICK
-                If (Local4) { Local5 += (Local4 + 9) / 10 + One }
+                Local5 = MNOW () + Local4 * 1000000
             }
             Local3 = SYPL (Arg0, Local0, Local5)
             If (Local3 == Ones) { Return (Zero) }
@@ -4869,6 +5042,15 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 Return (Zero)
             }
         }
+        ElseIf (Local1 == 36) // getitimer
+        {
+            Local3 = SYIT (Arg0, Local2 & 0xFFFFFFFF, Zero, XVWD (Local0 + 9 * 8, Ones), Zero)
+        }
+        ElseIf (Local1 == 38) // setitimer
+        {
+            Local3 = SYIT (Arg0, Local2 & 0xFFFFFFFF, XVWD (Local0 + 9 * 8, Ones),
+                XVWD (Local0 + 12 * 8, Ones), One)
+        }
         ElseIf (Local1 == 228) // clock_gettime
         {
             Local3 = Zero - 22
@@ -4890,8 +5072,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             }
             ElseIf (Local4 == One || Local4 == 7) // MONOTONIC and BOOTTIME
             {
-                XSTQ (XADR (TMVL), TICK / 100)
-                XSTQ (XADR (TMVL) + 8, (TICK % 100) * 10000000)
+                Local5 = MNOW ()
+                XSTQ (XADR (TMVL), Local5 / 1000000000)
+                XSTQ (XADR (TMVL) + 8, Local5 % 1000000000)
                 Local3 = Zero - 14
                 If (UCOP (Arg0, XVWD (Local0 + 9 * 8, Ones), XADR (TMVL), 16))
                 {
@@ -5152,6 +5335,23 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (SQTL) { XVWD (SQTL, Arg0) }
         Else { SQHD = Arg0 }
         SQTL = Arg0
+        If (SIDL)
+        {
+            Local0 = FindSetRightBit (SIDL) - One
+            SIDL &= ~(One << Local0)
+            Local1 = XVWD (XADR (SIDS) + Local0 * 8, Ones)
+            If (X2EN)
+            {
+                LREG (0x300, (Local1 << 32) | RSVC)
+            }
+            Else
+            {
+                // Wait for the previous xAPIC ICR write to finish.
+                While (LREG (0x300, Ones) & 0x1000) {}
+                LREG (0x310, Local1 << 24)
+                LREG (0x300, RSVC)
+            }
+        }
     }
 
     Method (STAL, 0, NotSerialized)
@@ -5295,9 +5495,18 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local0 = SQHD
         If (!Local0)
         {
+            // Publish idle under the queue lock. IF stays clear until
+            // XWAI's sti/hlt, so an early IPI remains pending.
+            Local5 = XIDX ()
+            Local6 = LREG (0x20, Ones)
+            If (!X2EN) { Local6 >>= 24 }
+            XVWD (XADR (SIDS) + Local5 * 8, Local6)
+            Local5 = One << Local5
+            SIDL |= Local5
             XSUL ()
             Local1 = XWAI (Zero)
             XSLK ()
+            SIDL &= ~Local5
             TACK (Local1)
             Return (Zero)
         }
@@ -5342,7 +5551,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 PNUM (" RIP=0x", XFRP ())
                 PUTS ("")
             }
-            If (Local1 == PIVC || Local1 == KBVC || Local1 == MSVC)
+            If (Local1 == PIVC || Local1 == KBVC || Local1 == MSVC || Local1 == RSVC)
             {
                 TACK (Local1)
                 Continue
@@ -5359,11 +5568,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 Local5 = SYSC (Local0)
                 SKNT ()
+                If (Local5 == 2) { Return (Zero) }
                 If (Local5)
                 {
                     Local4 = XVWD (Local0 + TSCR, Ones)
                     Continue
                 }
+                If (SGPN (Local0)) { SGWK (Local0) }
                 Return (Zero)
             }
             Break
@@ -5456,10 +5667,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (!SSPN (SMTA, Local1)) { Break }
             Increment (Local2)
         }
-        Local4 = TICK + 200
+        Local4 = MNOW () + 2000000000
         While (XVWD (Local1 + 16, Ones) < Local2)
         {
-            If (TICK >= Local4) { XSUL () Return (Zero) }
+            If (MNOW () >= Local4) { XSUL () Return (Zero) }
             XSUL ()
             XSTP ()
             XSLK ()

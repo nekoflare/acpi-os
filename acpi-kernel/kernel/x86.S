@@ -468,7 +468,7 @@ acpi_vector_entries:
 .rept 256
     .if vector == 3
         jmp acpi_breakpoint_entry
-    .elseif vector == 0x20 || vector == 0x21 || vector == 0x23 || vector == 0x24
+    .elseif vector == 0x20 || vector == 0x21 || vector == 0x23 || vector == 0x24 || vector == 0x25
         /* Interrupt gates clear IF. Leave the EOI to the ASL dispatcher. */
         pushq $vector
         jmp .Ldevice_interrupt

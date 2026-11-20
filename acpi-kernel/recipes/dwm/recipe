@@ -8,6 +8,7 @@ cross_compile=yes
 build() {
     copy_source
     patch -d src -p1 < "$recipe_dir/ctrl-alt-t-terminal.patch"
+    patch -d src -p1 < "$recipe_dir/coalesce-drag-motion.patch"
     musl_env
     make -C src -j"$parallelism" CC="$CC" XINERAMAFLAGS= XINERAMALIBS= \
         INCS="$(pkg-config --cflags x11 xft fontconfig)" \
