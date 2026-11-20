@@ -528,6 +528,14 @@ struct MethodEmitter<'a> {
     has_division: bool,
     has_type_check: bool,
     has_table_check: bool,
+    /// Whether the method body can allocate runtime objects (buffers, packages,
+    /// strings, fields, regions). Non-allocating methods skip the per-call
+    /// mark-and-sweep `aml_objects_collect`, which is the dominant per-invocation
+    /// runtime cost for pure-integer methods.
+    allocates: bool,
+    /// Whether the method body ever acquires a mutex. If not, the per-call
+    /// `aml_release_mutexes` walk is skipped (it can only observe an empty list).
+    acquires_mutex: bool,
 }
 
 // Runtime operations outside the AML opcode space.
@@ -637,6 +645,8 @@ impl<'a> MethodEmitter<'a> {
             has_division: false,
             has_type_check: false,
             has_table_check: false,
+            allocates: false,
+            acquires_mutex: false,
             local_objects: HashMap::new(),
             local_regions: BTreeSet::new(),
             referenced_locals: 0,
@@ -687,26 +697,19 @@ failed:
   ret i32 %status
 invalid:
   ret i32 3
-}}
-
-define i32 @aml_value_{name}(ptr %ctx, ptr %result{args}) {{
-entry:
-  %missing.ctx = icmp eq ptr %ctx, null
-  %missing.result = icmp eq ptr %result, null
-  %invalid = or i1 %missing.ctx, %missing.result
-  br i1 %invalid, label %error, label %invoke
-invoke:
-  call void @aml_objects_collect(ptr %ctx)
-  store i64 {budget}, ptr %ctx"#,
-            budget = if self.bindings.freestanding { -1 } else { 100000 }
+}}"#
         )
         .unwrap();
+        // Build the argument-preparation instructions (masking in 32-bit mode
+        // and packing each integer into an %aml.value) into a string so they
+        // land inside the aml_value_<name> body rather than between functions.
+        let mut arg_prep = String::new();
         let mut operands = String::new();
         let mut parameters = String::new();
         for index in 0..method.arg_count() {
             let value = if matches!(self.width, IntegerWidth::Bits32) {
                 writeln!(
-                    module,
+                    arg_prep,
                     "  %arg{index}.masked = and i64 %arg{index}, 4294967295"
                 )
                 .unwrap();
@@ -715,28 +718,65 @@ invoke:
                 format!("%arg{index}")
             };
             writeln!(
-                module,
+                arg_prep,
                 "  %arg{index}.value = insertvalue %aml.value zeroinitializer, i64 {value}, 0"
             )
             .unwrap();
             write!(operands, ", %aml.value %arg{index}.value").unwrap();
             write!(parameters, ", %aml.value %arg{index}").unwrap();
         }
+        // Non-allocating methods never create runtime objects, so the
+        // mark-and-sweep GC at entry is a no-op for their reachability set and
+        // is skipped. Methods that never acquire a mutex skip the per-call
+        // held-mutex walk on exit. Both are the dominant per-invocation costs
+        // for pure-integer methods.
+        let collect = if self.allocates {
+            "  call void @aml_objects_collect(ptr %ctx)\n"
+        } else {
+            ""
+        };
+        let release = if self.acquires_mutex {
+            "  call void @aml_release_mutexes(ptr %ctx)\n"
+        } else {
+            ""
+        };
+        // Fast path the integer export: instead of routing every return
+        // through the runtime Export dispatch, inspect the result's type tag.
+        // Integer results (the common case) are stored directly; non-integer
+        // results fall back to aml_object_op(Export) so references, packages
+        // and buffers are still cloned out of the internal slot correctly.
         writeln!(
             module,
-            r#"  %internal.result = alloca %aml.value
+            r#"define i32 @aml_value_{name}(ptr %ctx, ptr %result{args}) {{
+entry:
+  %missing.ctx = icmp eq ptr %ctx, null
+  %missing.result = icmp eq ptr %result, null
+  %invalid = or i1 %missing.ctx, %missing.result
+  br i1 %invalid, label %error, label %invoke
+invoke:
+{collect}  store i64 {budget}, ptr %ctx
+{arg_prep}  %internal.result = alloca %aml.value
   %status = call i32 @aml.impl.{name}(ptr %ctx, ptr %internal.result, i32 1{operands})
-  call void @aml_release_mutexes(ptr %ctx)
-  %ok = icmp eq i32 %status, 0
+{release}  %ok = icmp eq i32 %status, 0
   br i1 %ok, label %export, label %failed
 export:
+  %result.type = getelementptr inbounds %aml.value, ptr %internal.result, i32 0, i32 2
+  %result.tag = load i64, ptr %result.type
+  %is.integer = icmp eq i64 %result.tag, 0
+  br i1 %is.integer, label %export.integer, label %export.object
+export.integer:
+  %result.value = load %aml.value, ptr %internal.result
+  store %aml.value %result.value, ptr %result
+  ret i32 0
+export.object:
   %export.status = call i32 @aml_object_op(ptr %ctx, ptr %result, i32 {export_op}, ptr %internal.result, ptr null, ptr null, i64 0)
   ret i32 %export.status
 failed:
   ret i32 %status
 error:
   ret i32 3
-}}"#
+}}"#,
+            budget = if self.bindings.freestanding { -1 } else { 100000 }
         )
         .unwrap();
         let implementation = format!("aml.impl.{name}");
@@ -1229,6 +1269,25 @@ error:
     }
 
     fn object_into(&mut self, op: u32, values: &[&str], extra: u64, output: &str) {
+        // Track whether this method can allocate runtime objects or acquire
+        // mutexes. Non-allocating, mutex-free methods skip the per-call GC and
+        // mutex-release walks in the outer wrapper.
+        match op {
+            op if op == ObjectOp::Buffer as u32
+                || op == ObjectOp::String as u32
+                || op == ObjectOp::Package as u32
+                || op == ObjectOp::FieldCreate as u32
+                || op == ObjectOp::RegionCreate as u32
+                || op == ObjectOp::RegionFieldCreate as u32
+                || op == ObjectOp::NamespaceRef as u32 =>
+            {
+                self.allocates = true;
+            }
+            op if op == ObjectOp::MutexAcquire as u32 => {
+                self.acquires_mutex = true;
+            }
+            _ => {}
+        }
         let mut pointers = ["null"; 3];
         for ((value, slot), pointer) in values
             .iter()
