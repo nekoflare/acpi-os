@@ -1,0 +1,17 @@
+version=3.1.1
+revision=1
+cross_compile=yes
+tarball_url=https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.1/libjpeg-turbo-3.1.1.tar.gz
+tarball_sha256=aadc97ea91f6ef078b0ae3a62bba69e008d9a7db19b34e4ac973b19b71b4217c
+builddeps=musl
+imagedeps="cmake ninja-build"
+
+configure() {
+    musl_env
+    cmake -S "$source_dir" -B obj -G Ninja -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=Release \
+        -DENABLE_SHARED=FALSE -DENABLE_STATIC=TRUE -DWITH_SIMD=0 \
+        -DWITH_TURBOJPEG=FALSE
+}
+build() { cmake --build obj -j"$parallelism"; }
+package() { DESTDIR="$dest_dir" cmake --install obj; }

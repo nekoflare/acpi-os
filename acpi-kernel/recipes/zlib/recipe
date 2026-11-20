@@ -12,4 +12,7 @@ configure() (
     ./configure --prefix=/usr --static
 )
 build() { static_build; }
-package() { autoconf_package; }
+package() {
+    autoconf_package
+    install -Dm644 "$recipe_dir/zlib.pc" "$dest_dir/usr/lib/pkgconfig/zlib.pc"
+}

@@ -1,0 +1,11 @@
+version=1.6.50
+revision=1
+cross_compile=yes
+tarball_url=https://downloads.sourceforge.net/project/libpng/libpng16/1.6.50/libpng-1.6.50.tar.xz
+tarball_sha256=4df396518620a7aa3651443e87d1b2862e4e88cad135a8b93423e01706232307
+builddeps=musl
+deps=zlib
+
+configure() { static_configure; }
+build() { static_build; }
+package() { autoconf_package; }

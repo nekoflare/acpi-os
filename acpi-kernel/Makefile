@@ -186,15 +186,18 @@ $(eval $(call jinx_artifact,$(XORG_LS),busybox-ls,usr/bin/busybox-ls))
 
 XORG_DISK := $(XORG_DESKTOP_BUILD)/acpi-xorg.img
 XORG_APPS := $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/Xvfb \
-	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(XORG_BUILD)/xsetroot $(XORG_BUILD)/date $(XORG_BUILD)/sleep $(ST_BUILD)/st \
+	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(XORG_BUILD)/xsetroot $(XORG_BUILD)/xwallpaper $(XORG_BUILD)/date $(XORG_BUILD)/sleep $(ST_BUILD)/st \
 	$(XORG_BUILD)/nsxiv $(XORG_BUILD)/nano $(XORG_BUILD)/vim \
 	$(BASH_BUILD)/bash.elf $(BASH_BUILD)/fastfetch
 XORG_DATA := $(XORG_BUILD)/xorg-default.xkm config/dwm-fonts.conf $(wildcard initramfs/*)
+XORG_WALLPAPER := astra_and_fable_kissing.png
+XORG_WALLPAPER_FILE := usr/share/wallpapers/astra_and_fable_kissing.png=$(XORG_WALLPAPER)
 
 $(eval $(call jinx_artifact,$(XORG_BUILD)/nsxiv,nsxiv,usr/bin/nsxiv))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/nano,nano,usr/bin/nano))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/vim,vim,usr/bin/vim))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/xsetroot,xsetroot,usr/bin/xsetroot))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/xwallpaper,xwallpaper,usr/bin/xwallpaper))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/date,date,usr/bin/date))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/sleep,sleep,usr/bin/sleep))
 XORG_TERMINFO := $(XORG_BUILD)/terminfo/s/st-256color
@@ -220,9 +223,9 @@ $(XORG_DESKTOP_BUILD)/kernel.elf: kernel-build-force
 endif
 
 $(XORG_DISK): scripts/pack-xorg-disk.sh $(XORG_DESKTOP_BUILD)/kernel.elf $(LIMINE_DIR)/BOOTX64.EFI \
-	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_DATA) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) catflare.gif Makefile
+	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_DATA) $(XORG_WALLPAPER) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) catflare.gif Makefile
 	sh $< "$@" "$(XORG_DESKTOP_BUILD)/kernel.elf" "$(LIMINE_DIR)/BOOTX64.EFI" \
-		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_DATA) usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
+		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_DATA) $(XORG_WALLPAPER_FILE) usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
 		bin/ls=$(XORG_LS) $(foreach cmd,$(XORG_FS_COMMANDS),bin/$(cmd)=$(XORG_FS_TOOLS)) \
 		fonts/dwm-font.ttf="$(XORG_FONT)" catflare.gif=catflare.gif
 

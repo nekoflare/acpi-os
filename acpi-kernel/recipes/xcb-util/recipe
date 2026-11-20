@@ -1,0 +1,11 @@
+version=0.4.1
+revision=1
+cross_compile=yes
+tarball_url=https://www.x.org/releases/individual/lib/xcb-util-0.4.1.tar.xz
+tarball_sha256=5abe3bbbd8e54f0fa3ec945291b7e8fa8cfd3cccc43718f8758430f94126e512
+builddeps=musl
+deps="libxcb xorgproto"
+
+configure() { static_configure; }
+build() { static_build; }
+package() { autoconf_package; }

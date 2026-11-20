@@ -1,36 +1,79 @@
 --- a/src/detection/cpu/cpu_linux.c
 +++ b/src/detection/cpu/cpu_linux.c
-@@ -13,6 +13,10 @@
- #include <unistd.h>
- #include <dirent.h>
+@@ -15,4 +15,8 @@
  #include <fcntl.h>
-+
+
 +#ifdef FF_ACPI_MLIBC
 +#include <cpuid.h>
 +#endif
- 
++
  #define FF_CPUINFO_PATH "/proc/cpuinfo"
- 
-@@ -799,7 +803,22 @@
+
+@@ -797,8 +801,33 @@
+ }
+
++#ifdef FF_ACPI_MLIBC
++static void detectCpuBrand(FFCPUResult* cpu) {
++    unsigned int brand[12];
++    for (unsigned int i = 0; i < 3; ++i) {
++        unsigned int* regs = &brand[i * 4];
++        if (!__get_cpuid(0x80000002 + i, &regs[0], &regs[1], &regs[2], &regs[3])) {
++            return;
++        }
++    }
++    const char* model = (const char*) brand;
++    ffStrbufSetNS(&cpu->name, (uint32_t) strnlen(model, sizeof(brand)), model);
++    ffStrbufTrim(&cpu->name, ' ');
++}
++#endif
++
  [[maybe_unused]] static const char* detectCPUX86(const FFCPUOptions* options, FFCPUResult* cpu) {
      FF_STRBUF_AUTO_DESTROY cpuinfo = ffStrbufCreateA(PROC_FILE_BUFFSIZ);
      if (!ffReadFileBuffer(FF_CPUINFO_PATH, &cpuinfo) || cpuinfo.length == 0) {
 +#ifdef FF_ACPI_MLIBC
 +        // The ASL kernel may boot without a mounted /proc/cpuinfo.
-+        unsigned int brand[12];
-+        for (unsigned int i = 0; i < 3; ++i) {
-+            unsigned int* regs = &brand[i * 4];
-+            if (!__get_cpuid(0x80000002 + i, &regs[0], &regs[1], &regs[2], &regs[3])) {
-+                return "CPUID does not expose a CPU model";
-+            }
++        detectCpuBrand(cpu);
++        ffCPUDetectByCpuid(cpu);
++        if (cpu->name.length == 0) {
++            return "CPUID does not expose a CPU model";
 +        }
-+        const char* model = (const char*) brand;
-+        ffStrbufSetNS(&cpu->name, (uint32_t) strnlen(model, sizeof(brand)), model);
-+        ffStrbufTrim(&cpu->name, ' ');
 +        return nullptr;
 +#else
          return "ffReadFileBuffer(\"" FF_CPUINFO_PATH "\") failed";
 +#endif
      }
- 
-     FF_STRBUF_AUTO_DESTROY physicalCoresBuffer = ffStrbufCreate();
+
+@@ -810,6 +839,25 @@
+     }
+
++#ifdef FF_ACPI_MLIBC
++    if (cpu->name.length == 0)
++        detectCpuBrand(cpu);
++
++    // The ACPI kernel exposes one cpuinfo block for each online processor.
++    // mlibc's process-count helpers do not have a kernel CPU-count interface.
++    uint16_t onlineProcessors = 0;
++    static const char processorPrefix[] = "processor\t:";
++    for (uint32_t i = 0; i + sizeof(processorPrefix) - 1 <= cpuinfo.length; ++i) {
++        if ((i == 0 || cpuinfo.chars[i - 1] == '\n') &&
++            memcmp(cpuinfo.chars + i, processorPrefix, sizeof(processorPrefix) - 1) == 0) {
++            if (onlineProcessors != UINT16_MAX)
++                ++onlineProcessors;
++            i += sizeof(processorPrefix) - 2;
++        }
++    }
++    cpu->coresLogical = cpu->coresOnline = onlineProcessors;
++#else
+     cpu->coresLogical = (uint16_t) get_nprocs_conf();
+     cpu->coresOnline = (uint16_t) get_nprocs();
++#endif
+     cpu->packages = getPackageCount(&cpuinfo);
+     cpu->coresPhysical = (uint16_t) ffStrbufToUInt(&physicalCoresBuffer, 0); // physical cores in single package
+@@ -820,5 +868,6 @@
+     // Ref https://github.com/fastfetch-cli/fastfetch/issues/1194#issuecomment-2295058252
+     ffCPUDetectByCpuid(cpu);
+-    if (!detectFrequency(cpu, options) || cpu->frequencyBase == 0) {
++    detectFrequency(cpu, options);
++    if (cpu->frequencyBase == 0) {
+         cpu->frequencyBase = (uint32_t) ffStrbufToUInt(&cpuMHz, 0);
+     }

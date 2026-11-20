@@ -9,6 +9,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     External (XFBL, MethodObj)
     External (XAPC, MethodObj)
     External (XCPU, MethodObj)
+    External (XFRQ, MethodObj)
+    External (XTSC, MethodObj)
     External (XIDX, MethodObj)
     External (XFLT, MethodObj)
     External (XFRP, MethodObj)
@@ -1165,6 +1167,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (One)
     }
 
+    Name (CTMH, Zero)
+
     Method (PCAL, 0, NotSerialized)
     {
         // PIT channel 0 mode 2, divisor 11932, roughly 100 Hz.
@@ -1180,6 +1184,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         // Divide LAPIC clock by 16 and measure four PIT periods.
         LREG (0x3E0, 3)
         LREG (0x380, 0xFFFFFFFF)
+        Local3 = XTSC ()
         Local0 = Zero
         While (Local0 < 4)
         {
@@ -1187,6 +1192,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (XWAI (TWAI) != PIVC) { Return (Zero) }
             Increment (Local0)
         }
+        // Four PIT periods at about 100 Hz give the TSC reference rate in MHz.
+        CTMH = (XTSC () - Local3 + 20000) / 40000
         Local1 = LREG (0x390, Ones)
         If (!Local1 || Local1 == 0xFFFFFFFF) { Return (Zero) }
         Return ((0xFFFFFFFF - Local1 + 2) / 4)
@@ -5581,11 +5588,48 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (MLIN (Local1, MAVL, Local0) - Arg0)
     }
 
+    // Reserve space for 64 records, including a 64-bit frequency value.
+    Name (CINF, Buffer (3072) {})
+    Name (CPRN, Buffer () {0x70, 0x72, 0x6F, 0x63, 0x65, 0x73, 0x73, 0x6F, 0x72, 0x09, 0x3A, 0x20})
+    Name (CMHZ, Buffer () {0x63, 0x70, 0x75, 0x20, 0x4D, 0x48, 0x7A, 0x09, 0x09, 0x3A, 0x20})
+
+    Method (CDEC, 2, NotSerialized)
+    {
+        Local0 = One
+        While (Local0 <= Arg1 / 10) { Local0 *= 10 }
+        While (Local0)
+        {
+            XSTB (Arg0, 0x30 + (Arg1 / Local0) % 10)
+            Increment (Arg0)
+            Local0 /= 10
+        }
+        Return (Arg0)
+    }
+
     Method (CGEN, 1, NotSerialized)
     {
-        // Fastfetch's Linux backend parses these standard cpuinfo properties.
         Local0 = Arg0
-        Local0 = XCPY (Local0, XADR ("processor\t: 0\nvendor_id\t: GenuineIntel\nmodel name\t: QEMU Virtual CPU\n\n"), 76)
+        Local1 = XCPU ()
+        Local2 = XFRQ ()
+        If (!Local2) { Local2 = CTMH }
+        Local3 = Zero
+        While (Local3 < Local1)
+        {
+            XMOV (Local0, XADR (CPRN), SizeOf (CPRN))
+            Local0 = CDEC (Local0 + SizeOf (CPRN), Local3)
+            XSTB (Local0, 0x0A)
+            Increment (Local0)
+            If (Local2)
+            {
+                XMOV (Local0, XADR (CMHZ), SizeOf (CMHZ))
+                Local0 = CDEC (Local0 + SizeOf (CMHZ), Local2)
+                XSTB (Local0, 0x0A)
+                Increment (Local0)
+            }
+            XSTB (Local0, 0x0A)
+            Increment (Local0)
+            Increment (Local3)
+        }
         Return (Local0 - Arg0)
     }
 
@@ -5888,6 +5932,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 Return (Zero)
             }
+            Local1 = VNOD (Local0, XADR (CINM), SizeOf (CINM), 8)
+            If (!Local1) { Return (Zero) }
+            XSTQ (Local1 + VNDA, XADR (CINF))
+            XSTQ (Local1 + VNSZ, CGEN (XADR (CINF)))
             Local2 = Zero
             If (FSIN () && !XBYT (Arg3))
             {

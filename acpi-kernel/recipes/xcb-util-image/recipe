@@ -1,0 +1,17 @@
+version=0.4.1
+revision=1
+cross_compile=yes
+tarball_url=https://www.x.org/releases/individual/lib/xcb-util-image-0.4.1.tar.xz
+tarball_sha256=ccad8ee5dadb1271fd4727ad14d9bd77a64e505608766c4e98267d9aede40d3d
+builddeps=musl
+deps="libxcb xcb-util"
+
+configure() { static_configure; }
+build() {
+    musl_env
+    make -C src/image -j"$parallelism"
+}
+package() {
+    musl_env
+    make -C src/image DESTDIR="$dest_dir" install
+}

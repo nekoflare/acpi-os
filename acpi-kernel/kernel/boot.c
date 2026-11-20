@@ -182,6 +182,22 @@ uint64_t acpi_online_cpu_count(void)
     return 1 + __atomic_load_n(&secondary_cpus_online, __ATOMIC_ACQUIRE);
 }
 
+/* CPUID leaf 0x16 reports the processor's advertised base frequency in MHz.
+ * A zero result means the CPU does not provide that information. */
+uint64_t acpi_cpu_base_frequency_mhz(void)
+{
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(0), "c"(0));
+    if (eax < 0x16)
+        return 0;
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(0x16), "c"(0));
+    return eax & 0xFFFF;
+}
+
 uint64_t acpi_current_cpu_id(void)
 {
     struct acpi_cpu_local *local = current_cpu();
@@ -836,7 +852,7 @@ uint64_t acpi_apic_msr(uint64_t index, uint64_t value)
     return 0;
 }
 
-static uint64_t read_tsc(void)
+uint64_t acpi_read_tsc(void)
 {
     uint32_t low, high;
     __asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
@@ -850,9 +866,9 @@ uint64_t acpi_wait_irq(uint64_t cycles)
     if (!local) return 0;
     local->irq_pending = 0;
     if (cycles) {
-        uint64_t start = read_tsc();
+        uint64_t start = acpi_read_tsc();
         __asm__ volatile("sti" : : : "memory");
-        while (!local->irq_pending && read_tsc() - start < cycles)
+        while (!local->irq_pending && acpi_read_tsc() - start < cycles)
             __asm__ volatile("pause");
         __asm__ volatile("cli" : : : "memory");
     } else {

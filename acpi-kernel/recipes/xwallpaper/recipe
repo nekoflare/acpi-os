@@ -1,0 +1,14 @@
+version=0.7.6
+revision=1
+cross_compile=yes
+tarball_url=https://github.com/stoeckmann/xwallpaper/releases/download/v0.7.6/xwallpaper-0.7.6.tar.xz
+tarball_sha256=bd1bae9d5d3a06b0ae9b7581f37acb18adb72d7a26ed0566c565b3ef2a9fb1d8
+builddeps="musl pixman xcb-util xcb-util-image libpng zlib libjpeg-turbo"
+
+configure() { static_configure --without-randr; }
+build() {
+    musl_env
+    make -C src -j"$parallelism" \
+        xwallpaper_LDADD="$(pkg-config --static --libs pixman-1 xcb-image xcb-util libpng libjpeg)"
+}
+package() { autoconf_package; }
