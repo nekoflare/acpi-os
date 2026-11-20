@@ -1,0 +1,84 @@
+--- a/image.c
++++ b/image.c
+@@ -23,9 +23,11 @@
+ 
+ #include <assert.h>
+ #include <errno.h>
++#include <fcntl.h>
+ #include <stdint.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <sys/mman.h>
+ #include <sys/stat.h>
+ #include <unistd.h>
+ 
+@@ -143,6 +145,23 @@
+ 	imlib_image_fill_rectangle(x, y, w, h);
+ }
+ 
++/* Imlib2 would otherwise map and unmap the entire file for each frame. */
++static void *map_animation(const char *path, size_t *size)
++{
++	struct stat st;
++	void *data = MAP_FAILED;
++	int fd = open(path, O_RDONLY);
++
++	if (fd < 0)
++		return MAP_FAILED;
++	if (fstat(fd, &st) == 0 && st.st_size > 0 && (uintmax_t)st.st_size <= SIZE_MAX) {
++		*size = (size_t)st.st_size;
++		data = mmap(NULL, *size, PROT_READ, MAP_PRIVATE, fd, 0);
++	}
++	close(fd);
++	return data;
++}
++
+ static bool img_load_multiframe(img_t *img, const fileinfo_t *file)
+ {
+ 	unsigned int n, fcnt;
+@@ -150,6 +169,8 @@
+ 	Imlib_Frame_Info finfo;
+ 	int px, py, pw, ph, pflag;
+ 	multi_img_t *m = &img->multi;
++	size_t data_size;
++	void *data;
+ 
+ 	imlib_context_set_image(img->im);
+ 	imlib_image_get_frame_info(&finfo);
+@@ -163,7 +184,12 @@
+ 		m->frames = erealloc(m->frames, m->cap * sizeof(*m->frames));
+ 	}
+ 
++	data = map_animation(file->path, &data_size);
++	if (data == MAP_FAILED)
++		return false;
++
+ 	if ((blank = imlib_create_image(img->w, img->h)) == NULL) {
++		munmap(data, data_size);
+ 		error(0, 0, "%s: couldn't create image", file->name);
+ 		return false;
+ 	}
+@@ -188,14 +214,11 @@
+ 
+ 		imlib_context_set_image(m->cnt < 1 ? blank : m->frames[m->cnt - 1].im);
+ 		canvas = imlib_clone_image();
+-		if ((frame = imlib_load_image_frame(file->path, n)) != NULL) {
++		if ((frame = imlib_load_image_frame_mem(file->path, n, data, data_size)) != NULL) {
+ 			imlib_context_set_image(frame);
+ 			imlib_image_set_changes_on_disk(); /* see img_load() for rationale */
+ 			imlib_image_get_frame_info(&finfo);
+ 		}
+-		/* NOTE: the underlying file can end up changing during load.
+-		 * so check if frame_count, w, h are all still the same or not.
+-		 */
+ 		if (canvas == NULL || frame == NULL || finfo.frame_count != (int)fcnt ||
+ 		    finfo.canvas_w != img->w || finfo.canvas_h != img->h)
+ 		{
+@@ -239,6 +262,7 @@
+ 		m->cnt++;
+ 		img_free(frame, false);
+ 	}
++	munmap(data, data_size);
+ 	img_free(blank, false);
+ 	imlib_context_set_color_modifier(img->cmod); /* restore cmod */
+ 

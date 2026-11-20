@@ -1,16 +1,23 @@
 version=1.12.6
-revision=1
+revision=3
 cross_compile=yes
 tarball_url="https://downloads.sourceforge.net/project/enlightenment/imlib2-src/1.12.6/imlib2-1.12.6.tar.xz"
 tarball_sha256=250f9752f69dc522e529a81aaa9395705f7fc312ff2453e5de59ac2ba1f2858f
 builddeps=musl
-deps="freetype libx11 libxext"
+deps="freetype libx11 libxext giflib"
 
 configure() {
     static_configure --disable-progs --disable-doc-build \
         --x-includes="$sysroot/usr/include" --x-libraries="$sysroot/usr/lib" --without-x-shm-fd \
-        --without-gif --without-jpeg --without-png --without-tiff --without-webp \
+        --without-jpeg --without-png --without-tiff --without-webp \
         --without-zlib --without-id3 --without-heif
 }
-build() { static_build; }
+build() {
+    musl_env
+    patch -d src -p1 < "$recipe_dir/static-gif.patch"
+    patch -d src -p1 < "$recipe_dir/private-image-mapping.patch"
+    static_build
+    "$CC" $CFLAGS $CPPFLAGS -I src -I src/src/lib -c src/src/modules/loaders/loader_gif.c -o gif-loader.o
+    ar r src/src/lib/.libs/libImlib2.a gif-loader.o
+}
 package() { autoconf_package; }

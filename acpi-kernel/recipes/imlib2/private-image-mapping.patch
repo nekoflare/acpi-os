@@ -1,0 +1,11 @@
+--- a/src/lib/image.c
++++ b/src/lib/image.c
+@@ -120,7 +120,7 @@
+ 
+     if (!fdata)
+     {
+-        fdata = mmap(NULL, fi->fsize, PROT_READ, MAP_SHARED, fileno(fi->fp), 0);
++        fdata = mmap(NULL, fi->fsize, PROT_READ, MAP_PRIVATE, fileno(fi->fp), 0);
+         if (fdata == MAP_FAILED)
+             return -1;
+     }

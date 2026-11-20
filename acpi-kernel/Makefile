@@ -247,10 +247,10 @@ $(XORG_DESKTOP_BUILD)/kernel.elf: $(wildcard kernel/*) $(wildcard initramfs/*) c
 endif
 
 $(XORG_DISK): scripts/pack-xorg-disk.sh $(XORG_DESKTOP_BUILD)/kernel.elf $(LIMINE_DIR)/BOOTX64.EFI \
-	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) Makefile
+	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) catflare.gif Makefile
 	sh $< "$@" "$(XORG_DESKTOP_BUILD)/kernel.elf" "$(LIMINE_DIR)/BOOTX64.EFI" \
 		"$(XORG_DISK_CONFIG)" $(XORG_APPS) ls=$(XORG_LS) $(foreach cmd,$(XORG_FS_COMMANDS),$(cmd)=$(XORG_FS_TOOLS)) \
-		fonts/dwm-font.ttf="$(XORG_FONT)"
+		fonts/dwm-font.ttf="$(XORG_FONT)" catflare.gif=catflare.gif
 
 xorg-desktop-image: $(XORG_DISK)
 

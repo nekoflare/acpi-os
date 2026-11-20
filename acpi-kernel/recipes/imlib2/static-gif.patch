@@ -1,0 +1,38 @@
+--- a/src/lib/loaders.c
++++ b/src/lib/loaders.c
+@@ -14,6 +14,7 @@
+ #define DBG_PFX "LOAD"
+ #define DP(fmt...) DC(DBG_LOAD, fmt)
+ 
++extern ImlibLoaderModule loader;
+ static ImlibLoader *loaders = NULL;
+ static ImlibLoader *loaders_unloaded = NULL;
+ static char     loaders_loaded = 0;
+@@ -290,6 +291,16 @@
+ 
+     DP("%s\n", __func__);
+ 
++    if (!__imlib_LookupLoaderByModulePath("builtin-gif")) {
++        ImlibLoader *l = calloc(1, sizeof(*l));
++        if (l) {
++            l->module = &loader;
++            l->file = strdup("builtin-gif");
++            l->name = loader.formats[0];
++            l->next = loaders;
++            loaders = l;
++        }
++    }
+     /* list all the loaders imlib can find */
+     list = __imlib_ModulesList(__imlib_PathToLoaders(), &num);
+     /* no loaders? well don't load anything */
+@@ -341,6 +352,10 @@
+ 
+   done:
+     l = NULL;
++    if (kl && strcmp(kl->dso, "gif") == 0) {
++        __imlib_LoadAllLoaders();
++        return __imlib_LookupLoaderByModulePath("builtin-gif");
++    }
+     if (kl)
+     {
+         dso = __imlib_ModuleFind(__imlib_PathToLoaders(), kl->dso);

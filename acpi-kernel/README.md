@@ -264,8 +264,15 @@ descriptors share file offsets. The libc-compatible clone form takes
 releases the task's memory and descriptors. The parent can collect the
 exit status with `wait4`, optionally using `WNOHANG`. Faults report
 `SIGSEGV` in the wait status. Orphans are reaped automatically.
-Signal delivery, resource accounting, and process group changes are
-outside this syscall subset.
+The signal subset supports `rt_sigaction`, `rt_sigprocmask`, `rt_sigreturn`,
+and `kill` for positive PIDs. Child exit generates `SIGCHLD`. Explicit
+`SIG_IGN` or `SA_NOCLDWAIT` for `SIGCHLD` reaps exiting children automatically.
+Writing to a disconnected stream peer generates `SIGPIPE` and returns
+`EPIPE` if the process survives. Signal handlers take a single signal
+number and run one at a time. Pending signals coalesce by number. An
+interruptible blocked syscall can return `EINTR`. Automatic syscall
+restart, job control, alternate stacks, and `SA_SIGINFO` are outside
+this subset.
 
 `execve` loads static ELF64 programs directly from the initramfs.
 It preserves the PID and open descriptors except those marked
@@ -485,12 +492,13 @@ rmdir work
 ```
 
 Jinx builds static Xvfb with musl and the packaged X11 protocol headers.
-A build-container copy of `xkbcomp` compiles the guest's US keyboard map. On QEMU Standard VGA with
-room for two desktop scanout pages, X.Org copies each completed frame
-to the hidden page and flips the display to it. The console keeps its
-own page and is restored when X.Org closes the framebuffer. Other
-framebuffers use writes to changed rows. X.Org reads PS/2 events from
-`/dev/kbd` and `/dev/mouse`. The desktop image launches dwm, xeyes,
+A build-container copy of `xkbcomp` compiles the guest's US keyboard map.
+On QEMU Standard VGA with room for two desktop scanout pages, X.Org tracks
+pending redraws for each page. It copies the affected rectangle to the hidden page and flips the
+display to it. Each page starts with a full copy, and large redraws also use
+a full copy. The console keeps its own page and is restored when X.Org
+closes the framebuffer. Other framebuffers use writes to changed rows.
+X.Org reads PS/2 events from `/dev/kbd` and `/dev/mouse`. The desktop image launches dwm, xeyes,
 and suckless st on its local display. st opens Bash on startup.
 Run `fastfetch` in st to see the guest's kernel, CPU, and memory.
 The guest port sends

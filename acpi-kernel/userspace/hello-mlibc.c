@@ -173,6 +173,22 @@ static int check_path_lookups(void)
     return 0;
 }
 
+static int check_file_mapping(void)
+{
+    int fd = open("/welcome.txt", O_RDONLY);
+    if (fd < 0)
+        return -1;
+    char *mapping = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    if (mapping == MAP_FAILED) {
+        close(fd);
+        return -1;
+    }
+    int result = close(fd) || memcmp(mapping, "Welcome to the ASL kernel shell.\n", 32);
+    mapping[0] = 'w';
+    result |= munmap(mapping, 4096);
+    return result;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 1 || strcmp(argv[0], "hello.elf") || !isatty(STDOUT_FILENO))
@@ -184,7 +200,7 @@ int main(int argc, char **argv)
         return 1;
     page[0] = 42;
     if (check_fork(page) || munmap(page, 4096) || check_poll() || check_unix_stream() ||
-        check_path_lookups())
+        check_path_lookups() || check_file_mapping())
         return 1;
 
     if (check_x11() || write_all("X11 setup, geometry, and framebuffer window verified in both byte orders\n"))

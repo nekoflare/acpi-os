@@ -1,0 +1,36 @@
+--- a/main.c
++++ b/main.c
+@@ -219,6 +219,15 @@
+ 		markidx--;
+ }
+ 
++static void monotonic_time(struct timeval *time)
++{
++	struct timespec now = {0};
++
++	clock_gettime(CLOCK_MONOTONIC, &now);
++	time->tv_sec = now.tv_sec;
++	time->tv_usec = now.tv_nsec / 1000;
++}
++
+ void set_timeout(timeout_f handler, int time, bool overwrite)
+ {
+ 	unsigned int i;
+@@ -226,7 +235,7 @@
+ 	for (i = 0; i < ARRLEN(timeouts); i++) {
+ 		if (timeouts[i].handler == handler) {
+ 			if (!timeouts[i].active || overwrite) {
+-				gettimeofday(&timeouts[i].when, 0);
++				monotonic_time(&timeouts[i].when);
+ 				TV_ADD_MSEC(&timeouts[i].when, time);
+ 				timeouts[i].active = true;
+ 			}
+@@ -254,7 +263,7 @@
+ 
+ 	while (i < (int)ARRLEN(timeouts)) {
+ 		if (timeouts[i].active) {
+-			gettimeofday(&now, 0);
++			monotonic_time(&now);
+ 			tdiff = TV_DIFF(&timeouts[i].when, &now);
+ 			if (tdiff <= 0) {
+ 				timeouts[i].active = false;
