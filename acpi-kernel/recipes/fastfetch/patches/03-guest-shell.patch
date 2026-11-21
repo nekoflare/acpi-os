@@ -6,7 +6,7 @@ diff --git a/src/detection/terminalshell/terminalshell_linux.c b/src/detection/t
  
  static void setShellInfoDetails(FFShellResult* result) {
 +#ifdef FF_ACPI_MLIBC
-+    if (ffStrEquals(result->exeName, "bash.elf")) {
++    if (ffStrEquals(result->exeName, "bash.elf") || ffStrEquals(result->exeName, "bash")) {
 +        ffStrbufInitStatic(&result->prettyName, "bash");
 +        return;
 +    }
@@ -22,7 +22,7 @@ diff --git a/src/detection/terminalshell/terminalshell.c b/src/detection/termina
      }
  
 +#ifdef FF_ACPI_MLIBC
-+    if (ffStrEquals(exeName, "bash.elf")) {
++    if (ffStrEquals(exeName, "bash.elf") || ffStrEquals(exeName, "bash")) {
 +        return getShellVersionBash(exe, version);
 +    }
 +#endif

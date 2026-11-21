@@ -1,0 +1,31 @@
+--- a/tests/runner/CMakeLists.txt
++++ b/tests/runner/CMakeLists.txt
+@@ -60,18 +60,8 @@ macro (define_test_runner NAME)
+         target_compile_definitions(
+             ${NAME}
+             PRIVATE
+             _GNU_SOURCE
+         )
+-        target_compile_options(
+-            ${NAME}
+-            PRIVATE
+-            -fsanitize=address,undefined -g3 -Wall -Wextra -Wshadow -Werror
+-        )
+-        target_link_options(
+-            ${NAME}
+-            PRIVATE
+-            -fsanitize=address,undefined -g3
+-        )
+         add_compile_options(
+             $<$<COMPILE_LANGUAGE:C>:-Wstrict-prototypes>
+         )
+--- a/tests/runner/os.h
++++ b/tests/runner/os.h
+@@ -25,7 +25,7 @@ typedef pthread_mutex_t mutex_t;
+ typedef pthread_cond_t condvar_t;
+ 
+-#if defined(__WATCOMC__) || defined(__APPLE__)
++#if defined(__WATCOMC__) || defined(__APPLE__) || (defined(__linux__) && !defined(__GLIBC__))
+ #define HAVE_TIMED_WAIT 0
+ #else
+ #define HAVE_TIMED_WAIT 1

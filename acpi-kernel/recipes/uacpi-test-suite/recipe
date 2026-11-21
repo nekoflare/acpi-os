@@ -1,0 +1,18 @@
+version=7.0.0
+revision=1
+tarball_url=https://codeload.github.com/uACPI/uACPI/tar.gz/refs/tags/7.0.0
+tarball_sha256=4ccdb4c06d06c54116920eb861adf3a87efd3285c762e2e6f3529b52c6d20fa5
+
+configure() {
+    copy_source
+}
+
+package() {
+    test_dir="$dest_dir/usr/share/uacpi/tests"
+    install -Dm755 src/tests/run_tests.py "$test_dir/run_tests.py"
+    mkdir -p "$test_dir/test-cases" "$test_dir/generated_test_cases" \
+        "$test_dir/utilities"
+    cp -a src/tests/test-cases/. "$test_dir/test-cases/"
+    cp -a src/tests/generated_test_cases/. "$test_dir/generated_test_cases/"
+    cp -a src/tests/utilities/. "$test_dir/utilities/"
+}

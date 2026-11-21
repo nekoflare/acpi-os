@@ -1,0 +1,41 @@
+version=3.15.2
+revision=1
+cross_compile=yes
+tarball_url=https://www.python.org/ftp/python/3.15.2/Python-3.15.2.tar.xz
+tarball_sha256=8b5536d280142ecf6cdfe15d12a21ba1c65e300bbf7b28a8d0cdb849575797de
+builddeps=musl
+
+configure() {
+    copy_source
+    musl_env
+    cd src
+    perl -0pi -e 's/MULTIARCH=\$\(\$CC --print-multiarch 2>\/dev\/null\)/MULTIARCH=\$PLATFORM_TRIPLET/' configure
+    ./configure --prefix=/usr --disable-shared --disable-test-modules \
+        --with-ensurepip=no
+    # Keep file execution non-interactive in the guest; explicit -i remains available.
+    sed -i '/if (!config->inspect && _Py_GetEnv(config->use_environment, "PYTHONINSPECT")) {/,+2d' \
+        Modules/main.c
+    sed -i '0,/^\*shared\*/s//\*static\*/' Modules/Setup.stdlib
+    sed -i '/^_hmac hmacmodule.c$/d' Modules/Setup.stdlib
+}
+
+build() {
+    musl_env
+    make -C src -j"$parallelism"
+}
+
+package() {
+    make -C src DESTDIR="$dest_dir" altinstall
+    strip --strip-unneeded "$dest_dir/usr/bin/python3.15"
+    rm -rf "$dest_dir/usr/include" "$dest_dir/usr/lib/python3.15/test" \
+        "$dest_dir/usr/lib/python3.15/idlelib" \
+        "$dest_dir/usr/lib/python3.15/tkinter" \
+        "$dest_dir/usr/lib/python3.15/turtledemo" \
+        "$dest_dir/usr/lib/python3.15/config-3.15-x86_64-linux-musl"
+    find "$dest_dir/usr/lib/python3.15" -type d -name __pycache__ \
+        -prune -exec rm -rf {} +
+    rm -f "$dest_dir/usr/lib/libpython3.15.a" \
+        "$dest_dir/usr/lib/python3.15/config-3.15-x86_64-linux-musl/Makefile"
+    ln -s python3.15 "$dest_dir/usr/bin/python3"
+    ln -s python3.15 "$dest_dir/usr/bin/python"
+}

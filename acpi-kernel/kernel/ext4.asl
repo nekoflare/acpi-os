@@ -249,9 +249,8 @@
             Return (Zero)
         }
         XSTQ (EXVL + EXRW, Arg2 && !(VFEA & 0x20) &&
-            XVWD (EXVL + EXBL, Ones) <= XVWD (EXVL + EXBG, Ones) &&
-            XVWD (EXVL + EXBL, Ones) <= PGSZ * 8 &&
-            XVWD (EXVL + EXIC, Ones) <= PGSZ * 8)
+            XVWD (EXVL + EXBG, Ones) <= PGSZ * 8 &&
+            XVWD (EXVL + EXIG, Ones) <= PGSZ * 8)
         Local1 = VNOD (Zero, Zero, Zero, 4)
         If (!Local1) { PDEL (Local0) Return (Zero) }
         If (!EXDR (Local1, 2, Zero))

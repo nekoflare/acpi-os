@@ -186,12 +186,19 @@ $(eval $(call jinx_artifact,$(XORG_LS),busybox-ls,usr/bin/busybox-ls))
 
 XORG_DISK := $(XORG_DESKTOP_BUILD)/acpi-xorg.img
 XORG_APPS := $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/Xvfb \
-	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(XORG_BUILD)/picom $(XORG_BUILD)/xsetroot $(XORG_BUILD)/xwallpaper $(XORG_BUILD)/xdpyinfo $(XORG_BUILD)/grep $(XORG_BUILD)/sed $(XORG_BUILD)/awk $(XORG_BUILD)/tail $(XORG_BUILD)/head $(XORG_BUILD)/find $(XORG_BUILD)/xargs $(XORG_BUILD)/sort $(XORG_BUILD)/uniq $(XORG_BUILD)/cut $(XORG_BUILD)/tr $(XORG_BUILD)/wc $(XORG_BUILD)/tee $(XORG_BUILD)/diff $(XORG_BUILD)/patch $(XORG_BUILD)/file $(XORG_BUILD)/strings $(XORG_BUILD)/stat $(XORG_BUILD)/readlink $(XORG_BUILD)/realpath $(XORG_BUILD)/lspci $(XORG_BUILD)/lscpu $(XORG_BUILD)/clear $(XORG_BUILD)/tar $(XORG_BUILD)/gzip $(XORG_BUILD)/date $(XORG_BUILD)/sleep $(XORG_BUILD)/conky $(XORG_BUILD)/btop $(XORG_BUILD)/git $(XORG_BUILD)/less $(ST_BUILD)/st \
-	$(XORG_BUILD)/nsxiv $(XORG_BUILD)/nano $(XORG_BUILD)/vim \
-	$(BASH_BUILD)/bash.elf $(BASH_BUILD)/fastfetch
+	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(XORG_BUILD)/picom $(XORG_BUILD)/xsetroot $(XORG_BUILD)/xwallpaper $(XORG_BUILD)/xdpyinfo $(XORG_BUILD)/grep $(XORG_BUILD)/sed $(XORG_BUILD)/awk $(XORG_BUILD)/tail $(XORG_BUILD)/head $(XORG_BUILD)/find $(XORG_BUILD)/xargs $(XORG_BUILD)/sort $(XORG_BUILD)/uniq $(XORG_BUILD)/cut $(XORG_BUILD)/tr $(XORG_BUILD)/wc $(XORG_BUILD)/tee $(XORG_BUILD)/diff $(XORG_BUILD)/patch $(XORG_BUILD)/file $(XORG_BUILD)/strings $(XORG_BUILD)/stat $(XORG_BUILD)/readlink $(XORG_BUILD)/realpath $(XORG_BUILD)/lspci $(XORG_BUILD)/lscpu $(XORG_BUILD)/clear $(XORG_BUILD)/tar $(XORG_BUILD)/gzip $(XORG_BUILD)/xz $(XORG_BUILD)/lua $(XORG_BUILD)/python3.15 $(XORG_BUILD)/python3 $(XORG_BUILD)/python $(XORG_BUILD)/date $(XORG_BUILD)/sleep $(XORG_BUILD)/conky $(XORG_BUILD)/btop $(XORG_BUILD)/git $(XORG_BUILD)/less $(XORG_BUILD)/make $(XORG_BUILD)/nproc $(XORG_BUILD)/sh $(ST_BUILD)/st \
+	$(XORG_BUILD)/nsxiv $(XORG_BUILD)/nano $(XORG_BUILD)/vim $(XORG_BUILD)/iasl $(XORG_BUILD)/acpixtract $(XORG_BUILD)/uacpi-test-runner $(XORG_BUILD)/uacpi-barebones-test-runner \
+	$(BASH_BUILD)/fastfetch
+XORG_BASH := bin/bash=$(BASH_BUILD)/bash.elf
 XORG_DATA := $(XORG_BUILD)/xorg-default.xkm config/dwm-fonts.conf config/time.sh config/conky.conf $(wildcard initramfs/*)
 XORG_PICOM_CONFIG := usr/share/picom/picom.conf=config/picom.conf
 XORG_CONKY_CONFIG := usr/share/conky/conky.conf=config/conky.conf
+XORG_LUA_TEST := usr/share/lua/test.lua=config/lua-test.lua
+XORG_IASL_EXAMPLE := usr/share/iasl/examples/acpi-example.asl=config/acpi-example.asl
+XORG_UACPI_TESTS := usr/share/uacpi/tests=$(XORG_BUILD)/uacpi-tests
+XORG_PYTHON_LIB := usr/lib/python3.15=$(XORG_BUILD)/python-lib
+XORG_PYTHON_TEST := usr/share/python/test.py=config/python-test.py
+XORG_PYTHON_MARKER := usr/lib/python3.15/lib-dynload/.static-modules=config/python-static-modules.txt
 XORG_DEJAVU_FONTS := DejaVuSans.ttf DejaVuSansMono.ttf DejaVuSansMono-Bold.ttf \
     DejaVuSansMono-Oblique.ttf DejaVuSansMono-BoldOblique.ttf
 XORG_FONT_FILES := $(foreach font,$(XORG_DEJAVU_FONTS),fonts/$(font)=$(XORG_BUILD)/$(font))
@@ -233,6 +240,12 @@ $(eval $(call jinx_artifact,$(XORG_BUILD)/lscpu,lscpu,usr/bin/lscpu))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/clear,clear,usr/bin/clear))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/tar,tar,usr/bin/tar))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/gzip,gzip,usr/bin/gzip))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/xz,xz,usr/bin/xz))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/lua,lua,usr/bin/lua))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/python3.15,python,usr/bin/python3.15))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/python3,python,usr/bin/python3))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/python-lib,python,usr/lib/python3.15))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/python,python,usr/bin/python))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/pci.ids,pciutils,usr/share/hwdata/pci.ids))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/date,date,usr/bin/date))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/sleep,sleep,usr/bin/sleep))
@@ -241,8 +254,16 @@ $(eval $(call jinx_artifact,$(XORG_BUILD)/conky,conky,usr/bin/conky))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/btop,btop,usr/bin/btop))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/git,git,usr/bin/git))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/less,less,usr/bin/less))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/make,make,usr/bin/make))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/nproc,nproc,usr/bin/nproc))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/iasl,iasl,usr/bin/iasl))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/acpixtract,iasl,usr/bin/acpixtract))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/uacpi-test-runner,uacpi-test-runner,usr/bin/uacpi-test-runner))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/uacpi-barebones-test-runner,uacpi-test-runner,usr/bin/uacpi-barebones-test-runner))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/uacpi-tests,uacpi-test-suite,usr/share/uacpi/tests))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/git-upload-pack,git,usr/libexec/git-core/git-upload-pack))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/git-template-description,git,usr/share/git-core/templates/description))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/sh,bash,usr/bin/bash))
 $(foreach font,$(XORG_DEJAVU_FONTS),$(eval $(call jinx_artifact,$(XORG_BUILD)/$(font),dejavu-fonts,usr/share/fonts/truetype/dejavu/$(font))))
 XORG_TERMINFO := $(XORG_BUILD)/terminfo/s/st-256color
 $(eval $(call jinx_artifact,$(XORG_TERMINFO),ncurses,usr/share/terminfo/s/st-256color))
@@ -267,9 +288,9 @@ $(XORG_DESKTOP_BUILD)/kernel.elf: kernel-build-force
 endif
 
 $(XORG_DISK): scripts/pack-xorg-disk.sh $(XORG_DESKTOP_BUILD)/kernel.elf $(LIMINE_DIR)/BOOTX64.EFI \
-	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_BUILD)/git-upload-pack $(XORG_BUILD)/git-template-description $(XORG_DATA) $(XORG_BUILD)/magic.mgc $(XORG_BUILD)/pci.ids config/picom.conf $(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) $(addprefix $(XORG_BUILD)/,$(XORG_DEJAVU_FONTS)) catflare.gif Makefile
+	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_BUILD)/uacpi-tests config/uacpi-run-tests $(XORG_BUILD)/python-lib $(BASH_BUILD)/bash.elf $(XORG_BUILD)/git-upload-pack $(XORG_BUILD)/git-template-description $(XORG_DATA) $(XORG_BUILD)/magic.mgc $(XORG_BUILD)/pci.ids config/picom.conf config/lua-test.lua config/acpi-example.asl config/python-test.py config/python-static-modules.txt $(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) $(addprefix $(XORG_BUILD)/,$(XORG_DEJAVU_FONTS)) catflare.gif Makefile
 	sh $< "$@" "$(XORG_DESKTOP_BUILD)/kernel.elf" "$(LIMINE_DIR)/BOOTX64.EFI" \
-		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_DATA) $(XORG_PICOM_CONFIG) $(XORG_CONKY_CONFIG) $(XORG_FILE_MAGIC) $(XORG_PCI_IDS) $(XORG_WALLPAPER_FILES) usr/libexec/git-core/git-upload-pack=$(XORG_BUILD)/git-upload-pack usr/share/git-core/templates/description=$(XORG_BUILD)/git-template-description usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
+		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_BASH) $(XORG_DATA) $(XORG_PICOM_CONFIG) $(XORG_CONKY_CONFIG) $(XORG_LUA_TEST) $(XORG_IASL_EXAMPLE) $(XORG_UACPI_TESTS) bin/uacpi-run-tests=config/uacpi-run-tests $(XORG_PYTHON_LIB) $(XORG_PYTHON_TEST) $(XORG_PYTHON_MARKER) $(XORG_FILE_MAGIC) $(XORG_PCI_IDS) $(XORG_WALLPAPER_FILES) usr/libexec/git-core/git-upload-pack=$(XORG_BUILD)/git-upload-pack usr/share/git-core/templates/description=$(XORG_BUILD)/git-template-description usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
 		bin/ls=$(XORG_LS) $(foreach cmd,$(XORG_FS_COMMANDS),bin/$(cmd)=$(XORG_FS_TOOLS)) \
 		fonts/dwm-font.ttf="$(XORG_FONT)" $(XORG_FONT_FILES) catflare.gif=catflare.gif
 
@@ -302,7 +323,7 @@ $(DWM_BUILD)/dwm-font.ttf: $(DWM_FONT)
 	cp -- "$(DWM_FONT)" "$@"
 endif
 
-$(eval $(call jinx_artifact,$(BASH_BUILD)/bash.elf,bash,usr/bin/bash.elf))
+$(eval $(call jinx_artifact,$(BASH_BUILD)/bash.elf,bash,usr/bin/bash))
 
 $(eval $(call jinx_artifact,$(BASH_BUILD)/fbtest,fbtest,usr/bin/fbtest))
 

@@ -12,7 +12,7 @@ cd "$build"
 
 package_key=$("$jinx" local-package-key "$package")
 artifact_key="$package_key $package $member"
-if [[ -f "$output" && -f "$output.jinx-id" &&
+if [[ -e "$output" && -f "$output.jinx-id" &&
       $(sed -n '2p' "$output.jinx-id") == "$artifact_key" ]]; then
     temporary=$(mktemp "$output.jinx-id.XXXXXX")
     trap 'rm -f "$temporary"' EXIT
@@ -28,8 +28,16 @@ trap 'rm -rf "$stage" "${temporary:-}"' EXIT
 "$jinx" update -b "$package"
 "$jinx" install "$stage" "$package"
 mkdir -p "$(dirname "$output")"
-if ! cmp -s "$stage/$member" "$output" ||
-   [[ $(stat -c %a -- "$stage/$member") != $(stat -c %a -- "$output") ]]; then
+if [[ -d "$stage/$member" ]]; then
+    if [[ ! -d "$output" ]] || ! diff -qr "$stage/$member" "$output" >/dev/null; then
+        temporary=$(mktemp -d "$output.XXXXXX")
+        cp -a "$stage/$member/." "$temporary/"
+        rm -rf "$output"
+        rm -f "$output.jinx-id"
+        mv -f "$temporary" "$output"
+    fi
+elif ! cmp -s "$stage/$member" "$output" ||
+     [[ $(stat -c %a -- "$stage/$member") != $(stat -c %a -- "$output") ]]; then
     temporary=$(mktemp "$output.XXXXXX")
     cp --preserve=mode "$stage/$member" "$temporary"
     rm -f "$output.jinx-id"

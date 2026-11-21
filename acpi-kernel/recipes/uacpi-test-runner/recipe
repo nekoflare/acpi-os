@@ -1,0 +1,27 @@
+version=7.0.0
+revision=2
+cross_compile=yes
+tarball_url=https://codeload.github.com/uACPI/uACPI/tar.gz/refs/tags/7.0.0
+tarball_sha256=4ccdb4c06d06c54116920eb861adf3a87efd3285c762e2e6f3529b52c6d20fa5
+builddeps=musl
+imagedeps="cmake ninja-build"
+
+configure() {
+    copy_source
+    patch -d src -p1 < "$recipe_dir/no-sanitizers.patch"
+    musl_env
+    cmake -S src/tests/runner -B obj -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS=-static
+}
+
+build() {
+    musl_env
+    cmake --build obj -j"$parallelism" --target test-runner
+    cmake --build obj -j"$parallelism" --target barebones-test-runner
+}
+
+package() {
+    install -Dm755 obj/test-runner "$dest_dir/usr/bin/uacpi-test-runner"
+    install -Dm755 obj/barebones-test-runner \
+        "$dest_dir/usr/bin/uacpi-barebones-test-runner"
+}

@@ -1,0 +1,7 @@
+version=1.0
+revision=1
+cross_compile=yes
+builddeps=musl
+
+build() { musl_app nproc; }
+package() { package_app nproc; }

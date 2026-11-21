@@ -40,7 +40,7 @@ sed -i 's|set_if_not ("PS1", current_user.euid == 0 ? "# " : primary_prompt);|se
 
 # Export the guest shell path when Bash was started without a login environment.
 sed -i '/^set_shell_var ()/,/^}/ {
-    s|bind_variable ("SHELL", current_user.shell, 0)|bind_variable ("SHELL", "/bin/bash.elf", 0)|
+    s|bind_variable ("SHELL", current_user.shell, 0)|bind_variable ("SHELL", "/bin/bash", 0)|
     /^#if 0$/d
     /^#endif$/d
 }' "$source/variables.c"

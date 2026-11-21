@@ -515,7 +515,7 @@ The kernel mounts `/dev/vda2` at `/` before launching the desktop. fstab
 supports numbered GPT partitions `/dev/vda1` through `/dev/vda9`, existing
 mount directories, and options `rw`, `ro`, `defaults`, and `noauto`.
 The ext4 driver supports 4 KiB blocks and the `filetype` and `extent`
-features. The desktop's writable single-group volume supports creating,
+features. The desktop's writable volume supports creating,
 extending, appending, truncating, renaming, and deleting regular files and
 directories. Changes are written through virtio-blk and survive reboot.
 The volume has no journal, so interrupted metadata updates can require

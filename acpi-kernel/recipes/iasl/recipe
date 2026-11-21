@@ -1,0 +1,29 @@
+version=20260930
+revision=2
+cross_compile=yes
+tarball_url=https://github.com/open-acpica/acpica/releases/download/20260930/acpica-unix-20260930.tar.gz
+tarball_sha256=aa18901b92e30749be0edc3081c8d550c61fce4fa37546fc6a65d367a4ae71a5
+builddeps=musl
+imagedeps="bison flex"
+
+configure() {
+    copy_source
+}
+
+build() {
+    musl_env
+    mkdir -p src/generate/unix/iasl/obj src/generate/unix/bin
+    make -C src/generate/unix/iasl -j"$parallelism" \
+        CC="$CC" OPT_CFLAGS="$CFLAGS $APP_CPU_FLAGS" \
+        LDFLAGS="$LDFLAGS -static"
+    mkdir -p src/generate/unix/acpixtract/obj
+    make -C src/generate/unix/acpixtract -j"$parallelism" \
+        CC="$CC" OPT_CFLAGS="$CFLAGS $APP_CPU_FLAGS" \
+        LDFLAGS="$LDFLAGS -static"
+}
+
+package() {
+    install -Dm755 src/generate/unix/bin/iasl "$dest_dir/usr/bin/iasl"
+    install -Dm755 src/generate/unix/bin/acpixtract \
+        "$dest_dir/usr/bin/acpixtract"
+}

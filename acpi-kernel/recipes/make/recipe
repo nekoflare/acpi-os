@@ -1,0 +1,24 @@
+version=4.4.1
+revision=1
+cross_compile=yes
+tarball_url=https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
+tarball_sha256=dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3
+builddeps=musl
+
+configure() {
+    copy_source
+    musl_env
+    CFLAGS="$CFLAGS -std=gnu17"
+    cd src
+    ac_cv_func_vfork_works=no ./configure --prefix=/usr --libdir=/usr/lib \
+        --disable-shared --enable-static --disable-nls --without-guile \
+        --disable-posix-spawn
+}
+build() {
+    musl_env
+    make -C src -j"$parallelism" CFLAGS="$CFLAGS -std=gnu17"
+}
+package() {
+    musl_env
+    make -C src DESTDIR="$dest_dir" CFLAGS="$CFLAGS -std=gnu17" install
+}

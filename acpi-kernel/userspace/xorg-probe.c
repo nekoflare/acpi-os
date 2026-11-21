@@ -52,7 +52,7 @@ static int start_client(const char *path, char *const arguments[])
     if (!process) {
         char *const environment[] = {
             "DISPLAY=:0", "FONTCONFIG_FILE=/dwm-fonts.conf", "HOME=/",
-            "PATH=/bin", "SHELL=/bin/bash.elf", "XDG_CURRENT_DESKTOP=dwm", NULL,
+            "PATH=/bin", "SHELL=/bin/bash", "XDG_CURRENT_DESKTOP=dwm", NULL,
         };
         execve(path, arguments, environment);
         perror(path);
@@ -133,8 +133,8 @@ int main(void)
             start_client("/bin/conky", conky);
         }
         if (!access("/time.sh", R_OK)) {
-            char *const arguments[] = {"bash.elf", "/time.sh", NULL};
-            start_client("/bin/bash.elf", arguments);
+            char *const arguments[] = {"bash", "/time.sh", NULL};
+            start_client("/bin/bash", arguments);
         }
     }
     return 0;

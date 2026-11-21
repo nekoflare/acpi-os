@@ -1,10 +1,9 @@
-    // Writable images use a single block group and no journal or checksums.
+    // Writable images use 32-byte group descriptors and no journal or checksums.
     // Scratch pages are shared by mounts; syscalls run on the scheduler stack.
     Name (EXGD, Zero)
     Name (EXBM, Zero)
     Name (EXDB, Zero)
     Name (EXIB, Zero)
-    Name (EXBH, 56) // Next block allocation hint
 
     Method (EXLE, 4, NotSerialized)
     {
@@ -56,65 +55,101 @@
         }
     }
 
-    // Update a bitmap and its free counters. Arg0 selects the inode bitmap.
-    // Allocation searches for a contiguous run, optionally at an exact block.
-    Method (EXAL, 5, NotSerialized)
+    // Update one group's bitmap and free counters. Arg1 selects the inode bitmap.
+    // Arg3 is the group-relative index, or Ones to search for a free run.
+    Method (EXAG, 6, NotSerialized)
     {
-        If (!Arg1 || !EXRD (One, EXGD)) { Return (Zero) }
-        Local0 = ELWD (EXGD, Arg0 * 4, 4)
-        If (!Local0 || !EXRD (Local0, EXBM)) { Return (Zero) }
-        Local1 = XVWD (EXVL + EXBL, Ones)
-        Local2 = One
-        If (Arg0)
+        Local0 = 32 * (Arg0 % 128)
+        Local1 = One + Arg0 / 128
+        If (!EXRD (Local1, EXGD)) { Return (Zero) }
+        Local2 = ELWD (EXGD, Local0 + Arg1 * 4, 4)
+        If (!Local2 || !EXRD (Local2, EXBM)) { Return (Zero) }
+        Local3 = XVWD (EXVL + EXBG, Ones)
+        Local4 = XVWD (EXVL + EXBL, Ones)
+        Local5 = One
+        If (Arg1)
         {
-            Local1 = XVWD (EXVL + EXIC, Ones)
-            Local2 = 10 // Inode 11 is the first unreserved inode
+            Local3 = XVWD (EXVL + EXIG, Ones)
+            Local4 = XVWD (EXVL + EXIC, Ones)
+            Local5 = 10 // Inode 11 is the first unreserved inode
         }
-        Local3 = Arg2
-        If (Arg3)
+        Local4 -= Arg0 * Local3
+        If (Local4 > Local3) { Local4 = Local3 }
+        If (Arg0) { Local5 = Zero }
+        Local6 = Arg3
+        If (Local6 == Ones) { Local6 = EXSR (Local5, Local4, Arg2) }
+        If (Local6 < Local5 || Local6 >= Local4 ||
+            Arg2 > Local4 - Local6) { Return (Zero) }
+
+        Local7 = Zero
+        While (Local7 < Arg2)
         {
-            If (Arg2 == Ones)
-            {
-                Local3 = Local2
-                If (!Arg0 && XVWD (EXVL + EXBH, Ones) > Local3)
-                {
-                    Local3 = XVWD (EXVL + EXBH, Ones)
-                }
-                Local4 = EXSR (Local3, Local1, Arg1)
-                If (Local4 == Ones && Local3 != Local2)
-                {
-                    Local4 = EXSR (Local2, Local1, Arg1)
-                }
-                Local3 = Local4
-            }
+            If ((EXBT (Local6 + Local7) != Zero) == Arg4) { Return (Zero) }
+            Increment (Local7)
         }
-        If (Local3 < Local2 || Local3 >= Local1 || Arg1 > Local1 - Local3) { Return (Zero) }
-        Local4 = Zero
-        While (Local4 < Arg1)
-        {
-            Local5 = EXBT (Local3 + Local4)
-            If ((Arg3 && Local5) || (!Arg3 && !Local5)) { Return (Zero) }
-            Increment (Local4)
-        }
-        Local4 = Arg1
-        If (Arg3) { Local4 = Zero - Arg1 }
-        Local5 = 12 + Arg0 * 2
-        Local6 = 1024 + 12 + Arg0 * 4
         If (!EXRD (Zero, EXDB)) { Return (Zero) }
-        EXBS (Local3, Arg1, Arg3)
-        EXLE (EXGD, Local5, ELWD (EXGD, Local5, 2) + Local4, 2)
-        EXLE (EXDB, Local6, ELWD (EXDB, Local6, 4) + Local4, 4)
-        If (Arg4)
+        EXBS (Local6, Arg2, Arg4)
+        Local5 = Arg2
+        If (Arg4) { Local5 = Zero - Arg2 }
+        Local7 = Local0 + 12 + Arg1 * 2
+        EXLE (EXGD, Local7, ELWD (EXGD, Local7, 2) + Local5, 2)
+        Local7 = 1024 + 12 + Arg1 * 4
+        EXLE (EXDB, Local7, ELWD (EXDB, Local7, 4) + Local5, 4)
+        If (Arg5)
         {
             Local5 = One
-            If (!Arg3) { Local5 = Ones }
-            EXLE (EXGD, 16, ELWD (EXGD, 16, 2) + Local5, 2)
+            If (!Arg4) { Local5 = Ones }
+            EXLE (EXGD, Local0 + 16, ELWD (EXGD, Local0 + 16, 2) + Local5, 2)
         }
-        If (!EXBW (Local0, EXBM)) { Return (Zero) }
-        If (!EXBW (One, EXGD)) { Return (Zero) }
+        If (!EXBW (Local2, EXBM)) { Return (Zero) }
+        If (!EXBW (Local1, EXGD)) { Return (Zero) }
         If (!EXBW (Zero, EXDB)) { Return (Zero) }
-        If (!Arg0 && Arg3) { XSTQ (EXVL + EXBH, Local3 + Arg1) }
-        Return (Local3 + Arg0)
+        Return (Arg0 * Local3 + Local6 + Arg1)
+    }
+
+    // Arg2 is a block number or zero-based inode index, or Ones for any run.
+    Method (EXAL, 5, NotSerialized)
+    {
+        If (!Arg1 || !XVWD (EXVL + EXRW, Ones)) { Return (Zero) }
+        Local0 = XVWD (EXVL + EXBG, Ones)
+        Local1 = XVWD (EXVL + EXBL, Ones)
+        If (Arg0)
+        {
+            Local0 = XVWD (EXVL + EXIG, Ones)
+            Local1 = XVWD (EXVL + EXIC, Ones)
+        }
+        If (Arg2 == Ones)
+        {
+            Local2 = Zero
+            While (Local2 * Local0 < Local1)
+            {
+                Local3 = EXAG (Local2, Arg0, Arg1, Ones, One, Arg4)
+                If (Local3 || !XVWD (EXVL + EXRW, Ones)) { Return (Local3) }
+                Increment (Local2)
+            }
+            Return (Zero)
+        }
+        If (Arg2 >= Local1 || Arg1 > Local1 - Arg2) { Return (Zero) }
+        If (Arg3)
+        {
+            Return (EXAG (Arg2 / Local0, Arg0, Arg1, Arg2 % Local0, One, Arg4))
+        }
+
+        // An existing extent can span group boundaries.
+        Local2 = Arg2
+        While (Arg1)
+        {
+            Local3 = Local0 - Arg2 % Local0
+            If (Local3 > Arg1) { Local3 = Arg1 }
+            If (!EXAG (Arg2 / Local0, Arg0, Local3, Arg2 % Local0, Zero, Arg4))
+            {
+                XSTQ (EXVL + EXRW, Zero)
+                Return (Zero)
+            }
+            Arg2 += Local3
+            Arg1 -= Local3
+        }
+        Return (Local2 + Arg0)
     }
 
     Method (EXSR, 3, NotSerialized)

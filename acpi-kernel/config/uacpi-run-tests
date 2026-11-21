@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+exec python3 /usr/share/uacpi/tests/run_tests.py \
+    --test-runner /bin/uacpi-test-runner \
+    --barebones-test-runner /bin/uacpi-barebones-test-runner \
+    --asl-compiler /bin/iasl \
+    --test-dir /usr/share/uacpi/tests/test-cases \
+    --binary-directory "${UACPI_TEST_BUILD_DIR:-uacpi-test-build}" \
+    "$@"

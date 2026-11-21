@@ -19,18 +19,33 @@ for spec do
         *=*) name=${spec%%=*}; source=${spec#*=} ;;
         *) name=${spec##*/}; source=$spec ;;
     esac
-    mkdir -p "$work/apps/$(dirname "$name")"
-    cp -p -- "$source" "$work/apps/$name"
+    if [ -d "$source" ]; then
+        find "$source" -type f -print | while IFS= read -r file; do
+            relative=${file#"$source"/}
+            mkdir -p "$work/apps/$name/$(dirname "$relative")"
+            cp -p -- "$file" "$work/apps/$name/$relative"
+        done
+    else
+        mkdir -p "$work/apps/$(dirname "$name")"
+        cp -p -- "$source" "$work/apps/$name"
+    fi
 done
 
 # Preserve the existing ext4 volume when refreshing the boot image.
 # qemu-img refuses to copy the disk while a running VM holds its write lock.
 if [ -f "$output" ]; then
-    qemu-img convert -f raw -O raw "$output" "$work/disk.img"
-    [ "$(stat -c %s "$work/disk.img")" -eq $((194 * 1024 * 1024)) ]
-    dd if="$work/disk.img" of="$work/apps.img" bs=1M skip=65 count=128 status=none
+    qemu-img convert -f raw -O raw "$output" "$work/old-disk.img"
+    old_size=$(stat -c %s "$work/old-disk.img")
+    case "$old_size" in
+        $((194 * 1024 * 1024))) old_apps_size=128 ;;
+        $((322 * 1024 * 1024))) old_apps_size=256 ;;
+        *) echo "Unexpected Xorg disk image size: $old_size" >&2; exit 1 ;;
+    esac
+    dd if="$work/old-disk.img" of="$work/apps.img" bs=1M skip=65 count="$old_apps_size" status=none
     [ "$(blkid -p -s LABEL -o value "$work/apps.img")" = acpi-apps ]
     e2fsck -fn "$work/apps.img"
+    truncate -s 256M "$work/apps.img"
+    resize2fs "$work/apps.img"
 
     ensure_directory()
     {
@@ -49,11 +64,8 @@ if [ -f "$output" ]; then
 
     (
         cd "$work/apps"
-        for spec do
-            case "$spec" in
-                *=*) name=${spec%%=*} ;;
-                *) name=${spec##*/} ;;
-            esac
+        find . -type f -print | while IFS= read -r path; do
+            name=${path#./}
             ensure_directory "$(dirname "$name")"
             entry=$(debugfs -R "stat \"/$name\"" "$work/apps.img" 2>/dev/null)
             case "$entry" in
@@ -113,21 +125,35 @@ if [ -f "$output" ]; then
                 [ -z "$entry" ]
             fi
         done
+
+        # Bash is now installed under its normal command name.
+        entry=$(debugfs -R 'stat /bin/bash.elf' "$work/apps.img" 2>/dev/null)
+        case "$entry" in
+            *"Type: regular"*)
+                : > "$work/current"
+                debugfs -R "dump /bin/bash.elf \"$work/current\"" "$work/apps.img"
+                if head -c 4 "$work/current" | cmp -s "$work/elf-magic" -; then
+                    debugfs -w -R 'rm /bin/bash.elf' "$work/apps.img"
+                    entry=$(debugfs -R 'stat /bin/bash.elf' "$work/apps.img" 2>/dev/null)
+                    [ -z "$entry" ]
+                fi
+                ;;
+        esac
     )
     e2fsck -fn "$work/apps.img"
 else
     # The guest driver expects 4 KiB blocks and this explicit feature set.
-    truncate -s 128M "$work/apps.img"
+    truncate -s 256M "$work/apps.img"
     mkfs.ext4 -q -F -b 4096 -I 256 -O none,filetype,extent -L acpi-apps \
         -d "$work/apps" "$work/apps.img"
+fi
 
-    truncate -s 194M "$work/disk.img"
-    sfdisk --quiet "$work/disk.img" <<'PARTITIONS'
+truncate -s 322M "$work/disk.img"
+sfdisk --quiet "$work/disk.img" <<'PARTITIONS'
 label: gpt
 start=2048, size=131072, type=U, name="EFI System"
-start=133120, size=262144, type=L, name="acpi-apps"
+start=133120, size=524288, type=L, name="acpi-apps"
 PARTITIONS
-fi
 
 truncate -s 64M "$work/esp.img"
 mkfs.fat -F 32 -n ACPIBOOT "$work/esp.img"

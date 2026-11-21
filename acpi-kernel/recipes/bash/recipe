@@ -10,4 +10,4 @@ build() {
     copy_source
     sh "$recipe_dir/build.sh" "$PWD" "$sysroot" clang ld.lld "$(uapi_dir)" "$PWD/src" "$parallelism"
 }
-package() { package_app bash.elf; }
+package() { install -Dm755 bash.elf "$dest_dir/usr/bin/bash"; }
