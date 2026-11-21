@@ -186,20 +186,58 @@ $(eval $(call jinx_artifact,$(XORG_LS),busybox-ls,usr/bin/busybox-ls))
 
 XORG_DISK := $(XORG_DESKTOP_BUILD)/acpi-xorg.img
 XORG_APPS := $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/Xvfb \
-	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(XORG_BUILD)/xsetroot $(XORG_BUILD)/xwallpaper $(XORG_BUILD)/date $(XORG_BUILD)/sleep $(ST_BUILD)/st \
+	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(XORG_BUILD)/picom $(XORG_BUILD)/xsetroot $(XORG_BUILD)/xwallpaper $(XORG_BUILD)/xdpyinfo $(XORG_BUILD)/grep $(XORG_BUILD)/sed $(XORG_BUILD)/awk $(XORG_BUILD)/tail $(XORG_BUILD)/head $(XORG_BUILD)/find $(XORG_BUILD)/xargs $(XORG_BUILD)/sort $(XORG_BUILD)/uniq $(XORG_BUILD)/cut $(XORG_BUILD)/tr $(XORG_BUILD)/wc $(XORG_BUILD)/tee $(XORG_BUILD)/diff $(XORG_BUILD)/patch $(XORG_BUILD)/file $(XORG_BUILD)/strings $(XORG_BUILD)/stat $(XORG_BUILD)/readlink $(XORG_BUILD)/realpath $(XORG_BUILD)/lspci $(XORG_BUILD)/lscpu $(XORG_BUILD)/clear $(XORG_BUILD)/date $(XORG_BUILD)/sleep $(XORG_BUILD)/conky $(XORG_BUILD)/btop $(ST_BUILD)/st \
 	$(XORG_BUILD)/nsxiv $(XORG_BUILD)/nano $(XORG_BUILD)/vim \
 	$(BASH_BUILD)/bash.elf $(BASH_BUILD)/fastfetch
-XORG_DATA := $(XORG_BUILD)/xorg-default.xkm config/dwm-fonts.conf $(wildcard initramfs/*)
-XORG_WALLPAPER := astra_and_fable_kissing.png
-XORG_WALLPAPER_FILE := usr/share/wallpapers/astra_and_fable_kissing.png=$(XORG_WALLPAPER)
+XORG_DATA := $(XORG_BUILD)/xorg-default.xkm config/dwm-fonts.conf config/time.sh config/conky.conf $(wildcard initramfs/*)
+XORG_PICOM_CONFIG := usr/share/picom/picom.conf=config/picom.conf
+XORG_CONKY_CONFIG := usr/share/conky/conky.conf=config/conky.conf
+XORG_DEJAVU_FONTS := DejaVuSans.ttf DejaVuSansMono.ttf DejaVuSansMono-Bold.ttf \
+    DejaVuSansMono-Oblique.ttf DejaVuSansMono-BoldOblique.ttf
+XORG_FONT_FILES := $(foreach font,$(XORG_DEJAVU_FONTS),fonts/$(font)=$(XORG_BUILD)/$(font))
+XORG_FILE_MAGIC := usr/share/misc/magic.mgc=$(XORG_BUILD)/magic.mgc
+XORG_PCI_IDS := usr/share/hwdata/pci.ids=$(XORG_BUILD)/pci.ids
+XORG_WALLPAPER := serval_wp.jpg
+XORG_WALLPAPER_CREDIT := serval_wp.jpg.txt
+XORG_WALLPAPER_FILES := $(addprefix usr/share/wallpapers/,$(foreach file,$(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT),$(file)=$(file)))
 
 $(eval $(call jinx_artifact,$(XORG_BUILD)/nsxiv,nsxiv,usr/bin/nsxiv))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/nano,nano,usr/bin/nano))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/vim,vim,usr/bin/vim))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/xsetroot,xsetroot,usr/bin/xsetroot))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/xwallpaper,xwallpaper,usr/bin/xwallpaper))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/xdpyinfo,xdpyinfo,usr/bin/xdpyinfo))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/grep,grep,usr/bin/grep))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/sed,sed,usr/bin/sed))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/awk,awk,usr/bin/awk))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/tail,tail,usr/bin/tail))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/head,head,usr/bin/head))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/find,find,usr/bin/find))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/xargs,xargs,usr/bin/xargs))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/sort,sort,usr/bin/sort))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/uniq,uniq,usr/bin/uniq))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/cut,cut,usr/bin/cut))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/tr,tr,usr/bin/tr))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/wc,wc,usr/bin/wc))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/tee,tee,usr/bin/tee))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/diff,diff,usr/bin/diff))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/patch,patch,usr/bin/patch))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/file,file,usr/bin/file))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/magic.mgc,file,usr/share/misc/magic.mgc))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/strings,strings,usr/bin/strings))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/stat,stat,usr/bin/stat))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/readlink,readlink,usr/bin/readlink))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/realpath,realpath,usr/bin/realpath))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/lspci,pciutils,usr/bin/lspci))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/lscpu,lscpu,usr/bin/lscpu))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/clear,clear,usr/bin/clear))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/pci.ids,pciutils,usr/share/hwdata/pci.ids))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/date,date,usr/bin/date))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/sleep,sleep,usr/bin/sleep))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/picom,picom,usr/bin/picom))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/conky,conky,usr/bin/conky))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/btop,btop,usr/bin/btop))
+$(foreach font,$(XORG_DEJAVU_FONTS),$(eval $(call jinx_artifact,$(XORG_BUILD)/$(font),dejavu-fonts,usr/share/fonts/truetype/dejavu/$(font))))
 XORG_TERMINFO := $(XORG_BUILD)/terminfo/s/st-256color
 $(eval $(call jinx_artifact,$(XORG_TERMINFO),ncurses,usr/share/terminfo/s/st-256color))
 XORG_FONT := $(XORG_DESKTOP_ASSETS)/dwm-font.ttf
@@ -223,16 +261,18 @@ $(XORG_DESKTOP_BUILD)/kernel.elf: kernel-build-force
 endif
 
 $(XORG_DISK): scripts/pack-xorg-disk.sh $(XORG_DESKTOP_BUILD)/kernel.elf $(LIMINE_DIR)/BOOTX64.EFI \
-	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_DATA) $(XORG_WALLPAPER) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) catflare.gif Makefile
+	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_DATA) $(XORG_BUILD)/magic.mgc $(XORG_BUILD)/pci.ids config/picom.conf $(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) $(addprefix $(XORG_BUILD)/,$(XORG_DEJAVU_FONTS)) catflare.gif Makefile
 	sh $< "$@" "$(XORG_DESKTOP_BUILD)/kernel.elf" "$(LIMINE_DIR)/BOOTX64.EFI" \
-		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_DATA) $(XORG_WALLPAPER_FILE) usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
+		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_DATA) $(XORG_PICOM_CONFIG) $(XORG_CONKY_CONFIG) $(XORG_FILE_MAGIC) $(XORG_PCI_IDS) $(XORG_WALLPAPER_FILES) usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
 		bin/ls=$(XORG_LS) $(foreach cmd,$(XORG_FS_COMMANDS),bin/$(cmd)=$(XORG_FS_TOOLS)) \
-		fonts/dwm-font.ttf="$(XORG_FONT)" catflare.gif=catflare.gif
+		fonts/dwm-font.ttf="$(XORG_FONT)" $(XORG_FONT_FILES) catflare.gif=catflare.gif
 
 xorg-desktop-image: $(XORG_DISK)
 
 run-xorg-uefi: private SMP_CPUS = 6
 run-xorg-uefi: xorg-desktop-image
+	@echo "X.Org VM: accel=$(XORG_ACCEL) cpu=$(XORG_CPU) vcpus=$(SMP_CPUS)"
+	@echo "X.Org serial log: $(XORG_DESKTOP_BUILD)/serial.log"
 	flock -n "$(XORG_DISK).lock" $(QEMU) -m 8G -accel $(XORG_ACCEL) -cpu $(XORG_CPU) -smp $(SMP_CPUS) -monitor none -no-reboot \
 		-chardev stdio,id=serial,logfile="$(XORG_DESKTOP_BUILD)/serial.log",logappend=off -serial chardev:serial \
 		-drive if=pflash,format=raw,readonly=on,file="$(OVMF)" \

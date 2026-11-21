@@ -20,7 +20,7 @@ These instructions apply to `acpi-kernel/`.
 - For ring-3 dispatch, keep the TSS RSP0 and `XRUN` syscall stack top on the selected task's supervisor stack. The syscall entry builds the same saved frame as the timer and returns to ASL on the scheduler stack. Dispatch with the selected task's private CR3 and restore the kernel CR3 before accessing the scheduler stack. Refresh the shared supervisor-only upper entries before dispatch. Validate syscall buffers against the calling task's ranges and translate through its private page tables while running in the kernel root.
 - Keep the register frame in `kernel/x86.S`, the generated `aml_interrupt_BRKP` bridge, and the `REGS` labels and indexing in `kernel/kernel.asl` in agreement. The current frame is 20 little-endian 64-bit slots. `BRKP (Arg0)` receives a context-owned buffer copy, formats the register values, and writes them over COM1.
 - Use the interrupt bridge to enter ASL while another AML method is running. The normal host method wrappers collect AML objects and release mutexes, so they are unsuitable for reentering the active context from the trampoline.
-- The early allocator reserves 64 KiB and does not reclaim individual allocations. Account for that lifetime when adding loops, recurring events, or persistent state.
+- The early allocator reserves 512 KiB and does not reclaim individual allocations. Account for that lifetime when adding loops, recurring events, or persistent state.
 
 ## Build and Verify
 

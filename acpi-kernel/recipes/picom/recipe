@@ -1,0 +1,17 @@
+version=13
+revision=2
+cross_compile=yes
+tarball_url=https://github.com/yshui/picom/archive/refs/tags/v13.tar.gz
+tarball_sha256=db9791a54255742c924ef82a6a882042636d61de0fa61bc14c5e56279cf5791c
+builddeps="musl pixman libev libconfig uthash libxcb libx11 xcb-util xcb-util-image xcb-util-renderutil"
+imagedeps="meson ninja-build cmake"
+
+configure() {
+    musl_env
+    meson setup obj "$source_dir" --prefix=/usr --libdir=lib \
+        --default-library=static --buildtype=release -Dprefer_static=true \
+        -Dopengl=false -Ddbus=false -Dregex=false -Dcompton=false \
+        -Dwith_docs=false -Dunittest=false
+}
+build() { meson compile -C obj -j"$parallelism"; }
+package() { DESTDIR="$dest_dir" meson install -C obj --no-rebuild; }

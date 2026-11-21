@@ -1,0 +1,18 @@
+version=1.37.0
+revision=1
+tarball_url=https://busybox.net/downloads/busybox-1.37.0.tar.bz2
+tarball_sha256=3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4
+builddeps=musl
+imagedeps=bzip2
+cross_compile=yes
+
+build() {
+    copy_source
+    cc="$sysroot/opt/acpi-musl/bin/musl-gcc"
+    cd src
+    make allnoconfig
+    sed -i -E 's/^# (CONFIG_(WC|FEATURE_WC_LARGE|STATIC|SHOW_USAGE|FEATURE_VERBOSE_USAGE)) is not set$/\1=y/' .config
+    yes '' | make oldconfig
+    make -j"$parallelism" CC="$cc" EXTRA_CFLAGS="-O2 $APP_CPU_FLAGS"
+}
+package() { package_app src/busybox wc; }

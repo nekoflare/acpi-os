@@ -1,0 +1,18 @@
+version=1.4.8
+revision=2
+cross_compile=yes
+tarball_url=https://codeload.github.com/aristocratos/btop/tar.gz/refs/tags/v1.4.8
+tarball_sha256=67e07c21b770a6d884c5e50ba1d2cfc90732ea57459367d8732ec7ecbeb3be5f
+builddeps=musl-cxx
+
+build() {
+    copy_source
+    local toolchain="$sysroot/opt/acpi-musl-cxx/bin"
+    patch -d src -p1 < "$recipe_dir/btop-guest.patch"
+    make -C src -j"$parallelism" PLATFORM=Linux ARCH=x86_64 STATIC=true GPU_SUPPORT=false         CXX="$toolchain/x86_64-linux-g++" CC="$toolchain/x86_64-linux-gcc"
+}
+
+package() {
+    package_app src/bin/btop btop
+    install -Dm644 src/LICENSE "$dest_dir/usr/share/licenses/btop/LICENSE"
+}

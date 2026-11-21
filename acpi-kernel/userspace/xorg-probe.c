@@ -106,9 +106,36 @@ int main(void)
     }
     puts("Upstream X.Org accepted an X11 client");
     if (!access("/bin/dwm", X_OK)) {
+        if (!access("/bin/picom", X_OK)) {
+            char *const picom[] = {
+                "picom", "--backend", "xrender", "--config", "/usr/share/picom/picom.conf", "--daemon", NULL,
+            };
+            start_client("/bin/picom", picom);
+        }
+        char wallpaper[] = "/usr/share/wallpapers/serval_wp.jpg";
+        if (!access("/bin/xwallpaper", X_OK) && !access(wallpaper, R_OK)) {
+            char *const arguments[] = {
+                "xwallpaper", "--zoom", wallpaper, NULL,
+            };
+            struct timespec now;
+            if (!clock_gettime(CLOCK_MONOTONIC, &now))
+                fprintf(stderr, "AMLDRAG wallpaper=%s launch_t_us=%lld\n", wallpaper,
+                        (long long)now.tv_sec * 1000000 + now.tv_nsec / 1000);
+            start_client("/bin/xwallpaper", arguments);
+        }
         char *const dwm[] = {"dwm", NULL};
         if (start_client("/bin/dwm", dwm))
             return 1;
+        if (!access("/bin/conky", X_OK)) {
+            char *const conky[] = {
+                "conky", "-c", "/usr/share/conky/conky.conf", NULL,
+            };
+            start_client("/bin/conky", conky);
+        }
+        if (!access("/time.sh", R_OK)) {
+            char *const arguments[] = {"bash.elf", "/time.sh", NULL};
+            start_client("/bin/bash.elf", arguments);
+        }
     }
     return 0;
 }

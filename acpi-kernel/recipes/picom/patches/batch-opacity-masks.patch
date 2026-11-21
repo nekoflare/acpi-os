@@ -1,0 +1,42 @@
+--- a/src/backend/xrender/xrender.c
++++ b/src/backend/xrender/xrender.c
+@@ -13,6 +13,7 @@
+ #include <xcb/shm.h>
+ #include <xcb/sync.h>
+ #include <xcb/xcb.h>
++#include <xcb/xcb_aux.h>
+ #include <xcb/xproto.h>
+ 
+ #include <picom/backend.h>
+@@ -974,10 +975,28 @@
+ 		return NULL;
+ 	}
+ 
++	// Queue the solid masks before waiting for the server. The overlay is
++	// already mapped, so every setup round trip postpones the first frame.
++	xcb_void_cookie_t alpha_requests[MAX_ALPHA + 1];
+ 	for (int i = 0; i <= MAX_ALPHA; ++i) {
+-		double o = (double)i / (double)MAX_ALPHA;
+-		xd->alpha_pict[i] = solid_picture(&ps->c, false, o, 0, 0, 0);
+-		assert(xd->alpha_pict[i] != XCB_NONE);
++		xcb_render_color_t color = {.alpha = (uint16_t)(i * UINT16_MAX / MAX_ALPHA)};
++		xd->alpha_pict[i] = x_new_id(&ps->c);
++		alpha_requests[i] = xcb_render_create_solid_fill_checked(
++		    ps->c.c, xd->alpha_pict[i], color);
++	}
++	xcb_aux_sync(ps->c.c);
++	bool alpha_ok = true;
++	for (int i = 0; i <= MAX_ALPHA; ++i) {
++		xcb_generic_error_t *error = xcb_request_check(ps->c.c, alpha_requests[i]);
++		if (error) {
++			log_error_x_error(&ps->c, error, "Failed to create opacity mask");
++			free(error);
++			xd->alpha_pict[i] = XCB_NONE;
++			alpha_ok = false;
++		}
++	}
++	if (!alpha_ok) {
++		goto err;
+ 	}
+ 
+ 	auto root_pictfmt = x_get_pictform_for_visual(&ps->c, ps->c.screen_info->root_visual);

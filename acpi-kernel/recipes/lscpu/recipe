@@ -1,0 +1,23 @@
+version=2.42.4
+revision=3
+cross_compile=yes
+tarball_url=https://www.kernel.org/pub/linux/utils/util-linux/v2.42/util-linux-2.42.4.tar.xz
+tarball_sha256=fbd62a100ab7bb8746ba0661255c3c48185b1e9021507c624da01fbc696330ec
+builddeps=musl
+
+configure() {
+    copy_source
+    patch -d src -p1 < "$recipe_dir/guest.patch"
+    musl_env
+    uapi=$(uapi_dir)
+    cd src
+    CPPFLAGS="$CPPFLAGS -I$uapi" ./configure --prefix=/usr --libdir=/usr/lib \
+        --disable-all-programs --enable-lscpu --enable-libsmartcols --disable-nls \
+        --disable-poman --disable-asciidoc --disable-widechar
+}
+build() {
+    musl_env
+    uapi=$(uapi_dir)
+    make -C src -j"$parallelism" CPPFLAGS="$CPPFLAGS -I$uapi"
+}
+package() { install -Dm755 src/lscpu "$dest_dir/usr/bin/lscpu"; }

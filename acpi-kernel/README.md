@@ -76,8 +76,9 @@ waiting readers.
 
 The PS/2 mouse uses ISA IRQ 12 or its MADT override and vector `0x24`.
 Open `/dev/mouse` for a single reader and wait for data with `poll`.
-Each read returns one eight-byte record with signed little-endian 16-bit
-X and Y deltas, a button-state byte (left, right, and middle in bits
+Reads return as many whole eight-byte records as fit in the buffer.
+Each record contains signed little-endian 16-bit X and Y deltas,
+a button-state byte (left, right, and middle in bits
 0–2), and three reserved zero bytes. Positive Y moves down. An empty
 queue yields `EAGAIN`, and a full queue drops the oldest record.
 
@@ -328,15 +329,23 @@ The build packs the flat files in `initramfs/` into a small archive and
 links it into the kernel's read-only ELF segment. The archive includes
 the standalone `/bin/ls` executable, built from `userspace/ls.c`. ASL validates the
 archive's record bounds at startup and adds the files to a read-only VFS
-tree with their data left in place. The same tree exposes `/proc/meminfo`.
-Each open of that file snapshots `MemTotal`, `MemFree`, and `MemAvailable`
-in KiB. The total counts the page-aligned usable ranges managed by the
-physical allocator. Free and available memory both count allocator pages
-that are currently unallocated. Add or edit
-files in that directory and rebuild the ISO to change its contents.
+tree with their data left in place. Add or edit files in that directory and
+rebuild the ISO to change its contents.
 Names can contain ASCII letters, digits, underscores, hyphens and dots,
 start with a letter, digit or underscore, and have at most 63 characters.
 The shell's `cat` command is intended for text files.
+
+The read-only `/proc` tree exposes CPU times, uptime, load averages, memory,
+and mounted filesystems. It lists process directories until the processes
+are reaped. Each open of a generated file captures a snapshot.
+`/proc/self` resolves to the caller's PID. Memory totals count the usable
+pages managed by the physical allocator. Free and available memory count
+currently unallocated pages.
+
+The desktop image includes `btop`. Its guest build updates the display on the
+main thread and reads CPU, memory, process, and disk capacity data from the
+kernel. Hardware sensors and network interfaces require corresponding guest
+drivers.
 
 Build from the repository root with matching Clang, LLVM tools, and LLD.
 The build also needs Python 3, Rust/Cargo, iASL, xorriso, and Limine binary files
@@ -461,7 +470,7 @@ job control remain outside its scope.
 
 The ELF, ISO, and boot logs are under `target/acpi-kernel`. The kernel
 uses general-purpose registers only and disables the x86-64 red zone.
-The freestanding runtime uses a 64 KiB early allocation arena that keeps
+The freestanding runtime uses a 512 KiB early allocation arena that keeps
 allocations until shutdown.
 
 Limine reference material is available in the [boot protocol specification](https://github.com/Limine-Bootloader/limine-protocol/blob/trunk/PROTOCOL.md).
@@ -483,6 +492,21 @@ the packaged files and boot partition while preserving other files on ext4.
 The first rebuild with the `/bin` layout removes legacy root-level ELF
 copies at the packaged command paths.
 QEMU uses KVM when `/dev/kvm` is present and TCG otherwise.
+
+To capture desktop lag, leave the session idle for a few seconds, then
+move the pointer and drag a window for 10–15 seconds while the lag is
+visible. Close QEMU and save `target/acpi-kernel-xorg-desktop/serial.log`
+before booting again, since the next run replaces it. Include the
+`X.Org VM` line printed by Make and a note about what felt slow.
+
+The serial log includes the wallpaper launch time, framebuffer geometry,
+and `AMLDRAG` summaries emitted after a presentation when at least one
+second has elapsed. They show damage extent, bytes submitted to the
+framebuffer, bytes copied into Xvfb's shadow buffers, and totals and
+maxima for preparation, framebuffer submission, and cleanup. Row-write
+fallbacks contribute only to the overall presentation timings. The
+mouse fields track packets read by Xvfb and the time from the latest
+motion batch to presentation.
 
 The bootstrap archive supplies `/etc/fstab` from `config/fstab-xorg`.
 The kernel mounts `/dev/vda2` at `/` before launching the desktop. fstab

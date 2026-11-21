@@ -182,6 +182,153 @@ uint64_t acpi_online_cpu_count(void)
     return 1 + __atomic_load_n(&secondary_cpus_online, __ATOMIC_ACQUIRE);
 }
 
+static void cpu_id(uint32_t leaf, uint32_t subleaf, uint32_t regs[4])
+{
+    __asm__ volatile("cpuid"
+                     : "=a"(regs[0]), "=b"(regs[1]), "=c"(regs[2]), "=d"(regs[3])
+                     : "a"(leaf), "c"(subleaf));
+}
+
+uint64_t acpi_cpuid_register(uint64_t leaf, uint64_t reg)
+{
+    uint32_t regs[4];
+    cpu_id((uint32_t)leaf, 0, regs);
+    return regs[reg & 3];
+}
+
+uint64_t acpi_cpu_cache_register(uint64_t index, uint64_t reg)
+{
+    uint32_t regs[4];
+    uint32_t leaf = 4;
+    if (acpi_cpuid_register(0x80000000, 0) >= 0x8000001d) {
+        cpu_id(0x8000001d, 0, regs);
+        if (regs[0] & 31)
+            leaf = 0x8000001d;
+    }
+    if (leaf == 4 && acpi_cpuid_register(0, 0) < 4)
+        return 0;
+    cpu_id(leaf, (uint32_t)index, regs);
+    return regs[reg & 3];
+}
+
+uint64_t acpi_cpu_apic_id(uint64_t index)
+{
+    return cpu_locals[index].lapic_id;
+}
+
+/* Hardware CPUID names, using conventional /proc/cpuinfo spellings. */
+static const struct {
+    uint32_t leaf;
+    uint8_t subleaf, reg;
+    const char *names[32];
+} cpu_feature_words[] = {
+    {0x1, 0, 3, {
+        [0] = "fpu", [1] = "vme", [2] = "de", [3] = "pse", [4] = "tsc", [5] = "msr",
+        [6] = "pae", [7] = "mce", [8] = "cx8", [9] = "apic", [11] = "sep", [12] = "mtrr",
+        [13] = "pge", [14] = "mca", [15] = "cmov", [16] = "pat", [17] = "pse36", [18] = "pn",
+        [19] = "clflush", [21] = "dts", [22] = "acpi", [23] = "mmx", [24] = "fxsr",
+        [25] = "sse", [26] = "sse2", [27] = "ss", [28] = "ht", [29] = "tm", [30] = "ia64",
+        [31] = "pbe",
+    }},
+    {0x80000001, 0, 3, {
+        [11] = "syscall", [19] = "mp", [20] = "nx", [22] = "mmxext", [25] = "fxsr_opt",
+        [26] = "pdpe1gb", [27] = "rdtscp", [29] = "lm", [30] = "3dnowext", [31] = "3dnow",
+    }},
+    {0x1, 0, 2, {
+        [0] = "pni", [1] = "pclmulqdq", [2] = "dtes64", [3] = "monitor", [4] = "ds_cpl",
+        [5] = "vmx", [6] = "smx", [7] = "est", [8] = "tm2", [9] = "ssse3", [10] = "cid",
+        [11] = "sdbg", [12] = "fma", [13] = "cx16", [14] = "xtpr", [15] = "pdcm",
+        [17] = "pcid", [18] = "dca", [19] = "sse4_1", [20] = "sse4_2", [21] = "x2apic",
+        [22] = "movbe", [23] = "popcnt", [24] = "tsc_deadline_timer", [25] = "aes",
+        [26] = "xsave", [27] = "osxsave", [28] = "avx", [29] = "f16c", [30] = "rdrand",
+        [31] = "hypervisor",
+    }},
+    {0x80000001, 0, 2, {
+        [0] = "lahf_lm", [1] = "cmp_legacy", [2] = "svm", [3] = "extapic", [4] = "cr8_legacy",
+        [5] = "abm", [6] = "sse4a", [7] = "misalignsse", [8] = "3dnowprefetch", [9] = "osvw",
+        [10] = "ibs", [11] = "xop", [12] = "skinit", [13] = "wdt", [15] = "lwp", [16] = "fma4",
+        [17] = "tce", [19] = "nodeid_msr", [21] = "tbm", [22] = "topoext",
+        [23] = "perfctr_core", [24] = "perfctr_nb", [26] = "bpext", [27] = "ptsc",
+        [28] = "perfctr_llc", [29] = "mwaitx",
+    }},
+    {0x7, 0, 1, {
+        [0] = "fsgsbase", [1] = "tsc_adjust", [2] = "sgx", [3] = "bmi1", [4] = "hle",
+        [5] = "avx2", [7] = "smep", [8] = "bmi2", [9] = "erms", [10] = "invpcid", [11] = "rtm",
+        [12] = "cqm", [14] = "mpx", [15] = "rdt_a", [16] = "avx512f", [17] = "avx512dq",
+        [18] = "rdseed", [19] = "adx", [20] = "smap", [21] = "avx512ifma", [23] = "clflushopt",
+        [24] = "clwb", [25] = "intel_pt", [26] = "avx512pf", [27] = "avx512er",
+        [28] = "avx512cd", [29] = "sha_ni", [30] = "avx512bw", [31] = "avx512vl",
+    }},
+    {0xd, 1, 0, {
+        [0] = "xsaveopt", [1] = "xsavec", [2] = "xgetbv1", [3] = "xsaves", [4] = "xfd",
+    }},
+    {0x7, 1, 0, {
+        [0] = "sha512", [1] = "sm3", [2] = "sm4", [4] = "avx_vnni", [5] = "avx512_bf16",
+        [6] = "lass", [17] = "fred", [26] = "lam",
+    }},
+    {0x80000008, 0, 1, {
+        [0] = "clzero", [1] = "irperf", [2] = "xsaveerptr", [4] = "rdpru", [9] = "wbnoinvd",
+        [23] = "amd_ppin", [25] = "virt_ssbd", [27] = "cppc", [31] = "brs",
+    }},
+    {0x6, 0, 0, {
+        [0] = "dtherm", [1] = "ida", [2] = "arat", [4] = "pln", [6] = "pts", [7] = "hwp",
+        [8] = "hwp_notify", [9] = "hwp_act_window", [10] = "hwp_epp", [11] = "hwp_pkg_req",
+        [19] = "hfi",
+    }},
+    {0x8000000a, 0, 3, {
+        [0] = "npt", [1] = "lbrv", [2] = "svm_lock", [3] = "nrip_save", [4] = "tsc_scale",
+        [5] = "vmcb_clean", [6] = "flushbyasid", [7] = "decodeassists", [10] = "pausefilter",
+        [12] = "pfthreshold", [13] = "avic", [15] = "v_vmsave_vmload", [16] = "vgif",
+        [18] = "x2avic", [20] = "v_spec_ctrl", [25] = "vnmi",
+    }},
+    {0x7, 0, 2, {
+        [1] = "avx512vbmi", [2] = "umip", [3] = "pku", [4] = "ospke", [5] = "waitpkg",
+        [6] = "avx512_vbmi2", [8] = "gfni", [9] = "vaes", [10] = "vpclmulqdq",
+        [11] = "avx512_vnni", [12] = "avx512_bitalg", [13] = "tme", [14] = "avx512_vpopcntdq",
+        [16] = "la57", [22] = "rdpid", [24] = "bus_lock_detect", [25] = "cldemote",
+        [27] = "movdiri", [28] = "movdir64b", [29] = "enqcmd", [30] = "sgx_lc",
+    }},
+    {0x7, 0, 3, {
+        [2] = "avx512_4vnniw", [3] = "avx512_4fmaps", [4] = "fsrm",
+        [8] = "avx512_vp2intersect", [10] = "md_clear", [14] = "serialize", [16] = "tsxldtrk",
+        [18] = "pconfig", [19] = "arch_lbr", [20] = "ibt", [22] = "amx_bf16",
+        [23] = "avx512_fp16", [24] = "amx_tile", [25] = "amx_int8", [28] = "flush_l1d",
+        [29] = "arch_capabilities",
+    }},
+    {0x8000001f, 0, 0, {
+        [0] = "sme", [1] = "sev", [3] = "sev_es", [4] = "sev_snp", [14] = "debug_swap",
+        [28] = "svsm",
+    }},
+    {0x80000007, 0, 3, {[8] = "constant_tsc"}},
+};
+
+uint64_t acpi_cpu_feature_names(uint64_t address)
+{
+    char *start = (char *)(uintptr_t)address;
+    char *out = start;
+    uint32_t basic = acpi_cpuid_register(0, 0);
+    uint32_t extended = acpi_cpuid_register(0x80000000, 0);
+    for (size_t i = 0; i < sizeof(cpu_feature_words) / sizeof(cpu_feature_words[0]); ++i) {
+        uint32_t leaf = cpu_feature_words[i].leaf;
+        uint32_t subleaf = cpu_feature_words[i].subleaf;
+        if (leaf > ((leaf & 0x80000000) ? extended : basic) ||
+            (leaf == 7 && subleaf > acpi_cpuid_register(7, 0)))
+            continue;
+        uint32_t regs[4];
+        cpu_id(leaf, subleaf, regs);
+        for (unsigned bit = 0; bit < 32; ++bit) {
+            const char *name = cpu_feature_words[i].names[bit];
+            if (!(regs[cpu_feature_words[i].reg] & (UINT32_C(1) << bit)) || !name)
+                continue;
+            if (out != start)
+                *out++ = ' ';
+            while (*name)
+                *out++ = *name++;
+        }
+    }
+    return (uint64_t)(out - start);
+}
+
 /* CPUID leaf 0x16 reports the processor's advertised base frequency in MHz.
  * A zero result means the CPU does not provide that information. */
 uint64_t acpi_cpu_base_frequency_mhz(void)

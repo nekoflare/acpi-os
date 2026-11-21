@@ -1,0 +1,37 @@
+version=1.26.1
+revision=1
+cross_compile=yes
+tarball_url=https://github.com/brndnmtthws/conky/archive/refs/tags/v1.26.1.tar.gz
+tarball_sha256=5af3f1946fd0b8821556ce35b89fbf8408e9e1357799ca31d7a35c0fcf921356
+builddeps=musl-cxx
+deps="lua libx11 libxft fontconfig freetype libxrender libxi"
+imagedeps="cmake ninja-build pkgconf gperf"
+
+configure() {
+    musl_env
+    local toolchain="$sysroot/opt/acpi-musl-cxx/bin"
+    local x11_libs
+    x11_libs=$(pkg-config --static --libs xft xi) || return
+    copy_source
+    # CMake's FindX11 omits the private dependencies of the static archives.
+    printf '\ntarget_link_libraries(conky %s)\n' "$x11_libs" >> src/src/CMakeLists.txt
+    cmake -S src -B obj -G Ninja \
+        -DCMAKE_C_COMPILER="$toolchain/x86_64-linux-gcc" \
+        -DCMAKE_CXX_COMPILER="$toolchain/x86_64-linux-g++" \
+        -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CFLAGS" \
+        -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib \
+        -DCMAKE_EXE_LINKER_FLAGS="$LDFLAGS" \
+        -DLUA_MATH_LIBRARY:STRING=m \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_FIND_ROOT_PATH="$sysroot/usr" \
+        -DBUILD_I18N=OFF \
+        -DBUILD_WAYLAND=OFF -DBUILD_X11=ON -DOWN_WINDOW=ON \
+        -DBUILD_XFT=ON -DBUILD_XDAMAGE=OFF -DBUILD_XFIXES=OFF \
+        -DBUILD_XINERAMA=OFF -DBUILD_XDBE=OFF -DBUILD_XSHAPE=OFF \
+        -DBUILD_IMLIB2=OFF -DBUILD_LUA_CAIRO=OFF -DBUILD_LUA_IMLIB2=OFF \
+        -DBUILD_LUA_RSVG=OFF -DBUILD_LUA_TEXT=OFF -DBUILD_NCURSES=OFF \
+        -DBUILD_WLAN=OFF -DBUILD_MPD=OFF -DBUILD_MOC=OFF \
+        -DBUILD_OPENSOUNDSYS=OFF -DBUILD_CURL=OFF -DBUILD_HTTP=OFF \
+        -DBUILD_RSS=OFF -DBUILD_ICAL=OFF -DBUILD_APCUPSD=OFF
+}
+build() { cmake --build obj -j"$parallelism"; }
+package() { DESTDIR="$dest_dir" cmake --install obj; }

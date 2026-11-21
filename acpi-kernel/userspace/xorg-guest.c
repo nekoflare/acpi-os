@@ -41,6 +41,7 @@ enum {
     GUEST_FB_PRESENT_RECTS = 0x46F2,
     GUEST_FB_UPDATE_RECTS = 0x46F3,
     MAX_PRESENT_RECTS = 64,
+    REFINE_CHUNK_PIXELS = 32,
 };
 
 struct guest_fb_present_rect {
@@ -67,9 +68,13 @@ static enum present_path present_path;
 static uint64_t present_bytes, last_motion_us, report_start_us;
 static struct {
     unsigned frames[PRESENT_PATHS];
+    unsigned front_frames;
     unsigned mouse_packets, motion_packets, mouse_budget_hits;
     unsigned motion_frames;
     uint64_t bytes, present_us, max_present_us, max_motion_age_us;
+    uint64_t damage_pixels, shadow_bytes;
+    uint64_t prepare_us, submit_us, finish_us;
+    uint64_t max_prepare_us, max_submit_us, max_finish_us;
 } timing;
 
 static uint64_t
@@ -82,7 +87,8 @@ monotonic_us(void)
 }
 
 static void
-record_present(uint64_t start, enum present_path path, uint64_t bytes)
+record_present(uint64_t start, enum present_path path, uint64_t bytes,
+               uint64_t submit_start, uint64_t submit_end)
 {
     uint64_t end = monotonic_us();
     if (!start || end < start)
@@ -94,6 +100,17 @@ record_present(uint64_t start, enum present_path path, uint64_t bytes)
     timing.bytes += bytes;
     timing.present_us += elapsed;
     timing.max_present_us = max(timing.max_present_us, elapsed);
+    if (start <= submit_start && submit_start <= submit_end && submit_end <= end) {
+        uint64_t prepare = submit_start - start;
+        uint64_t submit = submit_end - submit_start;
+        uint64_t finish = end - submit_end;
+        timing.prepare_us += prepare;
+        timing.submit_us += submit;
+        timing.finish_us += finish;
+        timing.max_prepare_us = max(timing.max_prepare_us, prepare);
+        timing.max_submit_us = max(timing.max_submit_us, submit);
+        timing.max_finish_us = max(timing.max_finish_us, finish);
+    }
     if (last_motion_us && last_motion_us <= end) {
         ++timing.motion_frames;
         timing.max_motion_age_us = max(timing.max_motion_age_us, end - last_motion_us);
@@ -103,13 +120,20 @@ record_present(uint64_t start, enum present_path path, uint64_t bytes)
         return;
     LogMessageVerb(X_INFO, 0,
         "AMLDRAG t_us=%" PRIu64 " interval_us=%" PRIu64
-        " rect=%u full=%u rows=%u bytes=%" PRIu64
+        " rect=%u full=%u rows=%u front=%u bytes=%" PRIu64
         " present_total_us=%" PRIu64 " present_max_us=%" PRIu64
+        " damage_extent_pixels=%" PRIu64 " shadow_bytes=%" PRIu64
+        " prepare_total_us=%" PRIu64 " prepare_max_us=%" PRIu64
+        " submit_total_us=%" PRIu64 " submit_max_us=%" PRIu64
+        " finish_total_us=%" PRIu64 " finish_max_us=%" PRIu64
         " mouse_packets=%u motion_packets=%u mouse_budget_hits=%u"
         " motion_frames=%u latest_motion_to_present_max_us=%" PRIu64 "\n",
         end, end - report_start_us, timing.frames[PRESENT_RECT],
-        timing.frames[PRESENT_FULL], timing.frames[PRESENT_ROWS], timing.bytes,
-        timing.present_us, timing.max_present_us, timing.mouse_packets,
+        timing.frames[PRESENT_FULL], timing.frames[PRESENT_ROWS],
+        timing.front_frames, timing.bytes, timing.present_us, timing.max_present_us,
+        timing.damage_pixels, timing.shadow_bytes,
+        timing.prepare_us, timing.max_prepare_us, timing.submit_us,
+        timing.max_submit_us, timing.finish_us, timing.max_finish_us, timing.mouse_packets,
         timing.motion_packets, timing.mouse_budget_hits, timing.motion_frames,
         timing.max_motion_age_us);
     memset(&timing, 0, sizeof(timing));
@@ -164,6 +188,9 @@ amlaot_xorg_geometry(int *width, int *height)
     RegionInit(&pending_damage[0], &full, 1);
     RegionInit(&pending_damage[1], &full, 1);
     pending_damage_ready = TRUE;
+    LogMessageVerb(X_INFO, 0, "AMLDRAG framebuffer=%dx%d stride=%u page_flip=%d shadow_pages=%d\n",
+                   *width, *height, fb_layout.line_length, page_flip,
+                   (scanout_shadow[0] != NULL) + (scanout_shadow[1] != NULL));
 }
 
 static Bool
@@ -211,8 +238,18 @@ refine_damage(RegionPtr refined, RegionPtr damage, const uint32_t *pixels,
                 continue;
             int left = box->x1;
             int right = box->x2;
+            /* Skip long equal runs in wallpaper and other static content. */
+            while (changed.x1 - left >= REFINE_CHUNK_PIXELS &&
+                   !memcmp(current + left, old + left,
+                           REFINE_CHUNK_PIXELS * sizeof(*pixels)))
+                left += REFINE_CHUNK_PIXELS;
             while (left < changed.x1 && current[left] == old[left])
                 ++left;
+            while (right - changed.x2 >= REFINE_CHUNK_PIXELS &&
+                   !memcmp(current + right - REFINE_CHUNK_PIXELS,
+                           old + right - REFINE_CHUNK_PIXELS,
+                           REFINE_CHUNK_PIXELS * sizeof(*pixels)))
+                right -= REFINE_CHUNK_PIXELS;
             while (right > changed.x2 && current[right - 1] == old[right - 1])
                 --right;
             changed.x1 = min(changed.x1, left);
@@ -229,18 +266,21 @@ refine_damage(RegionPtr refined, RegionPtr damage, const uint32_t *pixels,
     RegionInitBoxes(refined, boxes, count);
 }
 
-static void
+static uint64_t
 remember_scanout(uint32_t *shadow, const uint8_t *pixels, RegionPtr damage, int width)
 {
+    uint64_t copied = 0;
     const BoxRec *boxes = RegionRects(damage);
     for (int i = 0; i < RegionNumRects(damage); ++i) {
         const BoxRec *box = &boxes[i];
         size_t bytes = (box->x2 - box->x1) * sizeof(*shadow);
+        copied += (uint64_t)bytes * (box->y2 - box->y1);
         for (int y = box->y1; y < box->y2; ++y) {
             size_t offset = (size_t)y * width + box->x1;
             memcpy(shadow + offset, pixels + offset * sizeof(*shadow), bytes);
         }
     }
+    return copied;
 }
 
 static int
@@ -368,23 +408,22 @@ guest_block_handler(ScreenPtr screen, void *timeout)
             if (RegionNotEmpty(&refined) && RegionNumRects(&refined) <= MAX_PRESENT_RECTS)
                 update = &refined;
         }
+        uint64_t submit_start = monotonic_us();
         int result = update_front ? update_scanout(pixels, update)
                                   : present_page(pixels, update, screen->width, screen->height);
-        int present_error = errno;
-        if (compare)
-            RegionUninit(&refined);
-        errno = present_error;
         if (update_front && result && errno == ENOTTY) {
             front_updates = FALSE;
             page = next_page;
             pending = &pending_damage[page];
+            update = pending;
             shadow = scanout_shadow[page];
             result = present_page(pixels, pending, screen->width, screen->height);
             update_front = FALSE;
         }
         if (!result) {
+            uint64_t submit_end = monotonic_us();
             if (shadow) {
-                remember_scanout(shadow, pixels, pending, screen->width);
+                timing.shadow_bytes += remember_scanout(shadow, pixels, update, screen->width);
                 scanout_valid[page] = TRUE;
             }
             if (force_refresh)
@@ -395,11 +434,20 @@ guest_block_handler(ScreenPtr screen, void *timeout)
             if (!update_front)
                 next_page ^= 1;
             force_refresh = FALSE;
-            record_present(start, present_path, present_bytes);
+            timing.front_frames += update_front;
+            timing.damage_pixels += (uint64_t)(changed.x2 - changed.x1) *
+                                    (changed.y2 - changed.y1);
+            if (compare)
+                RegionUninit(&refined);
+            record_present(start, present_path, present_bytes, submit_start, submit_end);
             return;
         }
-        if (errno != ENOTTY) {
-            LogMessage(X_WARNING, "Cannot present guest framebuffer: %s\n", strerror(errno));
+        int present_error = errno;
+        if (compare)
+            RegionUninit(&refined);
+        if (present_error != ENOTTY) {
+            LogMessage(X_WARNING, "Cannot present guest framebuffer: %s\n",
+                       strerror(present_error));
             amlaot_xorg_close_screen();
             return;
         }
@@ -424,8 +472,11 @@ guest_block_handler(ScreenPtr screen, void *timeout)
         written += row_bytes;
     }
     force_refresh = FALSE;
-    if (written)
-        record_present(start, PRESENT_ROWS, written);
+    if (written) {
+        timing.damage_pixels += (uint64_t)(changed.x2 - changed.x1) *
+                                (changed.y2 - changed.y1);
+        record_present(start, PRESENT_ROWS, written, 0, 0);
+    }
 }
 
 void
@@ -466,12 +517,14 @@ mouse_ready(int fd, int ready, void *data)
         return;
     DeviceIntPtr mouse = data;
     static const int button_map[] = {1, 3, 2};
-    unsigned i;
+    uint8_t packets[32][8];
+    ssize_t bytes = read(fd, packets, sizeof(packets));
+    if (bytes <= 0)
+        return;
+    unsigned count = bytes / sizeof(packets[0]);
     Bool motion = FALSE;
-    for (i = 0; i < 32; ++i) {
-        uint8_t packet[8];
-        if (read(fd, packet, sizeof(packet)) != sizeof(packet))
-            break;
+    for (unsigned i = 0; i < count; ++i) {
+        const uint8_t *packet = packets[i];
         int dx = (int16_t)(packet[0] | packet[1] << 8);
         int dy = (int16_t)(packet[2] | packet[3] << 8);
         if (dx || dy) {
@@ -491,8 +544,8 @@ mouse_ready(int fd, int ready, void *data)
         }
         buttons = packet[4];
     }
-    timing.mouse_packets += i;
-    if (i == 32)
+    timing.mouse_packets += count;
+    if (bytes == sizeof(packets))
         ++timing.mouse_budget_hits;
     if (motion)
         last_motion_us = monotonic_us();

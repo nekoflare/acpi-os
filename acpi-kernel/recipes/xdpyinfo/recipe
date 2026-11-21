@@ -1,0 +1,21 @@
+version=1.4.0
+revision=1
+cross_compile=yes
+tarball_url=https://www.x.org/releases/individual/app/xdpyinfo-1.4.0.tar.xz
+tarball_sha256=dc1de6e6e091ed46c4837b0ae9811e8182f7be0d2af638cab3e530ff081a48b6
+builddeps="musl libx11 libxext libxrender libxtst"
+
+configure() (
+    copy_source
+    musl_env
+    cd src
+    XDPYINFO_LIBS="$(pkg-config --static --libs xext x11 xtst x11-xcb xcb xproto)" \
+        ./configure --prefix=/usr --without-dga --without-xinerama
+)
+build() {
+    musl_env
+    make -C src -j"$parallelism" \
+        DPY_XINPUT_LIBS="$(pkg-config --static --libs xi)" \
+        DPY_XRENDER_LIBS="$(pkg-config --static --libs xrender)"
+}
+package() { autoconf_package; }

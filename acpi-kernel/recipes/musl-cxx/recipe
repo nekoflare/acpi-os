@@ -1,0 +1,10 @@
+version=2024.05
+revision=1
+cross_compile=yes
+tarball_url=https://toolchains.bootlin.com/downloads/releases/toolchains/x86-64/tarballs/x86-64--musl--stable-2024.05-1.tar.xz
+tarball_sha256=f3cf417d28e7df95bdab632ff837de66ac03145bd0e1dd78cc89aadfa6e31526
+
+package() {
+    mkdir -p "$dest_dir/opt/acpi-musl-cxx"
+    cp -a "$source_dir/." "$dest_dir/opt/acpi-musl-cxx/"
+}

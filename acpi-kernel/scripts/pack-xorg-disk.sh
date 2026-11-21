@@ -74,6 +74,26 @@ if [ -f "$output" ]; then
             cmp "$name" "$work/current"
         done
 
+        # Remove the prior picom config location from the ext4 image. The
+        # bootstrap initramfs owns /etc/fstab, so a disk-root /etc directory
+        # collides when ext4 is mounted over the bootstrap root.
+        entry=$(debugfs -R 'stat /etc/picom.conf' "$work/apps.img" 2>/dev/null)
+        case "$entry" in
+            *"Type: regular"*) debugfs -w -R 'rm /etc/picom.conf' "$work/apps.img" ;;
+        esac
+        entry=$(debugfs -R 'stat /etc' "$work/apps.img" 2>/dev/null)
+        case "$entry" in
+            *"Type: directory"*)
+                contents=$(debugfs -R 'ls -l /etc' "$work/apps.img" 2>/dev/null |
+                    awk '$NF != "." && $NF != ".." { print $NF }')
+                if [ -n "$contents" ]; then
+                    echo "Cannot retire /etc from the desktop ext4 image; it still contains: $contents" >&2
+                    exit 1
+                fi
+                debugfs -w -R 'rmdir /etc' "$work/apps.img"
+                ;;
+        esac
+
         # Retire the old root-level copies after their /bin replacements
         # are in place. Leave unrelated files at those paths alone.
         printf '\177ELF' > "$work/elf-magic"

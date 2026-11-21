@@ -1,7 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static _Alignas(max_align_t) unsigned char arena[64 * 1024];
+static _Alignas(max_align_t) unsigned char arena[512 * 1024];
 static size_t used;
 
 void *memset(void *destination, int byte, size_t count)

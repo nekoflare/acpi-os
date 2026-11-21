@@ -1,0 +1,48 @@
+--- a/src/output/display-x11.cc
++++ b/src/output/display-x11.cc
+@@ -56,10 +56,13 @@
+ #include <cairo-xlib.h>
+ #endif /* BUILD_LUA_CAIRO_XLIB */
+ 
++#include <algorithm>
++#include <cmath>
+ #include <cstdint>
+ #include <iostream>
+ #include <limits>
+ #include <map>
++#include <poll.h>
+ #include <sstream>
+ #include <unordered_map>
+ #include <variant>
+@@ -264,24 +267,16 @@
+   if (!display || !window.gc) return true;
+ 
+   if (XPending(display) == 0) {
+-    fd_set fdsr;
+-    struct timeval tv {};
+-    int s;
+-    // t = next_update_time - get_time();
+-
+-    t = std::min(std::max(t, 0.0), active_update_interval());
+-
+-    tv.tv_sec = static_cast<long>(t);
+-    tv.tv_usec = static_cast<long>(t * 1000000) % 1000000;
+-    FD_ZERO(&fdsr);
+-    FD_SET(ConnectionNumber(display), &fdsr);
+-
+-    s = select(ConnectionNumber(display) + 1, &fdsr, nullptr, nullptr, &tv);
++    t = std::clamp(t, 0.0, active_update_interval());
++    pollfd fd{ConnectionNumber(display), POLLIN, 0};
++    const double timeout_ms = std::ceil(t * 1000);
++    const double max_timeout_ms = std::numeric_limits<int>::max();
++    int s = poll(&fd, 1, static_cast<int>(std::min(timeout_ms, max_timeout_ms)));
+     if (s == -1) {
+-      if (errno != EINTR) { LOG_ERROR("can't select(): {}", strerror(errno)); }
++      if (errno != EINTR) { LOG_ERROR("can't poll(): {}", strerror(errno)); }
+     } else {
+       /* timeout */
+-      if (s == 0) { update_text(); }
++      if (s == 0 && timeout_ms <= max_timeout_ms) { update_text(); }
+     }
+   }
+ 

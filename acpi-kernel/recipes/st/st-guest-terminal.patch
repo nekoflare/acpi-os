@@ -360,6 +360,13 @@
  	if (len == 1 && e->state & Mod1Mask) {
 --- a/config.def.h
 +++ b/config.def.h
+@@ -5,5 +5,5 @@
+  *
+  * font: see http://freedesktop.org/software/fontconfig/fontconfig-user.html
+  */
+-static char *font = "Liberation Mono:pixelsize=12:antialias=true:autohint=true";
++static char *font = "DejaVu Sans Mono:pixelsize=15:antialias=true";
+ static int borderpx = 2;
 @@ -16,7 +16,7 @@
   * 4: value of shell in /etc/passwd
   * 5: value of shell in config.h

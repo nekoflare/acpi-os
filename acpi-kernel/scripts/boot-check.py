@@ -199,7 +199,7 @@ def boot(serial_path, qemu_log, qemu_command):
                                 + (rb"dwm-fonts\.conf\ndwm-start\.sh\nfonts\n" if dwm_check else b"")
                                 + rb"readme\.txt\nwelcome\.txt\n"
                                 + (b"" if dwm_check else rb"x11-start\.sh\n")
-                                + rb"dev\nproc\n"
+                                + rb"dev\nproc\nsys\n"
                                 + re.escape(bash_prompt)
                             )
                             send_keys(stream, (*"ls", "spc", "slash", "ret"))
@@ -263,7 +263,7 @@ def boot(serial_path, qemu_log, qemu_command):
                         listing = b"welcome.txt\r\n"
                         if bash_check and not dwm_check:
                             listing += b"x11-start.sh\r\n"
-                        listing += b"dev\r\nproc\r\nasl> "
+                        listing += b"dev\r\nproc\r\nsys\r\nasl> "
                         wait_for(
                             process, deadline,
                             lambda: listing in serial_path.read_bytes(),

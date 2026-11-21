@@ -1,0 +1,16 @@
+version=5.4.8
+revision=1
+cross_compile=yes
+tarball_url=https://www.lua.org/ftp/lua-5.4.8.tar.gz
+tarball_sha256=4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae
+builddeps=musl
+
+configure() { copy_source; }
+build() {
+    musl_env
+    make -C src/src -j"$parallelism" linux-noreadline \
+        CC="$CC" MYCFLAGS="$CFLAGS" MYLDFLAGS="$LDFLAGS"
+}
+package() {
+    make -C src INSTALL_TOP="$dest_dir/usr" install
+}

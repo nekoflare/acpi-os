@@ -35,6 +35,8 @@
         Local4 = VWAL (VROT, Local2, Local3 - Local2)
         If (Local4 >= Zero - 4095 || XVWD (Local4 + VNTY, Ones) != 4) { Return (Zero) }
 
+        Local6 = Local2
+        Local7 = Local3
         Local2 = FSWS (Local3, Arg1)
         Local3 = FSTK (Local2, Arg1)
         If (!SHMT (Local2, Local3 - Local2, "ext4")) { Return (Zero) }
@@ -47,6 +49,7 @@
         If (FSMP & (One << Local1)) { Return (Zero) }
         If (!EXMT (Local1, Local4, Local5)) { Return (Zero) }
         FSMP |= One << Local1
+        PCMR (Local1, Local6, Local7, Local4)
         PNUM ("fstab: mounted ext4 GPT partition ", Local1)
         PUTS ("")
         Return (One)

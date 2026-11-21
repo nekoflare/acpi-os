@@ -1,0 +1,62 @@
+--- a/sys-utils/lscpu-virt.c
++++ b/sys-utils/lscpu-virt.c
+@@ -21,10 +21,7 @@
+ 
+ #include "lscpu.h"
+ 
+-#if (defined(__x86_64__) || defined(__i386__))
+-# define INCLUDE_VMWARE_BDOOR
+-#endif
+-
++/* The legacy I/O probe needs SA_SIGINFO. Keep CPUID detection enabled. */
+ #ifdef INCLUDE_VMWARE_BDOOR
+ # include <stdint.h>
+ # include <strings.h>
+--- a/include/closestream.h
++++ b/include/closestream.h
+@@ -57,7 +57,13 @@
+ 	 * around this issue by calling close on a dup'd file
+ 	 * descriptor from the stream.
+ 	 */
+-	if ((fd = fileno(stream)) < 0 || (fd = dup(fd)) < 0 || close(fd) != 0)
++	if ((fd = fileno(stream)) < 0)
++		goto error;
++	fd = dup(fd);
++	/* The guest boot console has implicit descriptors. */
++	if (fd < 0 && errno == ENOSYS)
++		return 0;
++	if (fd < 0 || close(fd) != 0)
+ 		goto error;
+ 
+ 	return 0;
+--- a/sys-utils/lscpu.c
++++ b/sys-utils/lscpu.c
+@@ -906,11 +906,14 @@
+ 	if (ct->model || ct->revision)
+ 		add_summary_s(tb, sec, _("Model:"), ct->revision ? ct->revision : ct->model);
+ 
+-	add_summary_n(tb, sec, _("Thread(s) per core:"), ct->nthreads_per_core);
+-	if (cxt->is_cluster)
+-		add_summary_n(tb, sec, _("Core(s) per cluster:"), ct->ncores_per_socket);
+-	else
+-		add_summary_n(tb, sec, _("Core(s) per socket:"), ct->ncores_per_socket);
++	if (ct->nthreads_per_core)
++		add_summary_n(tb, sec, _("Thread(s) per core:"), ct->nthreads_per_core);
++	if (ct->ncores_per_socket) {
++		if (cxt->is_cluster)
++			add_summary_n(tb, sec, _("Core(s) per cluster:"), ct->ncores_per_socket);
++		else
++			add_summary_n(tb, sec, _("Core(s) per socket:"), ct->ncores_per_socket);
++	}
+ 
+ 	if (ct->nbooks) {
+ 		add_summary_n(tb, sec, _("Socket(s) per book:"), ct->nsockets_per_book);
+@@ -928,7 +931,7 @@
+ 
+ 			add_summary_n(tb, sec, _("Cluster(s):"),
+ 					ct->nsockets_per_book ?: ct->nsockets);
+-		} else
++		} else if (ct->nsockets_per_book || ct->nsockets)
+ 			add_summary_n(tb, sec, _("Socket(s):"),
+ 					ct->nsockets_per_book ?: ct->nsockets);
+ 	}

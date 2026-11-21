@@ -24,13 +24,14 @@
     {
         If (EXWR (Arg0)) { Return (One) }
         Local0 = XVWD (Arg0 + VNFS, Ones)
-        Return (Local0 && XVWD (Arg0 + VNTY, Ones) == 4 &&
-            XVWD (Local0 + EXRW, Ones))
+        // AML evaluates both operands of LAnd. Synthetic nodes have no ext4 volume.
+        If (!Local0 || XVWD (Arg0 + VNTY, Ones) != 4) { Return (Zero) }
+        Return (XVWD (Local0 + EXRW, Ones) != Zero)
     }
 
     Method (VREF, 1, NotSerialized)
     {
-        If (Arg0 && XVWD (Arg0 + VNMD, Ones))
+        If (Arg0 && (XVWD (Arg0 + VNMD, Ones) || XVWD (Arg0 + VNPR, Ones)))
         {
             XSTQ (Arg0 + VNRF, XVWD (Arg0 + VNRF, Ones) + One)
         }
@@ -38,7 +39,8 @@
 
     Method (VREC, 1, NotSerialized)
     {
-        If (!XVWD (Arg0 + VNMD, Ones) || XVWD (Arg0 + VNPA, Ones) ||
+        If (!(XVWD (Arg0 + VNMD, Ones) || XVWD (Arg0 + VNPR, Ones)) ||
+            XVWD (Arg0 + VNPA, Ones) ||
             XVWD (Arg0 + VNRF, Ones)) { Return (Zero) }
         VDIS (Arg0)
         Return (One)
@@ -53,7 +55,7 @@
 
     Method (VREL, 1, NotSerialized)
     {
-        If (Arg0 && XVWD (Arg0 + VNMD, Ones))
+        If (Arg0 && (XVWD (Arg0 + VNMD, Ones) || XVWD (Arg0 + VNPR, Ones)))
         {
             XSTQ (Arg0 + VNRF, XVWD (Arg0 + VNRF, Ones) - One)
             VREC (Arg0)
@@ -65,7 +67,7 @@
     Name (VBNM, Zero)
     Name (VBLN, Zero)
     Name (VBTR, Zero)
-    Method (VPAR, 3, NotSerialized)
+    Method (VPAR, 4, NotSerialized)
     {
         Local0 = Arg2
         While (Local0 && XBYT (Arg1 + Local0 - One) == 0x2F) { Decrement (Local0) }
@@ -76,7 +78,7 @@
         VBNM = Arg1 + Local1
         VBLN = Local0 - Local1
         If (VBLN > 255) { Return (Zero - 36) }
-        Local2 = VWAL (Arg0, Arg1, Local1)
+        Local2 = VWAT (Arg0, Arg1, Local1, Arg3, Zero)
         If (Local2 >= Zero - 4095) { Return (Local2) }
         If (XVWD (Local2 + VNTY, Ones) != 4) { Return (Zero - 20) }
         Return (Local2)
@@ -171,6 +173,7 @@
         XSTB (Local2, Zero)
         While (Local0 != VROT)
         {
+            If (!XVWD (Local0 + VNPA, Ones)) { Return (Zero - 2) }
             Local4 = XVWD (Local0 + VNNL, Ones)
             If (Local2 - Local1 <= Local4) { Return (Zero - 36) }
             Local2 -= Local4
@@ -297,4 +300,54 @@
         XSTQ (Local1 + VNXT, XVWD (Local3 + VNCH, Ones))
         XSTQ (Local3 + VNCH, Local1)
         Return (Local5)
+    }
+
+    Name (SFST, Buffer (120) {}) // Linux x86-64 struct statfs
+
+    Method (SYFT, 4, NotSerialized)
+    {
+        If (Arg3)
+        {
+            Local0 = UFDL (Arg0, Arg1 & 0xFFFFFFFF)
+            If (!Local0) { Return (Zero - 9) }
+            Local0 = XVWD (Local0, Ones)
+        }
+        Else
+        {
+            Local0 = UENT (Arg0, Arg1, 0xFFFFFF9C)
+            If (Local0 >= Zero - 4095) { Return (Local0) }
+        }
+        Local1 = XADR (SFST)
+        XMOV (Local1, XADR (EXZR), SizeOf (SFST))
+        Local2 = 0x01021994 // RAM filesystem
+        Local3 = 0x21 // ST_VALID | ST_RDONLY
+        If (Local0 != XADR (SKND) && Local0 != XADR (MFND))
+        {
+            If (XVWD (Local0 + VNPR, Ones)) { Local2 = 0x9FA0 }
+            Local4 = XVWD (Local0 + VNFS, Ones)
+            If (Local4)
+            {
+                EXVL = Local4
+                If (!EXRD (Zero, EXDB)) { Return (Zero - 5) }
+                Local5 = EXDB + 1024
+                Local6 = ELWD (Local5, 12, 4)
+                Local7 = ELWD (Local5, 8, 4)
+                XSTQ (Local1 + 16, XVWD (Local4 + EXBL, Ones))
+                XSTQ (Local1 + 24, Local6)
+                If (Local6 < Local7) { Local6 = Local7 }
+                XSTQ (Local1 + 32, Local6 - Local7)
+                XSTQ (Local1 + 40, XVWD (Local4 + EXIC, Ones))
+                XSTQ (Local1 + 48, ELWD (Local5, 16, 4))
+                XSTQ (Local1 + 56, XVWD (Local4, Ones))
+                Local2 = 0xEF53
+                If (XVWD (Local4 + EXRW, Ones)) { Local3 = 0x20 }
+            }
+        }
+        XSTQ (Local1, Local2)
+        XSTQ (Local1 + 8, PGSZ)
+        XSTQ (Local1 + 64, 255)
+        XSTQ (Local1 + 72, PGSZ)
+        XSTQ (Local1 + 80, Local3)
+        If (!UCOP (Arg0, Arg2, Local1, SizeOf (SFST))) { Return (Zero - 14) }
+        Return (Zero)
     }
