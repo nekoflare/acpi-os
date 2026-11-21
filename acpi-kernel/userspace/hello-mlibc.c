@@ -88,6 +88,43 @@ static int check_poll(void)
     return 0;
 }
 
+static int check_dev_null(void)
+{
+    struct stat info;
+    unsigned char data[32] = {0};
+    struct pollfd ready;
+    int fd = open("/dev/null", O_RDWR);
+    if (fd < 0) { write_all("/dev/null open failed\n"); return -1; }
+    if (fstat(fd, &info)) { write_all("/dev/null fstat failed\n"); return -1; }
+    if (!S_ISCHR(info.st_mode) || (info.st_mode & 0777) != 0666) { write_all("/dev/null stat mismatch\n"); return -1; }
+    if (read(fd, data, sizeof(data)) != 0) { write_all("/dev/null read failed\n"); return -1; }
+    if (write(fd, data, sizeof(data)) != (ssize_t)sizeof(data)) { write_all("/dev/null write failed\n"); return -1; }
+    ready.fd = fd;
+    ready.events = POLLIN | POLLOUT;
+    ready.revents = 0;
+    if (poll(&ready, 1, 0) != 1 ||
+        ready.revents != (POLLIN | POLLOUT)) { write_all("/dev/null poll failed\n"); return -1; }
+    if (close(fd)) { write_all("/dev/null close failed\n"); return -1; }
+
+    fd = open("/dev/null", O_RDONLY);
+    if (fd < 0)
+        return -1;
+    errno = 0;
+    if (write(fd, data, 1) != -1 || errno != EBADF) { write_all("/dev/null readonly check failed\n"); return -1; }
+    if (close(fd))
+        return -1;
+    fd = open("/dev/null", O_WRONLY);
+    if (fd < 0)
+        return -1;
+    errno = 0;
+    ssize_t count = read(fd, data, 1);
+    if (count != -1) { write_all("/dev/null writeonly read returned non-error\n"); return -1; }
+    if (errno != EBADF) { write_all("/dev/null writeonly read errno mismatch\n"); return -1; }
+    if (close(fd))
+        return -1;
+    return 0;
+}
+
 static int stream_client(int listener, const struct sockaddr_un *address, socklen_t size)
 {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -199,9 +236,13 @@ int main(int argc, char **argv)
     if (page == MAP_FAILED || page[0] != 0)
         return 1;
     page[0] = 42;
-    if (check_fork(page) || munmap(page, 4096) || check_poll() || check_unix_stream() ||
-        check_path_lookups() || check_file_mapping())
-        return 1;
+    if (check_fork(page)) { write_all("fork check failed\n"); return 1; }
+    if (munmap(page, 4096)) { write_all("munmap check failed\n"); return 1; }
+    if (check_poll()) { write_all("poll check failed\n"); return 1; }
+    if (check_dev_null()) { write_all("/dev/null check failed\n"); return 1; }
+    if (check_unix_stream()) { write_all("unix stream check failed\n"); return 1; }
+    if (check_path_lookups()) { write_all("path lookup check failed\n"); return 1; }
+    if (check_file_mapping()) { write_all("file mapping check failed\n"); return 1; }
 
     if (check_x11() || write_all("X11 setup, geometry, and framebuffer window verified in both byte orders\n"))
         return 1;

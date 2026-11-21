@@ -11,6 +11,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     External (XAPC, MethodObj)
     External (XCPU, MethodObj)
     External (XCPD, MethodObj)
+    External (XRNG, MethodObj)
     External (XCCH, MethodObj)
     External (XCFL, MethodObj)
     External (XCID, MethodObj)
@@ -163,6 +164,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (Zero)
     }
     Name (DEVN, Buffer () {0x64, 0x65, 0x76})
+    Name (NULN, Buffer () {0x6E, 0x75, 0x6C, 0x6C})
+    Name (NULD, Zero)
     Name (FBNM, Buffer () {0x66, 0x62, 0x30})
 
     Method (FINI, 0, NotSerialized)
@@ -1931,6 +1934,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (TSRF, 784) // Saved interrupted register frame
     Name (TSKG, 944) // Shared kernel PML4 generation in this task's private root
     Name (TSSG, 952) // Backed pages in the sparse userspace stack
+    Name (TSVP, 960) // Parent task suspended by vfork
     Name (TSAC, 1024) // 64 Linux x86-64 sigaction records
     Name (TSSX, 0x2000) // Saved interrupted extended CPU state
     Name (SGUM, 0x40100) // SIGKILL and SIGSTOP cannot be blocked
@@ -2306,6 +2310,35 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (One)
     }
 
+    Name (RBUF, Buffer (8) {})
+    Method (SYGR, 4, NotSerialized)
+    {
+        If (Arg3 & ~7) { Return (Zero - 22) }
+        If (!Arg2) { Return (Zero) }
+        If (!(XCPD (One, 2) & 0x40000000)) { Return (Zero - 38) }
+        If (Arg2 > 0x7FFFF000) { Arg2 = 0x7FFFF000 }
+        If (!URNG (Arg0, Arg1, Arg2, WRIT)) { Return (Zero - 14) }
+        Local0 = XADR (RBUF)
+        Local1 = Zero
+        While (Local1 < Arg2)
+        {
+            If (!XRNG (Local0))
+            {
+                If (Local1) { Return (Local1) }
+                Return (Zero - 11)
+            }
+            Local2 = Arg2 - Local1
+            If (Local2 > 8) { Local2 = 8 }
+            If (!UCOP (Arg0, Arg1 + Local1, Local0, Local2))
+            {
+                If (Local1) { Return (Local1) }
+                Return (Zero - 14)
+            }
+            Local1 += Local2
+        }
+        Return (Local1)
+    }
+
     // Copy a validated userspace buffer into kernel-owned storage.
     Method (UCPY, 4, NotSerialized)
     {
@@ -2631,6 +2664,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (MSOP) { Return (Zero - 16) }
         }
         Local1 = XVWD (Local0 + VNTY, Ones)
+        If (Local0 == NULD) { Return (Local0) }
         If (Local1 != 4 && (Arg4 & 0x10000)) { Return (Zero - 20) }
         If (Local1 == 4 && (Arg4 & 0x243)) { Return (Zero - 21) }
         If (((Arg4 & 3) && Local1 != 12 && !EXWR (Local0)) ||
@@ -2654,6 +2688,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         If (Local1 == XADR (MFND) && Arg4 != Ones) { Return (Zero - 38) }
         If (Local1 == XADR (SKND)) { Return (SKRW (Arg0, Local0, Arg2, Arg3, Zero)) }
+        If (Local1 == NULD)
+        {
+            If ((XVWD (Local0 + 40, Ones) & 3) == One) { Return (Zero - 9) }
+            Return (Zero)
+        }
         If (Local1 == XADR (MFND)) { Return (MFIO (Arg0, Local0, Arg2, Arg3, Zero)) }
         If ((XVWD (Local0 + 40, Ones) & 3) == One) { Return (Zero - 9) }
         If (Local1 == MSND) { Return (MSRR (Arg0, Arg2, Arg3)) }
@@ -2832,6 +2871,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local1 = 0x21B6 // character device, 0666
         Local2 = Zero
         Local3 = 2
+        Local5 = Zero
         If (Local0 || !SSTD (Arg0, Arg1))
         {
             If (Local0)
@@ -2844,6 +2884,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 Local0 = UFDL (Arg0, Arg1)
                 If (!Local0) { Return (Zero - 9) }
                 If (XVWD (Local0, Ones) == XADR (MFND)) { Local2 = XVWD (Local0 + 24, Ones) }
+                If (XVWD (Local0 + SKPI, Ones)) { Local5 = One }
                 Local0 = XVWD (Local0, Ones)
             }
             Local1 = 0x416D // directory, 0555
@@ -2869,6 +2910,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Local1 = XVWD (Local0 + VNMD, Ones)
         }
+        If (Local5) { Local1 = 0x1180 } // anonymous pipe, FIFO 0600
         Local4 = XADR (USTA)
         XSTQ (Local4, Zero) // device
         XSTQ (Local4 + 8, Local3) // inode
@@ -2903,6 +2945,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (Local0)
         {
             Local1 = XVWD (Local0, Ones)
+            If (Local1 == NULD)
+            {
+                If ((XVWD (Local0 + 40, Ones) & 3) == Zero) { Return (Zero - 9) }
+                If (Arg3 && !URNG (Arg0, Arg2, Arg3, Zero)) { Return (Zero - 14) }
+                Return (Arg3)
+            }
             If (Local1 == XADR (SKND)) { Return (SKRW (Arg0, Local0, Arg2, Arg3, One)) }
             If (Local1 == XADR (MFND)) { Return (MFIO (Arg0, Local0, Arg2, Arg3, One)) }
             If (XVWD (Local1 + VNMD, Ones) && !XVWD (Local1 + VNPA, Ones))
@@ -3635,6 +3683,14 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         If (Arg2 == 0x5413)
         {
+            // musl isatty() treats a successful TIOCGWINSZ as proof of a
+            // terminal. Terminal socket descriptors were handled by STIO
+            // above; anonymous pipes must not fall through to the console
+            // size response, even when dup2 placed one on stdin/stdout.
+            If (Local0)
+            {
+                If (XVWD (Local0 + SKPI, Ones)) { Return (Zero - 25) } // ENOTTY
+            }
             If (!URNG (Arg0, Arg3, 8, WRIT)) { Return (Zero - 14) }
             Local0 = 25 | (80 << 16)
             If (FBAD) { Local0 = FBRS | (FBCS << 16) }
@@ -3791,13 +3847,36 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (One)
     }
 
-    Method (SYFK, 2, NotSerialized)
+    // Only one task can run in this address space across vfork. Move its
+    // ownership with the range list and stack accounting so either can change.
+    Method (UMOV, 2, NotSerialized)
+    {
+        XMOV (Arg1 + TSUL, Arg0 + TSUL, 16)
+        XMOV (Arg1 + TSKG, Arg0 + TSKG, 16)
+        XSTQ (Arg0 + TSUL, Zero)
+        XSTQ (Arg0 + TSCR, Zero)
+        XSTQ (Arg0 + TSKG, Zero)
+        XSTQ (Arg0 + TSSG, Zero)
+    }
+
+    Method (VFRE, 1, NotSerialized)
+    {
+        Local0 = XVWD (Arg0 + TSVP, Ones)
+        If (Local0)
+        {
+            UMOV (Arg0, Local0)
+            XSTQ (Arg0 + TSVP, Zero)
+            SQAP (Local0)
+        }
+    }
+
+    Method (SYFK, 3, NotSerialized)
     {
         If (PNID > 0x7FFFFFFF) { Return (Zero - 11) } // EAGAIN
         Local0 = STAL ()
         If (!Local0) { Return (Zero - 12) }
         Local1 = Local0 + TSIZ - 20 * 8
-        If (!UCLN (Arg0, Local0) ||
+        If ((!Arg2 && !UCLN (Arg0, Local0)) ||
             !PRAL (Local0, PNID, XVWD (Arg0 + TSPR, Ones)))
         {
             SDEL (Local0)
@@ -3831,9 +3910,15 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             }
             Local2 += 8
         }
-        SQAP (Local0)
         Local4 = PNID
         Increment (PNID)
+        If (Arg2)
+        {
+            UMOV (Arg0, Local0)
+            XSTQ (Local0 + TSVP, Arg0)
+            XSTQ (Arg1 + 14 * 8, Local4)
+        }
+        SQAP (Local0)
         Return (Local4)
     }
 
@@ -3893,6 +3978,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local1 = XVWD (Local0 + PRPA, Ones)
         XSTQ (Local0 + PRTK, Zero)
         XSTQ (Local0 + PRST, Arg1)
+        VFRE (Arg0)
         SDEL (Arg0)
 
         // Orphans continue running and are reaped automatically on exit.
@@ -4084,6 +4170,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         PCEX (XVWD (Arg0 + TSPR, Ones), Local1,
             XVWD (Local0 + VNNA, Ones), XVWD (Local0 + VNNL, Ones))
         // Commit only after the image and arguments have been copied.
+        VFRE (Arg0)
         // The temporary task takes ownership of the old address space.
         XSTQ (Local1 + TSCR, XVWD (Arg0 + TSCR, Ones))
         XSTQ (Arg0 + TSCR, Local2)
@@ -4267,6 +4354,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local0 = UFDL (Arg0, Arg1)
         If (!Local0) { Return (0x20) } // POLLNVAL
         If (XVWD (Local0, Ones) == XADR (SKND)) { Return (SKRD (Local0)) }
+        If (XVWD (Local0, Ones) == NULD) { Return (0x145) }
         If (Local0 == MSOP)
         {
             If (MSHD != MSTL) { Return (0x41) }
@@ -5802,14 +5890,15 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Local3 = SKLS (Arg0, Local2, XVWD (Local0 + 9 * 8, Ones))
         }
-        ElseIf (Local1 == 57 || Local1 == 56) // fork / fork-style clone
+        ElseIf (Local1 == 57 || Local1 == 56 || Local1 == 58) // fork, clone, vfork
         {
             Local3 = Zero - 22
-            If (Local1 == 57 || (Local2 == 17 && !XVWD (Local0 + 9 * 8, Ones)))
+            If (Local1 != 56 || (Local2 == 17 && !XVWD (Local0 + 9 * 8, Ones)))
             {
                 Local4 = MNOW ()
-                Local3 = SYFK (Arg0, Local0)
+                Local3 = SYFK (Arg0, Local0, Local1 == 58)
                 PLAT (Arg0, Local1, Local4)
+                If (Local1 == 58 && Local3 < Zero - 4095) { Return (Zero) }
             }
         }
         ElseIf (Local1 == 59) // execve
@@ -5900,6 +5989,34 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Local3 = VUNL (Arg0, Local2, XVWD (Local0 + 9 * 8, Ones),
                 XVWD (Local0 + 12 * 8, Ones) & 0xFFFFFFFF)
         }
+        ElseIf (Local1 == 90 || Local1 == 268) // chmod, fchmodat
+        {
+            Local4 = 0xFFFFFF9C // AT_FDCWD
+            Local5 = XVWD (Local0 + 9 * 8, Ones)
+            If (Local1 == 268)
+            {
+                Local4 = Local2
+                Local2 = Local5
+                Local5 = XVWD (Local0 + 12 * 8, Ones)
+            }
+            Local3 = UENT (Arg0, Local2, Local4)
+            If (Local3 < Zero - 4095) { Local3 = VCHM (Local3, Local5) }
+        }
+        ElseIf (Local1 == 91) // fchmod
+        {
+            Local4 = UFDL (Arg0, Local2 & 0xFFFFFFFF)
+            Local3 = Zero - 9 // EBADF
+            If (Local4)
+            {
+                Local5 = XVWD (Local4, Ones)
+                Local3 = Zero - 95 // EOPNOTSUPP
+                If (Local5 != XADR (SKND) && Local5 != XADR (MFND))
+                {
+                    Local3 = VCHM (Local5, XVWD (Local0 + 9 * 8, Ones))
+                }
+            }
+            ElseIf (SSTD (Arg0, Local2 & 0xFFFFFFFF)) { Local3 = Zero - 30 }
+        }
         ElseIf (Local1 == 95) // umask
         {
             Local3 = VMSK (Arg0)
@@ -5979,6 +6096,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         ElseIf (Local1 == 269) // faccessat
         {
             Local3 = SYAC (Arg0, Local2, XVWD (Local0 + 9 * 8, Ones),
+                XVWD (Local0 + 12 * 8, Ones) & 0xFFFFFFFF)
+        }
+        ElseIf (Local1 == 318) // getrandom
+        {
+            Local3 = SYGR (Arg0, Local2, XVWD (Local0 + 9 * 8, Ones),
                 XVWD (Local0 + 12 * 8, Ones) & 0xFFFFFFFF)
         }
         ElseIf (Local1 == 271) // ppoll
@@ -6728,6 +6850,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Local0 = VNOD (VROT, XADR (DEVN), SizeOf (DEVN), 4)
             If (Local0)
             {
+                NULD = VNOD (Local0, XADR (NULN), SizeOf (NULN), 0)
+                If (NULD) { XSTQ (NULD + VNMD, 0x21B6) }
                 VNOD (Local0, XADR (FBNM), SizeOf (FBNM), 12)
                 KSND = VNOD (Local0, XADR (KSNM), SizeOf (KSNM), 2)
                 MSND = VNOD (Local0, XADR (MSNM), SizeOf (MSNM), 2)

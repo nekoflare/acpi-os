@@ -107,6 +107,21 @@
         Return (Local2)
     }
 
+    Method (VCHM, 2, NotSerialized)
+    {
+        EXVL = XVWD (Arg0 + VNFS, Ones)
+        If (!EXVL) { Return (Zero - 30) } // EROFS
+        If (!XVWD (EXVL + EXRW, Ones)) { Return (Zero - 30) }
+        Local0 = EXIR (XVWD (Arg0 + VNFO, Ones))
+        If (!Local0) { Return (Zero - 5) } // EIO
+        Local1 = (ELWD (Local0, Zero, 2) & 0xF000) | (Arg1 & 0xFFF)
+        EXLE (Local0, Zero, Local1, 2)
+        If (!EXBW (EXIB, EXIN)) { Return (Zero - 5) }
+        XSTQ (Arg0 + VNMD, Local1)
+        If (!EXSY ()) { Return (Zero - 5) }
+        Return (Zero)
+    }
+
     Method (VUNL, 4, NotSerialized)
     {
         If (Arg3 & ~0x200) { Return (Zero - 22) }

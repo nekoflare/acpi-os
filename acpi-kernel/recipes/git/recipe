@@ -1,0 +1,45 @@
+version=2.56.1
+revision=1
+cross_compile=yes
+tarball_url="https://www.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz"
+tarball_sha256=f0b0bf89264b9bd2e1c640363e7529643989da76281600473c50745cd34a607f
+builddeps="musl"
+deps="zlib"
+
+configure() { copy_source; }
+
+git_features() {
+    printf '%s\n' \
+        NO_CURL=YesPlease \
+        NO_OPENSSL=YesPlease \
+        NO_EXPAT=YesPlease \
+        NO_GETTEXT=YesPlease \
+        NO_TCLTK=YesPlease \
+        NO_PERL=YesPlease \
+        NO_PYTHON=YesPlease \
+        NO_PYTHON2=YesPlease \
+        NO_ICONV=YesPlease \
+        NO_REGEX=YesPlease \
+        NO_RUST=YesPlease \
+        NO_MAN=YesPlease \
+        NO_INFO=YesPlease \
+        NO_GITWEB=YesPlease \
+        FSMONITOR_DAEMON_BACKEND= \
+        FSMONITOR_OS_SETTINGS=
+}
+
+build() {
+    musl_env
+    set -- $(git_features)
+    make -C src -j"$parallelism" \
+        CC="$CC" CFLAGS="$CFLAGS" CPPFLAGS="$CPPFLAGS" LDFLAGS="$LDFLAGS -no-pie" \
+        prefix=/usr gitexecdir=/usr/libexec/git-core \
+        template_dir=/usr/share/git-core/templates \
+        ZLIB_PATH=/sysroot/usr "$@" git git-upload-pack
+}
+
+package() {
+    install -Dm755 src/git "$dest_dir/usr/bin/git"
+    install -Dm755 src/git-upload-pack "$dest_dir/usr/libexec/git-core/git-upload-pack"
+    install -Dm644 /dev/null "$dest_dir/usr/share/git-core/templates/description"
+}

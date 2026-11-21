@@ -360,7 +360,7 @@ acpi_run_task:
 acpi_syscall_entry:
     swapgs
     cmpq $0, %gs:CPU_USER_KERNEL_STACK
-    je .Lunhandled_vector
+    je .Lhalt_fatal_vector
     movq %rsp, %gs:CPU_USER_RSP
     movq %gs:CPU_USER_KERNEL_STACK, %rsp
     pushq $0x1b
@@ -394,40 +394,42 @@ acpi_syscall_entry:
     jmp .Lfault_error_kernel_gs
 .Lkernel_page_fault:
     movl $14, %eax
-    jmp .Lunhandled_vector
+    jmp .Lfatal_with_error
 
 .Lfault_with_error:
     testb $3, 16(%rsp)
-    jz .Lfault_error_kernel_gs
+    jz .Lfatal_with_error
     swapgs
 .Lfault_error_kernel_gs:
+    cmpq $0, %gs:CPU_SCHEDULER_STACK
+    je .Lfatal_with_error
     movq %rax, %gs:CPU_LAST_FAULT
     movq (%rsp), %rax
     movq %rax, %gs:CPU_FAULT_ERROR
     movq 8(%rsp), %rax
     movq %rax, %gs:CPU_FAULT_RIP
-    testb $3, 16(%rsp)
-    jmp .Lcheck_fault
+    jmp .Lresume_fault
 .Lfault_without_error:
     testb $3, 8(%rsp)
-    jz .Lfault_noerror_kernel_gs
+    jz .Lfatal_without_error
     swapgs
-.Lfault_noerror_kernel_gs:
+    cmpq $0, %gs:CPU_SCHEDULER_STACK
+    je .Lfatal_without_error
     movq %rax, %gs:CPU_LAST_FAULT
     movq $0, %gs:CPU_FAULT_ERROR
     movq (%rsp), %rax
     movq %rax, %gs:CPU_FAULT_RIP
-.Lcheck_fault:
-    jz .Lunhandled_vector
-    cmpq $0, %gs:CPU_SCHEDULER_STACK
-    je .Lunhandled_vector
+.Lresume_fault:
     movb $0x81, %gs:CPU_IRQ_PENDING
     xorl %edx, %edx
     jmp .Lresume_scheduler
 
 .Lexit_interrupt:
     cmpq $0, %gs:CPU_SCHEDULER_STACK
-    je .Lunhandled_vector
+    jne .Lresume_exit
+    movl $0x22, %eax
+    jmp .Lfatal_without_error
+.Lresume_exit:
     movb $0, %gs:CPU_IRQ_PENDING
     xorl %edx, %edx
     jmp .Lresume_scheduler
@@ -476,6 +478,9 @@ acpi_vector_entries:
         jmp .Lexit_interrupt
     .elseif vector == 14
         jmp .Lpage_fault
+    .elseif vector == 8
+        movl $vector, %eax
+        jmp .Lfatal_with_error
     .elseif vector == 10 || vector == 11 || vector == 12 || vector == 13 || vector == 17 || vector == 21 || vector == 29 || vector == 30
         movl $vector, %eax
         jmp .Lfault_with_error
@@ -486,17 +491,32 @@ acpi_vector_entries:
         /* Spurious LAPIC interrupts have no in-service bit to acknowledge. */
         iretq
     .else
-        /* Fatal entries do not unwind frames, with or without error codes. */
         movl $vector, %eax
-        jmp .Lunhandled_vector
+        jmp .Lfatal_without_error
     .endif
     .balign 16, 0x90
     .set vector, vector + 1
 .endr
 .size acpi_vector_entries, .-acpi_vector_entries
-.Lunhandled_vector:
+.Lfatal_with_error:
+    movq (%rsp), %rdx
+    addq $8, %rsp
+    jmp .Llog_fatal_vector
+.Lfatal_without_error:
+    xorl %edx, %edx
+.Llog_fatal_vector:
     cli
+    cld
+    movl %eax, %r12d
+    movl %eax, %edi
+    movq (%rsp), %rsi
+    movq 8(%rsp), %rcx
+    movq %cr2, %r8
+    andq $-16, %rsp
+    call acpi_log_fatal_vector
+    movl %r12d, %eax
+.Lhalt_fatal_vector:
     hlt
-    jmp .Lunhandled_vector
+    jmp .Lhalt_fatal_vector
 
 .section .note.GNU-stack,"",@progbits

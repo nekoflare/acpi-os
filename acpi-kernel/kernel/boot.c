@@ -1006,6 +1006,58 @@ uint64_t acpi_apic_msr(uint64_t index, uint64_t value)
     return 0;
 }
 
+/* A fatal exception can interrupt code holding the scheduler lock. */
+static void fault_serial_write(const char *message)
+{
+    while (*message) {
+        uint8_t status;
+        unsigned polls = 100000;
+        do {
+            __asm__ volatile("inb %1, %0" : "=a"(status) : "Nd"((uint16_t)0x3fd));
+        } while (!(status & 0x20) && --polls);
+        if (!polls)
+            return;
+        __asm__ volatile("outb %0, %1" : : "a"((uint8_t)*message++), "Nd"((uint16_t)0x3f8));
+    }
+}
+
+static void fault_serial_hex(const char *label, uint64_t value)
+{
+    static const char hex[] = "0123456789abcdef";
+    char digits[17];
+    for (unsigned i = 0; i < 16; ++i)
+        digits[i] = hex[(value >> (60 - 4 * i)) & 15];
+    digits[16] = '\0';
+    fault_serial_write(label);
+    fault_serial_write(digits);
+}
+
+void acpi_log_fatal_vector(uint64_t vector, uint64_t rip, uint64_t error,
+                           uint64_t cs, uint64_t cr2)
+{
+    fault_serial_hex("Fatal kernel interrupt vector=0x", vector);
+    fault_serial_hex(" RIP=0x", rip);
+    fault_serial_hex(" CS=0x", cs);
+    fault_serial_hex(" error=0x", error);
+    if (vector == 14)
+        fault_serial_hex(" CR2=0x", cr2);
+    fault_serial_write("\r\n");
+}
+
+uint64_t acpi_random_word(uint64_t address)
+{
+    for (unsigned attempt = 0; attempt < 10; ++attempt) {
+        uint64_t value;
+        unsigned char ready;
+        __asm__ volatile("rdrand %0; setc %1" : "=r"(value), "=qm"(ready) : : "cc");
+        if (ready) {
+            *(uint64_t *)address = value;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 uint64_t acpi_read_tsc(void)
 {
     uint32_t low, high;

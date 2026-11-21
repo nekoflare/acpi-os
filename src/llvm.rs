@@ -1444,6 +1444,7 @@ error:
             "XCPD" => Some(("acpi_cpuid_register", 2)),
             "XCPU" => Some(("acpi_online_cpu_count", 0)),
             "XFRQ" => Some(("acpi_cpu_base_frequency_mhz", 0)),
+            "XRNG" => Some(("acpi_random_word", 1)),
             "XTSC" => Some(("acpi_read_tsc", 0)),
             "XIDX" => Some(("acpi_current_cpu_id", 0)),
             "XFLT" => Some(("acpi_last_fault_vector", 0)),

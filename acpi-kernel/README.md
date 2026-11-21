@@ -255,7 +255,7 @@ byte streams (`pipe2` accepts `O_CLOEXEC` and `O_NONBLOCK`), `mmap` (9) for priv
 `mprotect` (10) for anonymous pages with no access, read-only access, or
 read/write access, `munmap`
 (11) for a complete mapped range, `ioctl` (16) with `TIOCGWINSZ` on console
-descriptors, `getpid` (39), fork-style `clone` (56), `fork` (57), `execve` (59), `exit` (60),
+descriptors, `getpid` (39), fork-style `clone` (56), `fork` (57), `vfork` (58), `execve` (59), `exit` (60),
 `wait4` (61), `uname` (63), `getcwd` (79), the UID and GID queries (which return zero),
 `getppid` (110), `arch_prctl` (158) with `ARCH_SET_FS`, `gettid` (186),
 `getdents64` (217), `exit_group` (231), `openat` (257), `newfstatat` (262),
@@ -276,7 +276,9 @@ short counts. Unknown syscall numbers return `-ENOSYS`.
 Fork eagerly copies the user mappings, saved registers, and TLS state.
 The parent receives the child PID and the child receives zero. Inherited
 descriptors share file offsets. The libc-compatible clone form takes
-`SIGCHLD` and a null stack. On exit or a handled user fault, the scheduler
+`SIGCHLD` and a null stack. With `vfork`, the child runs in the parent's
+address space and the parent resumes after the child successfully executes
+a new image or exits. On exit or a handled user fault, the scheduler
 releases the task's memory and descriptors. The parent can collect the
 exit status with `wait4`, optionally using `WNOHANG`. Faults report
 `SIGSEGV` in the wait status. Orphans are reaped automatically.

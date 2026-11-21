@@ -1,0 +1,11 @@
+version=710
+revision=1
+cross_compile=yes
+tarball_url=https://greenwoodsoftware.com/less/less-710.tar.gz
+tarball_sha256=d1008fb78dcae1323ddab664bcb352a61f022b1b131bd8018548e021d975ec7a
+builddeps=musl
+deps=ncurses
+
+configure() { static_configure; }
+build() { static_build; }
+package() { autoconf_package; }
