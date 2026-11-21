@@ -1,5 +1,5 @@
 version=21.1.21
-revision=3
+revision=4
 cross_compile=yes
 tarball_url="https://www.x.org/releases/individual/xserver/xorg-server-21.1.21.tar.xz"
 tarball_sha256=c0cbe5545b3f645bae6024b830d1d1154a956350683a4e52b2fff5b0fa1ab519

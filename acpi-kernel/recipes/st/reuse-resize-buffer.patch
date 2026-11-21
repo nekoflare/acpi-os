@@ -1,0 +1,57 @@
+--- a/x.c
++++ b/x.c
+@@ -92,6 +92,7 @@
+ 	Colormap cmap;
+ 	Window win;
+ 	Drawable buf;
++	int bufw, bufh;
+ 	GlyphFontSpec *specbuf; /* font spec buffer used for rendering */
+ 	Atom xembed, wmdeletewin, netwmname, netwmiconname, netwmpid;
+ 	struct {
+@@ -750,10 +751,15 @@
+ 	win.tw = col * win.cw;
+ 	win.th = row * win.ch;
+ 
+-	XFreePixmap(xw.dpy, xw.buf);
+-	xw.buf = XCreatePixmap(xw.dpy, xw.win, win.w, win.h,
+-			DefaultDepth(xw.dpy, xw.scr));
+-	XftDrawChange(xw.draw, xw.buf);
++	/* Keep the buffer through a drag and grow in chunks. */
++	if (win.w > xw.bufw || win.h > xw.bufh) {
++		xw.bufw = MAX(xw.bufw, MIN((win.w + 127) & ~127, 65535));
++		xw.bufh = MAX(xw.bufh, MIN((win.h + 127) & ~127, 65535));
++		XFreePixmap(xw.dpy, xw.buf);
++		xw.buf = XCreatePixmap(xw.dpy, xw.win, xw.bufw, xw.bufh,
++				DefaultDepth(xw.dpy, xw.scr));
++		XftDrawChange(xw.draw, xw.buf);
++	}
+ 	xclear(0, 0, win.w, win.h);
+ 
+ 	/* resize to new width */
+@@ -1182,7 +1188,9 @@
+ 	gcvalues.graphics_exposures = False;
+ 	dc.gc = XCreateGC(xw.dpy, xw.win, GCGraphicsExposures,
+ 			&gcvalues);
+-	xw.buf = XCreatePixmap(xw.dpy, xw.win, win.w, win.h,
++	xw.bufw = win.w;
++	xw.bufh = win.h;
++	xw.buf = XCreatePixmap(xw.dpy, xw.win, xw.bufw, xw.bufh,
+ 			DefaultDepth(xw.dpy, xw.scr));
+ 	XSetForeground(xw.dpy, dc.gc, dc.col[defaultbg].pixel);
+ 	XFillRectangle(xw.dpy, xw.buf, dc.gc, 0, 0, win.w, win.h);
+@@ -1914,6 +1922,15 @@
+ void
+ resize(XEvent *e)
+ {
++	XEvent next;
++
++	/* Let input and expose events keep their place in the queue. */
++	while (XEventsQueued(xw.dpy, QueuedAlready)) {
++		XPeekEvent(xw.dpy, &next);
++		if (next.type != ConfigureNotify || next.xconfigure.window != xw.win)
++			break;
++		XNextEvent(xw.dpy, e);
++	}
+ 	if (e->xconfigure.width == win.w && e->xconfigure.height == win.h)
+ 		return;
+ 

@@ -34,6 +34,7 @@ static Bool damage_attempted;
 static RegionRec pending_damage[2];
 static Bool pending_damage_ready;
 static unsigned next_page;
+static uint64_t last_large_present_us;
 
 enum {
     GUEST_FB_PRESENT = 0x46F0,
@@ -42,6 +43,7 @@ enum {
     GUEST_FB_UPDATE_RECTS = 0x46F3,
     MAX_PRESENT_RECTS = 64,
     REFINE_CHUNK_PIXELS = 32,
+    LARGE_PRESENT_INTERVAL_US = 8000,
 };
 
 struct guest_fb_present_rect {
@@ -379,6 +381,18 @@ guest_block_handler(ScreenPtr screen, void *timeout)
         changed = *RegionExtents(damage);
     }
     uint64_t start = monotonic_us();
+    if (screen_damage && !force_refresh && start) {
+        uint64_t area = (uint64_t)(changed.x2 - changed.x1) * (changed.y2 - changed.y1);
+        if (area >= (uint64_t)screen->width * screen->height / 4) {
+            uint64_t elapsed = start - last_large_present_us;
+            if (elapsed < LARGE_PRESENT_INTERVAL_US) {
+                /* Leave damage queued and give the compositor time to finish. */
+                AdjustWaitForDelay(timeout, (LARGE_PRESENT_INTERVAL_US - elapsed + 999) / 1000);
+                return;
+            }
+            last_large_present_us = start;
+        }
+    }
     if (page_flip && pixmap->devKind == row_bytes) {
         size_t bytes = row_bytes * screen->height;
         if (!screen_damage && !force_refresh && !memcmp(pixels, published, bytes))

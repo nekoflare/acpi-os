@@ -1,0 +1,35 @@
+--- a/include/picom/backend.h
++++ b/include/picom/backend.h
+@@ -154,6 +154,8 @@
+ 	/// `corner_radius` to create a border for the rounded corners.
+ 	/// Setting this has no effect if `corner_radius` is 0.
+ 	int border_width;
++	/// XRender should sample transparent pixels beyond the source bounds.
++	bool no_repeat;
+ 	/// Whether the source image should be inverted.
+ 	bool color_inverted;
+ };
+--- a/src/renderer/command_builder.c
++++ b/src/renderer/command_builder.c
+@@ -76,6 +76,7 @@
+ 	struct color tint = {.red = 1. - dim, .green = 1. - dim, .blue = 1. - dim, .alpha = 1.};
+ 	struct backend_blit_args args_base = {
+ 	    .border_width = border_width,
++	    .no_repeat = true,
+ 	    .corner_radius = layer->options.corner_radius,
+ 	    .tint = color_mult_alpha(tint, opacity),
+ 	    .scale = layer->scale,
+--- a/src/backend/xrender/xrender.c
++++ b/src/backend/xrender/xrender.c
+@@ -336,7 +336,10 @@
+ 	// Clip region of rendered_pict might be set during rendering, clear it to
+ 	// make sure we get everything into the buffer
+ 	x_clear_picture_clip_region(xd->base.c, inner->pict);
+-	xrender_set_picture_repeat(xd, inner->pict, XCB_RENDER_REPEAT_NORMAL);
++	// A window pixmap can already have the next size during live resize.
++	xrender_set_picture_repeat(xd, inner->pict, args->no_repeat ?
++	                                              XCB_RENDER_REPEAT_NONE :
++	                                              XCB_RENDER_REPEAT_NORMAL);
+ 
+ 	x_set_picture_clip_region(xd->base.c, target->pict, 0, 0, args->target_mask);
+ 	if (args->corner_radius != 0) {

@@ -190,7 +190,7 @@ XORG_APPS := $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/Xvfb \
 	$(XORG_BUILD)/nsxiv $(XORG_BUILD)/nano $(XORG_BUILD)/vim $(XORG_BUILD)/iasl $(XORG_BUILD)/acpixtract $(XORG_BUILD)/uacpi-test-runner $(XORG_BUILD)/uacpi-barebones-test-runner \
 	$(BASH_BUILD)/fastfetch
 XORG_BASH := bin/bash=$(BASH_BUILD)/bash.elf
-XORG_DATA := $(XORG_BUILD)/xorg-default.xkm config/dwm-fonts.conf config/time.sh config/conky.conf $(wildcard initramfs/*)
+XORG_DATA := $(XORG_BUILD)/xorg-default.xkm config/dwm-fonts.conf config/conky.conf $(wildcard initramfs/*)
 XORG_PICOM_CONFIG := usr/share/picom/picom.conf=config/picom.conf
 XORG_CONKY_CONFIG := usr/share/conky/conky.conf=config/conky.conf
 XORG_LUA_TEST := usr/share/lua/test.lua=config/lua-test.lua

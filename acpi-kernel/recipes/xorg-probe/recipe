@@ -1,9 +1,12 @@
 version=1.0
-builddeps=musl
-revision=1
+builddeps="musl libx11"
+revision=2
 cross_compile=yes
 
 build() {
-    musl_app xorg-probe
+    musl_env
+    "$CC" -static -no-pie -O2 $APP_CPU_FLAGS -Wall -Wextra -Werror \
+        $(pkg-config --cflags x11) "$base_dir/userspace/xorg-probe.c" \
+        $(pkg-config --static --libs x11) -o xorg-probe
 }
 package() { package_app xorg-probe; }

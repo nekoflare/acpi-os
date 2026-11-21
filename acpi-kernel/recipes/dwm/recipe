@@ -2,13 +2,14 @@ version=6.8
 tarball_url=https://dl.suckless.org/dwm/dwm-6.8.tar.gz
 tarball_sha256=bcf540589ad174d4073f4efa658828411e2f5ba63196cfaf6b71363700f590b7
 builddeps="musl libxft"
-revision=1
+revision=2
 cross_compile=yes
 
 build() {
     copy_source
     patch -d src -p1 < "$recipe_dir/ctrl-alt-t-terminal.patch"
     patch -d src -p1 < "$recipe_dir/coalesce-drag-motion.patch"
+    patch -d src -p1 < "$recipe_dir/pace-live-resize.patch"
     musl_env
     make -C src -j"$parallelism" CC="$CC" XINERAMAFLAGS= XINERAMALIBS= \
         INCS="$(pkg-config --cflags x11 xft fontconfig)" \

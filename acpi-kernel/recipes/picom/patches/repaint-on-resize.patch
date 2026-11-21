@@ -1,0 +1,17 @@
+--- a/src/renderer/damage.c
++++ b/src/renderer/damage.c
+@@ -85,8 +85,12 @@
+ 	    (cmd1->shader_info != NULL &&
+ 	     cmd1->shader_info->attributes & SHADER_ATTRIBUTE_ANIMATED) ||
+ 
+-	    // Second part, if round corner is enabled, then border width and effective size
+-	    // affect the whole image too.
++	    // A resize replaces the redirected pixmap. Repaint its overlapping
++	    // pixels and the exposed parts of the desktop.
++	    (cmd1->source == BACKEND_COMMAND_SOURCE_WINDOW &&
++	     !ivec2_eq(cmd1->blit.effective_size, cmd2->blit.effective_size)) ||
++
++	    // Border width and size affect the whole image with rounded corners.
+ 	    (cmd1->blit.corner_radius > 0 &&
+ 	        (cmd1->blit.border_width != cmd2->blit.border_width ||
+ 	         !ivec2_eq(cmd1->blit.effective_size, cmd2->blit.effective_size)))

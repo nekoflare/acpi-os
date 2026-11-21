@@ -4,6 +4,37 @@
 #include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
+#include <X11/Xlib.h>
+
+static int run_status_clock(void)
+{
+    Display *display = XOpenDisplay(":0");
+    if (!display) {
+        fputs("Cannot open X display for status clock\n", stderr);
+        return 1;
+    }
+    Window root = DefaultRootWindow(display);
+    for (;;) {
+        struct timespec now;
+        struct tm local;
+        char status[128];
+        if (clock_gettime(CLOCK_REALTIME, &now) ||
+            !localtime_r(&now.tv_sec, &local) ||
+            !strftime(status, sizeof(status), "%a %d %b %Y | %H:%M:%S", &local))
+            break;
+        XStoreName(display, root, status);
+        XFlush(display);
+
+        struct timespec delay = {
+            .tv_sec = now.tv_nsec == 0,
+            .tv_nsec = now.tv_nsec ? 1000000000L - now.tv_nsec : 0,
+        };
+        while (nanosleep(&delay, &delay) && errno == EINTR)
+            continue;
+    }
+    XCloseDisplay(display);
+    return 1;
+}
 
 static int connect_to_display(void)
 {
@@ -132,10 +163,11 @@ int main(void)
             };
             start_client("/bin/conky", conky);
         }
-        if (!access("/time.sh", R_OK)) {
-            char *const arguments[] = {"bash", "/time.sh", NULL};
-            start_client("/bin/bash", arguments);
-        }
+        pid_t clock = fork();
+        if (clock < 0)
+            perror("fork status clock");
+        else if (clock == 0)
+            _exit(run_status_clock());
     }
     return 0;
 }
