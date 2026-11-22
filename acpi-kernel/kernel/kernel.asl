@@ -1251,6 +1251,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 PCLK ()
                 ITWK ()
                 SWAK ()
+                FXTO ()
             }
         }
         Local0 = Zero
@@ -1937,6 +1938,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (TSKG, 944) // Shared kernel PML4 generation in this task's private root
     Name (TSSG, 952) // Backed pages in the sparse userspace stack
     Name (TSVP, 960) // Parent task suspended by vfork
+    Name (TSGL, 968) // Thread group leader, zero in the leader itself
+    Name (TSTN, 976) // Next thread in the group, starting at the leader
+    Name (TSTD, 984) // Thread ID, zero when it equals the process ID
+    Name (TSCT, 992) // clear_child_tid address
+    Name (TSFK, 1000) // Futex key (direct-map address) while waiting
+    Name (TSKX, 1008) // Exit at the next dispatch without ending the group
+    Name (TSGX, 1016) // Leader: TGLX, TGSX and the group exit status
     Name (TSAC, 1024) // 64 Linux x86-64 sigaction records
     Name (TSSX, 0x2000) // Saved interrupted extended CPU state
     Name (SGUM, 0x40100) // SIGKILL and SIGSTOP cannot be blocked
@@ -2064,12 +2072,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local1 = HHDO + Local0
         Local2 = Arg1 & ~(PGSZ - One)
         Local3 = (Arg1 + Arg2 + PGSZ - One) & ~(PGSZ - One)
-        XVWD (Local1, XVWD (Arg0 + TSUL, Ones))
+        XVWD (Local1, XVWD (TGRL (Arg0) + TSUL, Ones))
         XVWD (Local1 + 8, Local2)
         XVWD (Local1 + 16, Local2)
         XVWD (Local1 + 24, Arg3)
         XVWD (Local1 + 32, Zero)
-        XVWD (Arg0 + TSUL, Local0)
+        XVWD (TGRL (Arg0) + TSUL, Local0)
 
         While (Local2 < Local3)
         {
@@ -2148,14 +2156,14 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Method (SDEL, 1, NotSerialized)
     {
         Local0 = XVWD (Arg0 + TSCR, Ones)
-        Local1 = Arg0 + TSFD
-        While (Local1 < Arg0 + TSFD + FDLM * 8)
+        Local1 = TGRL (Arg0) + TSFD
+        While (Local1 < TGRL (Arg0) + TSFD + FDLM * 8)
         {
             FDCL (Local1)
             Local1 += 8
         }
         VREL (VCWD (Arg0))
-        Local1 = XVWD (Arg0 + TSUL, Ones)
+        Local1 = XVWD (TGRL (Arg0) + TSUL, Ones)
         While (Local1)
         {
             Local2 = XVWD (HHDO + Local1, Ones)
@@ -2523,12 +2531,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Method (UFDL, 2, NotSerialized)
     {
         If (Arg1 >= FDLM) { Return (Zero) }
-        Return (XVWD (Arg0 + TSFD + Arg1 * 8, Ones))
+        Return (XVWD (TGRL (Arg0) + TSFD + Arg1 * 8, Ones))
     }
 
     Method (SSTD, 2, NotSerialized)
     {
-        Return (Arg1 < 3 && !(XVWD (Arg0 + TSCL, Ones) & (One << Arg1)) &&
+        Return (Arg1 < 3 && !(XVWD (TGRL (Arg0) + TSCL, Ones) & (One << Arg1)) &&
             !UFDL (Arg0, Arg1))
     }
 
@@ -2548,11 +2556,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
 
         XSTQ (Local0 + 16, XVWD (Local0 + 16, Ones) + One)
-        Local1 = Arg0 + TSFD + Arg2 * 8
+        Local1 = TGRL (Arg0) + TSFD + Arg2 * 8
         FDCL (Local1)
         XSTQ (Local1, Local0)
-        XSTQ (Arg0 + TSCE, XVWD (Arg0 + TSCE, Ones) & ~(One << Arg2))
-        If (Arg2 < 3) { XSTQ (Arg0 + TSCL, XVWD (Arg0 + TSCL, Ones) | (One << Arg2)) }
+        XSTQ (TGRL (Arg0) + TSCE, XVWD (TGRL (Arg0) + TSCE, Ones) & ~(One << Arg2))
+        If (Arg2 < 3) { XSTQ (TGRL (Arg0) + TSCL, XVWD (TGRL (Arg0) + TSCL, Ones) | (One << Arg2)) }
         Return (Arg2)
     }
 
@@ -2564,7 +2572,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (SSTD (Arg0, Arg1)) { Return (Zero - 38) }
             Return (Zero - 9)
         }
-        Local1 = XVWD (Arg0 + TSCE, Ones)
+        Local1 = XVWD (TGRL (Arg0) + TSCE, Ones)
         Local2 = One << Arg1
         If (Arg2 == Zero || Arg2 == 1030) // F_DUPFD / F_DUPFD_CLOEXEC
         {
@@ -2576,7 +2584,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                     SYDP (Arg0, Arg1, Arg3)
                     If (Arg2 == 1030)
                     {
-                        XSTQ (Arg0 + TSCE, XVWD (Arg0 + TSCE, Ones) | (One << Arg3))
+                        XSTQ (TGRL (Arg0) + TSCE, XVWD (TGRL (Arg0) + TSCE, Ones) | (One << Arg3))
                     }
                     Return (Arg3)
                 }
@@ -2589,7 +2597,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Local1 &= ~Local2
             If (Arg3 & One) { Local1 |= Local2 }
-            XSTQ (Arg0 + TSCE, Local1)
+            XSTQ (TGRL (Arg0) + TSCE, Local1)
             Return (Zero)
         }
         Local3 = XVWD (Local0, Ones)
@@ -2639,7 +2647,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         // Recycled pages keep stale fields such as SKPI, which made fstat
         // report a reused directory description as a pipe.
         XCLR (Local3)
-        Local2 = Arg0 + TSFD + Local1 * 8
+        Local2 = TGRL (Arg0) + TSFD + Local1 * 8
         VREF (Local0)
         XSTQ (Local3, Local0)
         XSTQ (Local3 + 8, Zero)
@@ -2667,9 +2675,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             MSOP = Local3
         }
         XSTQ (Local2, Local3)
-        Local4 = XVWD (Arg0 + TSCE, Ones) & ~(One << Local1)
+        Local4 = XVWD (TGRL (Arg0) + TSCE, Ones) & ~(One << Local1)
         If (Arg3 & 0x80000) { Local4 |= One << Local1 }
-        XSTQ (Arg0 + TSCE, Local4)
+        XSTQ (TGRL (Arg0) + TSCE, Local4)
         Return (Local1)
     }
 
@@ -3140,7 +3148,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     // Private anonymous and file-backed mappings. File data is copied into
     // owned pages so closing the descriptor does not invalidate the mapping.
-    Name (MFND, Buffer (368) {}) // Anonymous regular file vnode identity
+    Name (MFND, Buffer (432) {}) // Anonymous regular file vnode identity; VNSL bytes so every node field reads as zero
     Name (MFPG, 48) // Linked blocks of physical page addresses
     Name (MFMC, 56) // Number of shared mappings
     Name (MFSL, 64) // File seals
@@ -3339,7 +3347,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local0 = PALC ()
         If (!Local0) { Return (Zero) }
         Local1 = HHDO + Local0
-        XSTQ (Local1, XVWD (Arg0 + TSUL, Ones))
+        XSTQ (Local1, XVWD (TGRL (Arg0) + TSUL, Ones))
         XSTQ (Local1 + 8, Arg1)
         XSTQ (Local1 + 16, Arg1)
         XSTQ (Local1 + 24, Arg3)
@@ -3347,7 +3355,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         XSTQ (Local1 + 40, Arg5)
         XSTQ (Arg4 + 16, XVWD (Arg4 + 16, Ones) + One)
         XSTQ (Arg4 + MFMC, XVWD (Arg4 + MFMC, Ones) + One)
-        XSTQ (Arg0 + TSUL, Local0)
+        XSTQ (TGRL (Arg0) + TSUL, Local0)
         Local2 = HHDO + XVWD (Arg0 + TSCR, Ones)
         Local3 = Arg1 + Arg2
         While (Arg1 < Local3)
@@ -3355,7 +3363,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Local4 = MFPA (Arg4, Arg5 / PGSZ, One)
             If (!Local4 || !VPTE (Local2, 39, Arg1, Local4 | Arg3 | PRES))
             {
-                UDEL (Arg0, Arg0 + TSUL)
+                UDEL (Arg0, TGRL (Arg0) + TSUL)
                 Return (Zero)
             }
             Arg1 += PGSZ
@@ -3411,7 +3419,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         While (Local1 >= Local0 + PGSZ)
         {
             Local2 = Local1 - Local0
-            Local3 = XVWD (Arg0 + TSUL, Ones)
+            Local3 = XVWD (TGRL (Arg0) + TSUL, Ones)
             While (Local3)
             {
                 Local4 = HHDO + Local3
@@ -3427,7 +3435,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 Local6 = UANO
                 If (XNXE ()) { Local6 |= NOEX }
-                Local7 = XVWD (Arg0 + TSUL, Ones)
+                Local7 = XVWD (TGRL (Arg0) + TSUL, Ones)
                 Local5 = XVWD (Arg1 + 5 * 8, Ones) & 0xFFFFFFFF
                 If (Local5 == One)
                 {
@@ -3473,7 +3481,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                     Return (Local2)
                 }
                 // UMAP may have already linked a partially populated range.
-                If (XVWD (Arg0 + TSUL, Ones) != Local7) { UDEL (Arg0, Arg0 + TSUL) }
+                If (XVWD (TGRL (Arg0) + TSUL, Ones) != Local7) { UDEL (Arg0, TGRL (Arg0) + TSUL) }
                 Break
             }
         }
@@ -3481,6 +3489,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     }
 
     // Only anonymous pages can change permissions. Verify the entire span first.
+    // No TLB shootdown: threads of this process on other CPUs keep stale
+    // entries until their next kernel entry reloads CR3. See README.md.
     Method (UPRT, 4, NotSerialized)
     {
         If ((Arg1 & (PGSZ - One)) || Arg1 < PGSZ || Arg1 >= USTP ||
@@ -3507,12 +3517,14 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (Zero)
     }
 
+    // No TLB shootdown: threads of this process on other CPUs keep stale
+    // entries until their next kernel entry reloads CR3. See README.md.
     Method (SYMU, 3, NotSerialized)
     {
         If ((Arg1 & (PGSZ - One)) || Arg1 < PGSZ || Arg1 >= USTP ||
             !Arg2 || Arg2 > USTP - Arg1) { Return (Zero - 22) }
         Local0 = Arg1 + ((Arg2 + PGSZ - One) & ~(PGSZ - One))
-        Local1 = Arg0 + TSUL
+        Local1 = TGRL (Arg0) + TSUL
         While (XVWD (Local1, Ones))
         {
             Local2 = HHDO + XVWD (Local1, Ones)
@@ -3859,7 +3871,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (!Local0) { Return (Zero) }
         XCLR (HHDO + Local0)
         XSTQ (Arg1 + TSCR, Local0)
-        Local0 = XVWD (Arg0 + TSUL, Ones)
+        Local0 = XVWD (TGRL (Arg0) + TSUL, Ones)
         While (Local0)
         {
             Local1 = HHDO + Local0
@@ -3914,9 +3926,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     // ownership with the range list and stack accounting so either can change.
     Method (UMOV, 2, NotSerialized)
     {
-        XMOV (Arg1 + TSUL, Arg0 + TSUL, 16)
+        XMOV (Arg1 + TSUL, TGRL (Arg0) + TSUL, 16)
         XMOV (Arg1 + TSKG, Arg0 + TSKG, 16)
-        XSTQ (Arg0 + TSUL, Zero)
+        XSTQ (TGRL (Arg0) + TSUL, Zero)
         XSTQ (Arg0 + TSCR, Zero)
         XSTQ (Arg0 + TSKG, Zero)
         XSTQ (Arg0 + TSSG, Zero)
@@ -3933,7 +3945,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
     }
 
-    Method (SYFK, 3, NotSerialized)
+    // Arg3, when nonzero, is the child's new user stack pointer (clone).
+    Method (SYFK, 4, NotSerialized)
     {
         If (PNID > 0x7FFFFFFF) { Return (Zero - 11) } // EAGAIN
         Local0 = STAL ()
@@ -3947,7 +3960,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         XMOV (Local1, Arg1, 20 * 8)
         XMOV (Local0 + TSFX, Arg0 + TSFX, PGSZ)
-        XMOV (Local0 + TSAC, Arg0 + TSAC, 64 * 32)
+        XMOV (Local0 + TSAC, TGRL (Arg0) + TSAC, 64 * 32)
         XSTQ (Local0 + TSMA, XVWD (Arg0 + TSMA, Ones))
         If (XVWD (Arg0 + TSSP, Ones))
         {
@@ -3956,16 +3969,17 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         XSTQ (Local0 + TSFR, Local1)
         XSTQ (Local1 + 14 * 8, Zero) // Child's syscall result
+        If (Arg3) { XSTQ (Local1 + 18 * 8, Arg3) } // Child's RSP
         XSTQ (Local0 + TSFS, XVWD (Arg0 + TSFS, Ones))
-        XSTQ (Local0 + TSCE, XVWD (Arg0 + TSCE, Ones))
-        XSTQ (Local0 + TSCL, XVWD (Arg0 + TSCL, Ones))
+        XSTQ (Local0 + TSCE, XVWD (TGRL (Arg0) + TSCE, Ones))
+        XSTQ (Local0 + TSCL, XVWD (TGRL (Arg0) + TSCL, Ones))
         XSTQ (Local0 + TSWD, VCWD (Arg0))
         VREF (VCWD (Arg0))
-        XSTQ (Local0 + TSUM, XVWD (Arg0 + TSUM, Ones))
+        XSTQ (Local0 + TSUM, XVWD (TGRL (Arg0) + TSUM, Ones))
         Local2 = TSFD
         While (Local2 < TSFD + FDLM * 8)
         {
-            Local3 = XVWD (Arg0 + Local2, Ones)
+            Local3 = XVWD (TGRL (Arg0) + Local2, Ones)
             If (Local3)
             {
                 XSTQ (Local3 + 16, XVWD (Local3 + 16, Ones) + One)
@@ -4035,7 +4049,143 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (Ones)
     }
 
-    Method (PREX, 2, NotSerialized)
+    Name (TGLX, 0x200000000) // The leader exited; its record holds shared state.
+    Name (TGSX, 0x100000000) // The group is exiting with the status in bits 0-15.
+
+    // Shared process state (address-space ranges, descriptors, cwd, umask
+    // and signal actions) lives in the thread group leader's record.
+    Method (TGRL, 1, NotSerialized)
+    {
+        Local0 = XVWD (Arg0 + TSGL, Ones)
+        If (Local0) { Return (Local0) }
+        Return (Arg0)
+    }
+
+    // Return One when the group has a live member other than Arg0.
+    Method (TGOT, 1, NotSerialized)
+    {
+        Local0 = TGRL (Arg0)
+        If (Local0 != Arg0 && !(XVWD (Local0 + TSGX, Ones) & TGLX)) { Return (One) }
+        Local1 = XVWD (Local0 + TSTN, Ones)
+        While (Local1)
+        {
+            If (Local1 != Arg0) { Return (One) }
+            Local1 = XVWD (Local1 + TSTN, Ones)
+        }
+        Return (Zero)
+    }
+
+    // A live member of the group led by Arg0 for process-directed signals.
+    Method (TGLV, 1, NotSerialized)
+    {
+        If (!Arg0 || !(XVWD (Arg0 + TSGX, Ones) & TGLX)) { Return (Arg0) }
+        Return (XVWD (Arg0 + TSTN, Ones))
+    }
+
+    // Make a task exit at its next dispatch, waking it if it is blocked.
+    Method (TKIL, 1, NotSerialized)
+    {
+        XSTQ (Arg0 + TSKX, One)
+        SGWK (Arg0)
+    }
+
+    // Make every other live member of Arg0's group exit.
+    Method (TGKL, 1, NotSerialized)
+    {
+        Local0 = TGRL (Arg0)
+        If (Local0 != Arg0 && !(XVWD (Local0 + TSGX, Ones) & TGLX)) { TKIL (Local0) }
+        Local1 = XVWD (Local0 + TSTN, Ones)
+        While (Local1)
+        {
+            If (Local1 != Arg0) { TKIL (Local1) }
+            Local1 = XVWD (Local1 + TSTN, Ones)
+        }
+    }
+
+    // Remove a non-leader thread from its group's list.
+    Method (TUNL, 1, NotSerialized)
+    {
+        Local0 = TGRL (Arg0)
+        While (Local0)
+        {
+            Local1 = XVWD (Local0 + TSTN, Ones)
+            If (Local1 == Arg0)
+            {
+                XSTQ (Local0 + TSTN, XVWD (Arg0 + TSTN, Ones))
+                Return (Zero)
+            }
+            Local0 = Local1
+        }
+        Return (Zero)
+    }
+
+    // CLONE_CHILD_CLEARTID: zero the thread's TID word and wake one joiner.
+    Method (TCLR, 1, NotSerialized)
+    {
+        Local0 = XVWD (Arg0 + TSCT, Ones)
+        If (!Local0) { Return (Zero) }
+        If (!UCOP (Arg0, Local0, XADR (EXZR), 4)) { Return (Zero) }
+        Local1 = FXKY (Arg0, Local0)
+        If (Local1) { FXWK (Local1, One) }
+        Return (Zero)
+    }
+
+    // Exec from a thread whose leader already exited: take over the leader's
+    // shared state and process record, then free the leader's record.
+    Method (TADP, 1, NotSerialized)
+    {
+        Local0 = XVWD (Arg0 + TSGL, Ones)
+        XSTQ (Arg0 + TSUL, XVWD (Local0 + TSUL, Ones))
+        XSTQ (Arg0 + TSCE, XVWD (Local0 + TSCE, Ones))
+        XMOV (Arg0 + TSFD, Local0 + TSFD, FDLM * 8)
+        XSTQ (Arg0 + TSCL, XVWD (Local0 + TSCL, Ones))
+        XSTQ (Arg0 + TSWD, XVWD (Local0 + TSWD, Ones))
+        XSTQ (Arg0 + TSUM, XVWD (Local0 + TSUM, Ones))
+        XMOV (Arg0 + TSAC, Local0 + TSAC, 64 * 32)
+        XSTQ (Arg0 + TSVP, XVWD (Local0 + TSVP, Ones))
+        XSTQ (Arg0 + TSGL, Zero)
+        XSTQ (Arg0 + TSTN, Zero)
+        XSTQ (Arg0 + TSTD, Zero)
+        XSTQ (XVWD (Arg0 + TSPR, Ones) + PRTK, Arg0)
+        VUNM (Local0, TSIZ)
+    }
+
+    // Exit one task. Arg2 makes the whole thread group exit with status Arg1
+    // (exit_group, fatal signals and faults). The process exits with its
+    // last live member; an exiting leader keeps its record for the others.
+    Method (PREX, 3, NotSerialized)
+    {
+        Local0 = TGRL (Arg0)
+        Local1 = XVWD (Local0 + TSGX, Ones)
+        If (Arg2 && !(Local1 & TGSX))
+        {
+            Local1 |= TGSX | (Arg1 & 0xFFFF)
+            XSTQ (Local0 + TSGX, Local1)
+        }
+        If (Local1 & TGSX) { Arg1 = Local1 & 0xFFFF }
+        If (Arg2) { TGKL (Arg0) }
+        If (TGOT (Arg0))
+        {
+            TCLR (Arg0)
+            If (Local0 == Arg0)
+            {
+                XSTQ (Arg0 + TSGX, XVWD (Arg0 + TSGX, Ones) | TGLX)
+                Return (Zero)
+            }
+            TUNL (Arg0)
+            VUNM (Arg0, TSIZ)
+            Return (Zero)
+        }
+        If (Local0 != Arg0)
+        {
+            // The leader exited earlier; finish the process through its record.
+            TUNL (Arg0)
+            VUNM (Arg0, TSIZ)
+        }
+        Return (PRXX (Local0, Arg1))
+    }
+
+    Method (PRXX, 2, NotSerialized)
     {
         Local0 = XVWD (Arg0 + TSPR, Ones)
         Local1 = XVWD (Local0 + PRPA, Ones)
@@ -4069,22 +4219,24 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 PRDL (Local0)
             }
+            Local2 = TGLV (Local2)
             SGQU (Local2, 17)
-            If (!XVWD (Local1 + PRWT, Ones))
+            // PRWT names the parent's thread blocked in wait4.
+            Local5 = XVWD (Local1 + PRWT, Ones)
+            If (!Local5)
             {
                 If (SGPN (Local2)) { SGWK (Local2) }
                 Return (Zero)
             }
-            Local2 = XVWD (Local1 + PRTK, Ones)
-            Local3 = XVWD (Local2 + TSFR, Ones)
-            Local4 = SYWT (Local2, Local3)
+            Local3 = XVWD (Local5 + TSFR, Ones)
+            Local4 = SYWT (Local5, Local3)
             If (Local4 != Ones)
             {
                 XSTQ (Local1 + PRWT, Zero)
                 XSTQ (Local3 + 14 * 8, Local4)
-                SQAP (Local2)
+                SQAP (Local5)
             }
-            ElseIf (SGPN (Local2)) { SGWK (Local2) }
+            ElseIf (SGPN (Local5)) { SGWK (Local5) }
         }
         Return (Zero)
     }
@@ -4124,77 +4276,194 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         // The freshly zeroed stack supplies AT_NULL.
     }
 
-    // Copy argv and envp into the top stack page of the new address space.
-    // Reserve 656 bytes for argc, up to 64 pointers, terminators and auxv.
-    // Arg4 strings from SBBF replace argv[0] for an interpreted script.
-    Method (EXST, 5, NotSerialized)
+    // Exec argument copies cache the last translated page of the source
+    // (calling) and destination (new) address spaces.
+    Name (EXCV, Ones)
+    Name (EXCH, Zero)
+    Name (EXDV, Ones)
+    Name (EXDA, Zero)
+    Name (EXAM, 0x100000) // ARG_MAX: string bytes plus pointers, 1/4 of USSZ
+    Name (EXNP, Zero) // Pointers counted by EXAC
+    Name (EXNB, Zero) // String bytes counted by EXAC
+    Name (EXPP, Zero) // Next argv/envp slot in the new stack
+    Name (EXSS, Zero) // Next string byte in the new stack
+    Name (EXRP, Zero) // Initial stack pointer chosen by EXST
+    Name (EXRV, Zero) // End of the argv/envp slots reserved by EXST
+    Name (EXAV, Buffer (96) {})
+
+    // Read one byte of the calling task's memory, or Ones for a bad address.
+    Method (EXRB, 2, NotSerialized)
     {
-        Local0 = UPHY (Arg1, USTP - PGSZ, WRIT)
-        Local1 = Local0 + 8
-        Local2 = Local0 + 656
-        If (Arg4)
+        If (Arg1 >= USTP) { Return (Ones) }
+        Local0 = Arg1 & ~(PGSZ - One)
+        If (Local0 != EXCV)
         {
-            Local5 = XADR (SBBF)
-            While (Arg4)
-            {
-                XSTQ (Local1, USTP - PGSZ + Local2 - Local0)
-                Local1 += 8
-                While (One)
-                {
-                    Local7 = XBYT (Local5)
-                    XSTB (Local2, Local7)
-                    Increment (Local2)
-                    Increment (Local5)
-                    If (!Local7) { Break }
-                }
-                Decrement (Arg4)
-            }
-            If (Arg2)
-            {
-                Local5 = URDQ (Arg0, Arg2)
-                If (Local5 >= USTP) { Return (Zero - 14) }
-                If (Local5) { Arg2 += 8 }
-            }
+            Local1 = UPHY (Arg0, Local0, Zero)
+            If (!Local1) { Return (Ones) }
+            EXCH = Local1
+            EXCV = Local0
         }
-        Local3 = Arg2
-        Local4 = Zero
+        Return (XBYT (EXCH + (Arg1 & (PGSZ - One))))
+    }
+
+    // Translate a new-stack address, faulting in its sparse stack page.
+    Method (EXDQ, 2, NotSerialized)
+    {
+        Local0 = Arg1 & ~(PGSZ - One)
+        If (Local0 != EXDV)
+        {
+            Local1 = UPHY (Arg0, Local0, WRIT)
+            If (!Local1) { Return (Zero) }
+            EXDA = Local1
+            EXDV = Local0
+        }
+        Return (EXDA + (Arg1 & (PGSZ - One)))
+    }
+
+    Method (EXPB, 3, NotSerialized)
+    {
+        Local0 = EXDQ (Arg0, Arg1)
+        If (!Local0) { Return (Zero) }
+        XSTB (Local0, Arg2)
+        Return (One)
+    }
+
+    // Arg1 is 8-byte aligned, so the quadword stays within one page.
+    Method (EXPQ, 3, NotSerialized)
+    {
+        Local0 = EXDQ (Arg0, Arg1)
+        If (!Local0) { Return (Zero) }
+        XSTQ (Local0, Arg2)
+        Return (One)
+    }
+
+    // Count the pointers and string bytes of a user vector into EXNP and EXNB.
+    Method (EXAC, 2, NotSerialized)
+    {
+        If (!Arg1) { Return (Zero) }
         While (One)
         {
-            If (Local3)
+            Local0 = URDQ (Arg0, Arg1)
+            If (Local0 >= USTP) { Return (Zero - 14) } // EFAULT
+            If (!Local0) { Break }
+            Arg1 += 8
+            Increment (EXNP)
+            While (One)
             {
-                Local5 = URDQ (Arg0, Local3)
-                If (Local5 >= USTP) { Return (Zero - 14) }
-                Local3 += 8
-                If (Local5)
-                {
-                    If (Local1 >= Local0 + 8 + (64 + Local4) * 8)
-                    {
-                        Return (Zero - 7) // E2BIG
-                    }
-                    XSTQ (Local1, USTP - PGSZ + Local2 - Local0)
-                    While (One)
-                    {
-                        If (Local2 >= Local0 + PGSZ) { Return (Zero - 7) }
-                        If (Local5 >= USTP) { Return (Zero - 14) }
-                        Local6 = UPHY (Arg0, Local5, Zero)
-                        If (!Local6) { Return (Zero - 14) }
-                        Local7 = XBYT (Local6)
-                        XSTB (Local2, Local7)
-                        Increment (Local2)
-                        Increment (Local5)
-                        If (!Local7) { Break }
-                    }
-                    Local1 += 8
-                    Continue
-                }
+                Local1 = EXRB (Arg0, Local0)
+                If (Local1 == Ones) { Return (Zero - 14) }
+                Increment (EXNB)
+                Increment (Local0)
+                If (!Local1) { Break }
             }
-            If (Local4) { Break }
-            XSTQ (Local0, (Local1 - Local0 - 8) / 8)
-            Local1 += 8 // argv terminator
-            Local3 = Arg3
-            Local4 = One
+            If (EXNB + EXNP * 8 > EXAM) { Return (Zero - 7) } // E2BIG
         }
-        UXAV (Arg1, Local1 + 8) // skip envp terminator
+        Return (Zero)
+    }
+
+    // Copy a user vector's strings to EXSS and their addresses to EXPP.
+    // The strings were counted already, so they must still fit below USTP.
+    Method (EXAW, 3, NotSerialized)
+    {
+        If (!Arg2) { Return (Zero) }
+        While (One)
+        {
+            Local0 = URDQ (Arg0, Arg2)
+            If (Local0 >= USTP) { Return (Zero - 14) }
+            If (!Local0) { Break }
+            Arg2 += 8
+            If (EXPP + 8 > EXRV) { Return (Zero - 7) }
+            If (!EXPQ (Arg1, EXPP, EXSS)) { Return (Zero - 12) }
+            EXPP += 8
+            While (One)
+            {
+                Local1 = EXRB (Arg0, Local0)
+                If (Local1 == Ones) { Return (Zero - 14) }
+                If (EXSS >= USTP) { Return (Zero - 7) }
+                If (!EXPB (Arg1, EXSS, Local1)) { Return (Zero - 12) }
+                Increment (EXSS)
+                Increment (Local0)
+                If (!Local1) { Break }
+            }
+        }
+        Return (Zero)
+    }
+
+    // Copy argv and envp onto the new task's stack in the System V layout:
+    // EXRP points at argc, then argv, NULL, envp, NULL and auxv; the strings
+    // follow up to USTP. Sparse stack pages are faulted in as needed, up to
+    // EXAM bytes. Arg4 strings from SBBF replace argv[0] for an interpreted
+    // script.
+    Method (EXST, 5, NotSerialized)
+    {
+        EXCV = Ones
+        EXDV = Ones
+        EXNP = Arg4
+        EXNB = Zero
+        Local5 = XADR (SBBF)
+        Local2 = Arg4
+        While (Local2)
+        {
+            Local7 = XBYT (Local5)
+            Increment (EXNB)
+            Increment (Local5)
+            If (!Local7) { Decrement (Local2) }
+        }
+        If (Arg4 && Arg2)
+        {
+            Local5 = URDQ (Arg0, Arg2)
+            If (Local5 >= USTP) { Return (Zero - 14) }
+            If (Local5) { Arg2 += 8 }
+        }
+        Local0 = EXAC (Arg0, Arg2)
+        If (Local0) { Return (Local0) }
+        Local3 = EXNP // argc
+        Local0 = EXAC (Arg0, Arg3)
+        If (Local0) { Return (Local0) }
+
+        Local1 = USTP - EXNB // Strings
+        Local4 = (Local1 - (8 + (EXNP + 2) * 8 + SizeOf (EXAV))) & ~15
+        EXRP = Local4
+        EXRV = Local4 + 8 + (EXNP + 1) * 8 // envp terminator
+        EXPP = Local4 + 8
+        EXSS = Local1
+        If (!EXPQ (Arg1, Local4, Local3)) { Return (Zero - 12) }
+
+        Local5 = XADR (SBBF)
+        Local2 = Arg4
+        While (Local2)
+        {
+            If (!EXPQ (Arg1, EXPP, EXSS)) { Return (Zero - 12) }
+            EXPP += 8
+            While (One)
+            {
+                Local7 = XBYT (Local5)
+                If (!EXPB (Arg1, EXSS, Local7)) { Return (Zero - 12) }
+                Increment (EXSS)
+                Increment (Local5)
+                If (!Local7) { Break }
+            }
+            Decrement (Local2)
+        }
+        Local0 = EXAW (Arg0, Arg1, Arg2)
+        If (Local0) { Return (Local0) }
+        If (EXPP != Local4 + 8 + Local3 * 8) { Return (Zero - 7) }
+        If (!EXPQ (Arg1, EXPP, Zero)) { Return (Zero - 12) }
+        EXPP += 8
+        Local0 = EXAW (Arg0, Arg1, Arg3)
+        If (Local0) { Return (Local0) }
+        If (!EXPQ (Arg1, EXPP, Zero)) { Return (Zero - 12) }
+        EXPP += 8
+
+        XMOV (XADR (EXAV), XADR (EXZR), SizeOf (EXAV))
+        UXAV (Arg1, XADR (EXAV))
+        Local2 = Zero
+        While (Local2 < SizeOf (EXAV))
+        {
+            Local0 = XVWD (XADR (EXAV) + Local2, Ones)
+            If (!EXPQ (Arg1, EXPP + Local2, Local0)) { Return (Zero - 12) }
+            Local2 += 8
+        }
         Return (Zero)
     }
 
@@ -4367,23 +4636,23 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         XSTQ (Arg0 + TSCR, Local2)
         XSTQ (Arg0 + TSKG, Zero)
         Local2 = XVWD (Local1 + TSUL, Ones)
-        XSTQ (Local1 + TSUL, XVWD (Arg0 + TSUL, Ones))
-        XSTQ (Arg0 + TSUL, Local2)
+        XSTQ (Local1 + TSUL, XVWD (TGRL (Arg0) + TSUL, Ones))
+        XSTQ (TGRL (Arg0) + TSUL, Local2)
         XSTQ (Arg0 + TSSG, XVWD (Local1 + TSSG, Ones))
         SDEL (Local1)
 
-        Local5 = XVWD (Arg0 + TSCE, Ones)
+        Local5 = XVWD (TGRL (Arg0) + TSCE, Ones)
         Local6 = Zero
         While (Local5 && Local6 < FDLM)
         {
             If (Local5 & (One << Local6))
             {
-                FDCL (Arg0 + TSFD + Local6 * 8)
+                FDCL (TGRL (Arg0) + TSFD + Local6 * 8)
             }
             Increment (Local6)
         }
-        Local5 = Arg0 + TSAC
-        While (Local5 < Arg0 + TSAC + 64 * 32)
+        Local5 = TGRL (Arg0) + TSAC
+        While (Local5 < TGRL (Arg0) + TSAC + 64 * 32)
         {
             If (XVWD (Local5, Ones) != One)
             {
@@ -4392,13 +4661,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Local5 += 32
         }
         XSTQ (Arg0 + TSSP, Zero)
-        XSTQ (Arg0 + TSCE, Zero)
+        XSTQ (TGRL (Arg0) + TSCE, Zero)
         XSTQ (Arg0 + TSFS, Zero)
         XCLR (Arg0 + TSFX)
         XSTQ (Arg0 + TSFX, 0x037F)
         XSTQ (Arg0 + TSFX + 24, 0x1F80)
         XMOV (Arg0 + TSIZ - 20 * 8, XADR (EXZR), 20 * 8)
-        SFRM (Arg0, Local3, Zero, USTP - PGSZ)
+        SFRM (Arg0, Local3, Zero, EXRP)
         Return (Zero)
     }
 
@@ -4638,7 +4907,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     }
 
     // Socket endpoints share the open-description header used by VFS files.
-    Name (SKND, Buffer (72) {})
+    Name (SKND, Buffer (432) {}) // Socket vnode identity; VNSL bytes, see MFND
     Name (SKHD, Zero) // Bound endpoints
     Name (SKAD, Buffer (110) {})
     Name (SKAL, Buffer (4) {})
@@ -4755,13 +5024,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local0 = 3
         While (Local0 < FDLM)
         {
-            Local1 = Arg0 + TSFD + Local0 * 8
+            Local1 = TGRL (Arg0) + TSFD + Local0 * 8
             If (!XVWD (Local1, Ones))
             {
                 XSTQ (Local1, Arg1)
-                Local2 = XVWD (Arg0 + TSCE, Ones) & ~(One << Local0)
+                Local2 = XVWD (TGRL (Arg0) + TSCE, Ones) & ~(One << Local0)
                 If (Arg2 & 0x80000) { Local2 |= One << Local0 }
-                XSTQ (Arg0 + TSCE, Local2)
+                XSTQ (TGRL (Arg0) + TSCE, Local2)
                 Return (Local0)
             }
             Increment (Local0)
@@ -4835,7 +5104,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local3 = FINS (Arg0, Local1, Arg1)
         If (Local3 >= Zero - 4095)
         {
-            FDCL (Arg0 + TSFD + Local2 * 8)
+            FDCL (TGRL (Arg0) + TSFD + Local2 * 8)
             SKUP (Local1)
             Return (Local3)
         }
@@ -4846,8 +5115,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         XSTQ (XADR (SKPF), Local2 | (Local3 << 32))
         If (!UCOP (Arg0, Arg2, XADR (SKPF), 8))
         {
-            FDCL (Arg0 + TSFD + Local2 * 8)
-            FDCL (Arg0 + TSFD + Local3 * 8)
+            FDCL (TGRL (Arg0) + TSFD + Local2 * 8)
+            FDCL (TGRL (Arg0) + TSFD + Local3 * 8)
             Return (Zero - 14)
         }
         Return (Zero)
@@ -4881,15 +5150,15 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local3 = FINS (Arg0, Local1, Arg3)
         If (Local3 >= Zero - 4095)
         {
-            FDCL (Arg0 + TSFD + Local2 * 8)
+            FDCL (TGRL (Arg0) + TSFD + Local2 * 8)
             SKUP (Local1)
             Return (Local3)
         }
         XSTQ (XADR (SKPF), Local2 | (Local3 << 32))
         If (!UCOP (Arg0, Arg2, XADR (SKPF), 8))
         {
-            FDCL (Arg0 + TSFD + Local2 * 8)
-            FDCL (Arg0 + TSFD + Local3 * 8)
+            FDCL (TGRL (Arg0) + TSFD + Local2 * 8)
+            FDCL (TGRL (Arg0) + TSFD + Local3 * 8)
             Return (Zero - 14)
         }
         Return (Zero)
@@ -5502,7 +5771,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Method (SGAC, 5, NotSerialized)
     {
         If (Arg4 != 8 || !Arg1 || Arg1 > 64) { Return (Zero - 22) }
-        Local0 = Arg0 + TSAC + (Arg1 - One) * 32
+        Local0 = TGRL (Arg0) + TSAC + (Arg1 - One) * 32
         Local1 = XADR (SGBF)
         If (Arg2)
         {
@@ -5551,7 +5820,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Method (SGIG, 2, NotSerialized)
     {
-        Local0 = XVWD (Arg0 + TSAC + (Arg1 - One) * 32, Ones)
+        Local0 = XVWD (TGRL (Arg0) + TSAC + (Arg1 - One) * 32, Ones)
         Return (Local0 == One || (!Local0 &&
             (Arg1 == 17 || Arg1 == 18 || Arg1 == 23 || Arg1 == 28)))
     }
@@ -5580,7 +5849,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (!Arg1) { Local1 = KRHD }
         ElseIf (Arg1 == One) { Local1 = SLHD }
         ElseIf (Arg1 == 2) { Local1 = PLHD }
-        Else { Local1 = SKWH }
+        ElseIf (Arg1 == 3) { Local1 = SKWH }
+        Else { Local1 = FXHD }
         While (Local1)
         {
             Local2 = XVWD (Local1, Ones)
@@ -5590,7 +5860,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 ElseIf (!Arg1) { KRHD = Local2 }
                 ElseIf (Arg1 == One) { SLHD = Local2 }
                 ElseIf (Arg1 == 2) { PLHD = Local2 }
-                Else { SKWH = Local2 }
+                ElseIf (Arg1 == 3) { SKWH = Local2 }
+                Else { FXHD = Local2 }
                 If (KRTL == Arg0) { KRTL = Local0 }
                 Return (One)
             }
@@ -5603,11 +5874,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Method (SGWK, 1, NotSerialized)
     {
         Local0 = XVWD (Arg0 + TSPR, Ones)
-        If (XVWD (Local0 + PRWT, Ones) || SGDQ (Arg0, Zero) ||
+        Local1 = XVWD (Local0 + PRWT, Ones) == Arg0
+        If (Local1 || SGDQ (Arg0, Zero) ||
             SGDQ (Arg0, One) || SGDQ (Arg0, 2) ||
-            SGDQ (Arg0, 3))
+            SGDQ (Arg0, 3) || SGDQ (Arg0, 4))
         {
-            XSTQ (Local0 + PRWT, Zero)
+            If (Local1) { XSTQ (Local0 + PRWT, Zero) }
             XSTQ (XVWD (Arg0 + TSFR, Ones) + 14 * 8, Zero - 4)
             SQAP (Arg0)
         }
@@ -5626,7 +5898,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             If (XVWD (Local0 + PRID, Ones) == Arg1)
             {
-                Local1 = XVWD (Local0 + PRTK, Ones)
+                Local1 = TGLV (XVWD (Local0 + PRTK, Ones))
                 If (Local1 && Arg2)
                 {
                     SGQU (Local1, Arg2)
@@ -5653,7 +5925,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local2 = One << (Local1 - One)
         XSTQ (Arg0 + TSPE, XVWD (Arg0 + TSPE, Ones) & ~Local2)
         If (SGIG (Arg0, Local1)) { Return (Zero) }
-        Local3 = Arg0 + TSAC + (Local1 - One) * 32
+        Local3 = TGRL (Arg0) + TSAC + (Local1 - One) * 32
         Local4 = XVWD (Local3, Ones)
         If (!Local4) { Return (Local1) }
 
@@ -5681,8 +5953,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local0 = XVWD (Arg0 + TSSP, Ones)
         If (!Local0 || XVWD (Arg1 + 18 * 8, Ones) != Local0 + 8)
         {
-            PREX (Arg0, 11)
-            Return (Zero)
+            PREX (Arg0, 11, One)
+            Return (2)
         }
         XMOV (Arg1, Arg0 + TSRF, 20 * 8)
         XMOV (Arg0 + TSFX, Arg0 + TSSX, PGSZ)
@@ -5701,7 +5973,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local1 = PRHD
         While (Local1)
         {
-            Local2 = XVWD (Local1 + PRTK, Ones)
+            Local2 = TGLV (XVWD (Local1 + PRTK, Ones))
             Local3 = XVWD (Local1 + PRIT, Ones)
             If (Local2 && Local3)
             {
@@ -5776,6 +6048,238 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (Zero)
     }
 
+    Name (FXHD, Zero) // Tasks waiting in futex, in FIFO order
+
+    // A futex key is the direct-map address of the aligned 32-bit word, so
+    // shared mappings match across processes.
+    Method (FXKY, 2, NotSerialized)
+    {
+        If ((Arg1 & 3) || Arg1 >= USTP) { Return (Zero) }
+        Return (UPHY (Arg0, Arg1, Zero))
+    }
+
+    Method (FXRD, 1, NotSerialized)
+    {
+        Return (XBYT (Arg0) | (XBYT (Arg0 + One) << 8) |
+            (XBYT (Arg0 + 2) << 16) | (XBYT (Arg0 + 3) << 24))
+    }
+
+    // Wake up to Arg1 waiters on key Arg0 with a zero result.
+    Method (FXWK, 2, NotSerialized)
+    {
+        Local0 = Zero
+        Local1 = FXHD
+        Local2 = Zero
+        While (Local1 && Local2 < Arg1)
+        {
+            Local3 = XVWD (Local1, Ones)
+            If (XVWD (Local1 + TSFK, Ones) == Arg0)
+            {
+                If (Local0) { XSTQ (Local0, Local3) }
+                Else { FXHD = Local3 }
+                XSTQ (XVWD (Local1 + TSFR, Ones) + 14 * 8, Zero)
+                SQAP (Local1)
+                Increment (Local2)
+            }
+            Else { Local0 = Local1 }
+            Local1 = Local3
+        }
+        Return (Local2)
+    }
+
+    // Move up to Arg2 waiters from key Arg0 to key Arg1.
+    Method (FXRQ, 3, NotSerialized)
+    {
+        Local0 = FXHD
+        Local1 = Zero
+        While (Local0 && Local1 < Arg2)
+        {
+            If (XVWD (Local0 + TSFK, Ones) == Arg0)
+            {
+                XSTQ (Local0 + TSFK, Arg1)
+                Increment (Local1)
+            }
+            Local0 = XVWD (Local0, Ones)
+        }
+        Return (Local1)
+    }
+
+    // Expire futex timeouts on the BSP tick.
+    Method (FXTO, 0, NotSerialized)
+    {
+        If (!FXHD) { Return () }
+        Local0 = Zero
+        Local1 = FXHD
+        Local5 = MNOW ()
+        While (Local1)
+        {
+            Local2 = XVWD (Local1, Ones)
+            If (Local5 >= XVWD (Local1 + TSDL, Ones))
+            {
+                If (Local0) { XSTQ (Local0, Local2) }
+                Else { FXHD = Local2 }
+                XSTQ (XVWD (Local1 + TSFR, Ones) + 14 * 8, Zero - 110) // ETIMEDOUT
+                SQAP (Local1)
+            }
+            Else { Local0 = Local1 }
+            Local1 = Local2
+        }
+    }
+
+    // Return Ones when the caller blocked. Arg3 is a monotonic deadline in
+    // ns, or Ones for none.
+    Method (FXWT, 4, NotSerialized)
+    {
+        If (FXRD (Arg1) != (Arg2 & 0xFFFFFFFF)) { Return (Zero - 11) } // EAGAIN
+        If (Arg3 <= MNOW ()) { Return (Zero - 110) }
+        XSTQ (Arg0 + TSFK, Arg1)
+        XSTQ (Arg0 + TSDL, Arg3)
+        XSTQ (Arg0, Zero)
+        If (!FXHD) { FXHD = Arg0 }
+        Else
+        {
+            Local0 = FXHD
+            While (XVWD (Local0, Ones)) { Local0 = XVWD (Local0, Ones) }
+            XSTQ (Local0, Arg0)
+        }
+        Return (Ones)
+    }
+
+    Method (SYFX, 2, NotSerialized)
+    {
+        Local0 = XVWD (Arg1 + 9 * 8, Ones) & 0xFFFFFFFF
+        Local1 = Local0 & ~0x180 // FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME
+        Local2 = FXKY (Arg0, XVWD (Arg1 + 8 * 8, Ones))
+        If (!Local2) { Return (Zero - 14) }
+        Local3 = XVWD (Arg1 + 12 * 8, Ones) & 0xFFFFFFFF
+        Local4 = XVWD (Arg1 + 5 * 8, Ones)
+        If (Local1 == Zero || Local1 == 9) // FUTEX_WAIT, FUTEX_WAIT_BITSET
+        {
+            If (Local1 == 9 && !(XVWD (Arg1 + 6 * 8, Ones) & 0xFFFFFFFF)) { Return (Zero - 22) }
+            Local5 = Ones
+            If (Local4)
+            {
+                If (!UCPY (Arg0, XADR (TMVL), Local4, 16)) { Return (Zero - 14) }
+                Local6 = XVWD (XADR (TMVL), Ones)
+                Local7 = XVWD (XADR (TMVL) + 8, Ones)
+                If (Local6 > 0x7FFFFFFFFFFFFFFF / 1000000000 || Local7 >= 1000000000)
+                {
+                    Return (Zero - 22)
+                }
+                Local5 = Local6 * 1000000000 + Local7
+                If (Local1 == Zero) { Local5 += MNOW () } // Relative timeout
+                ElseIf (Local0 & 0x100) // Absolute CLOCK_REALTIME
+                {
+                    Local6 = SYTM ()
+                    If (Local6 == Ones) { Return (Zero - 22) }
+                    Local6 *= 1000000000
+                    If (Local5 > Local6) { Local5 = MNOW () + Local5 - Local6 }
+                    Else { Local5 = Zero }
+                }
+            }
+            Return (FXWT (Arg0, Local2, Local3, Local5))
+        }
+        If (Local1 == One || Local1 == 10) { Return (FXWK (Local2, Local3)) }
+        If (Local1 == 3 || Local1 == 4) // FUTEX_REQUEUE, FUTEX_CMP_REQUEUE
+        {
+            Local5 = FXKY (Arg0, XVWD (Arg1 + 7 * 8, Ones))
+            If (!Local5) { Return (Zero - 14) }
+            If (Local1 == 4 && FXRD (Local2) != (XVWD (Arg1 + 6 * 8, Ones) & 0xFFFFFFFF))
+            {
+                Return (Zero - 11)
+            }
+            Local6 = FXWK (Local2, Local3)
+            Local7 = FXRQ (Local2, Local5, Local4 & 0x7FFFFFFF)
+            If (Local1 == 4) { Local6 += Local7 }
+            Return (Local6)
+        }
+        Return (Zero - 38)
+    }
+
+    // pthread_create: a task sharing the leader's address space, descriptors
+    // and signal actions, with its own registers, TLS, signal mask and TID.
+    Method (SYTC, 3, NotSerialized)
+    {
+        If (PNID > 0x7FFFFFFF) { Return (Zero - 11) }
+        Local0 = STAL ()
+        If (!Local0) { Return (Zero - 11) }
+        Local2 = TGRL (Arg0)
+        Local1 = Local0 + TSIZ - 20 * 8
+        XMOV (Local1, Arg1, 20 * 8)
+        XSTQ (Local1 + 14 * 8, Zero) // Child's syscall result
+        Local3 = XVWD (Arg1 + 9 * 8, Ones)
+        If (Local3) { XSTQ (Local1 + 18 * 8, Local3) }
+        XSTQ (Local0 + TSFR, Local1)
+        XMOV (Local0 + TSFX, Arg0 + TSFX, PGSZ)
+        XSTQ (Local0 + TSCR, XVWD (Arg0 + TSCR, Ones))
+        XSTQ (Local0 + TSPR, XVWD (Arg0 + TSPR, Ones))
+        XSTQ (Local0 + TSPH, XVWD (Arg0 + TSPH, Ones))
+        XSTQ (Local0 + TSPN, XVWD (Arg0 + TSPN, Ones))
+        XSTQ (Local0 + TSMA, XVWD (Arg0 + TSMA, Ones))
+        XSTQ (Local0 + TSFS, XVWD (Arg0 + TSFS, Ones))
+        If (Arg2 & 0x80000) { XSTQ (Local0 + TSFS, XVWD (Arg1 + 7 * 8, Ones)) } // CLONE_SETTLS
+        If (Arg2 & 0x200000) { XSTQ (Local0 + TSCT, XVWD (Arg1 + 5 * 8, Ones)) } // CLONE_CHILD_CLEARTID
+        Local4 = PNID
+        WVAL = Local4
+        If (((Arg2 & 0x100000) && !UCOP (Arg0, XVWD (Arg1 + 12 * 8, Ones), XADR (WSTA), 4)) ||
+            ((Arg2 & 0x1000000) && !UCOP (Arg0, XVWD (Arg1 + 5 * 8, Ones), XADR (WSTA), 4)))
+        {
+            VUNM (Local0, TSIZ)
+            Return (Zero - 14)
+        }
+        Increment (PNID)
+        XSTQ (Local0 + TSTD, Local4)
+        XSTQ (Local0 + TSGL, Local2)
+        XSTQ (Local0 + TSTN, XVWD (Local2 + TSTN, Ones))
+        XSTQ (Local2 + TSTN, Local0)
+        SQAP (Local0)
+        Return (Local4)
+    }
+
+    // Find a live task by thread ID.
+    Method (TFND, 1, NotSerialized)
+    {
+        Local0 = PRHD
+        While (Local0)
+        {
+            Local1 = XVWD (Local0 + PRTK, Ones)
+            If (Local1)
+            {
+                If (XVWD (Local0 + PRID, Ones) == Arg0) { Return (TGLV (Local1)) }
+                Local2 = XVWD (Local1 + TSTN, Ones)
+                While (Local2)
+                {
+                    If (XVWD (Local2 + TSTD, Ones) == Arg0) { Return (Local2) }
+                    Local2 = XVWD (Local2 + TSTN, Ones)
+                }
+            }
+            Local0 = XVWD (Local0, Ones)
+        }
+        Return (Zero)
+    }
+
+    // tkill and tgkill. Arg3 is the required thread group ID, or Ones.
+    Method (SGTK, 4, NotSerialized)
+    {
+        If (Arg2 > 64 || !Arg1 || Arg1 > 0x7FFFFFFF) { Return (Zero - 22) }
+        If (Arg2 == 19 || Arg2 == 20 || Arg2 == 21 || Arg2 == 22)
+        {
+            Return (Zero - 38) // Job control
+        }
+        Local0 = TFND (Arg1)
+        If (!Local0) { Return (Zero - 3) }
+        If (Arg3 != Ones && XVWD (XVWD (Local0 + TSPR, Ones) + PRID, Ones) != Arg3)
+        {
+            Return (Zero - 3)
+        }
+        If (Arg2)
+        {
+            SGQU (Local0, Arg2)
+            If (Local0 != Arg0 && SGPN (Local0)) { SGWK (Local0) }
+        }
+        Return (Zero)
+    }
+
     Method (SYSC, 1, NotSerialized)
     {
         Local0 = XVWD (Arg0 + TSFR, Ones)
@@ -5785,8 +6289,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Local3 = Local2 & 0xFF
             Local6 = XVWD (XVWD (Arg0 + TSPR, Ones) + PRID, Ones)
-            PREX (Arg0, Local3 << 8)
-            If (Local6 == UPID)
+            Local4 = TGOT (Arg0)
+            PREX (Arg0, Local3 << 8, Local1 == 231)
+            If (Local6 == UPID && !Local4)
             {
                 Local4 = Zero
                 While (Local4 < 63)
@@ -5838,7 +6343,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 If (SSTD (Arg0, Local2))
                 {
-                    XSTQ (Arg0 + TSCL, XVWD (Arg0 + TSCL, Ones) | (One << Local2))
+                    XSTQ (TGRL (Arg0) + TSCL, XVWD (TGRL (Arg0) + TSCL, Ones) | (One << Local2))
                     Local3 = Zero
                 }
                 Else
@@ -5846,7 +6351,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                     // Closing any descriptor drops the process's locks on that file.
                     Local4 = UFDL (Arg0, Local2)
                     If (Local4) { RLRL (RLKY (Local4), XVWD (Arg0 + TSPR, Ones)) }
-                    Local3 = FDCL (Arg0 + TSFD + Local2 * 8)
+                    Local3 = FDCL (TGRL (Arg0) + TSFD + Local2 * 8)
                 }
             }
         }
@@ -6054,7 +6559,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 Local3 = SYDP (Arg0, Local2, Local4)
                 If (Local3 < Zero - 4095 && Local5)
                 {
-                    XSTQ (Arg0 + TSCE, XVWD (Arg0 + TSCE, Ones) | (One << Local4))
+                    XSTQ (TGRL (Arg0) + TSCE, XVWD (TGRL (Arg0) + TSCE, Ones) | (One << Local4))
                 }
             }
         }
@@ -6132,17 +6637,43 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         ElseIf (Local1 == 57 || Local1 == 56 || Local1 == 58) // fork, clone, vfork
         {
+            // clone accepts threads, plain fork (SIGCHLD) and musl posix_spawn's
+            // CLONE_VM | CLONE_VFORK | SIGCHLD, each with an optional new stack.
             Local3 = Zero - 22
-            If (Local1 != 56 || (Local2 == 17 && !XVWD (Local0 + 9 * 8, Ones)))
+            Local5 = Local1 == 58
+            Local6 = Zero
+            If (Local1 == 56)
+            {
+                Local6 = XVWD (Local0 + 9 * 8, Ones)
+                If (Local2 == 0x4111) { Local5 = One }
+            }
+            // Only a lone leader can lend its address space to a vfork child.
+            If (TGOT (Arg0) || TGRL (Arg0) != Arg0) { Local5 = Zero }
+            If (Local1 == 56 && (Local2 & 0x10900) == 0x10900) // CLONE_VM | CLONE_SIGHAND | CLONE_THREAD
             {
                 Local4 = MNOW ()
-                Local3 = SYFK (Arg0, Local0, Local1 == 58)
+                Local3 = SYTC (Arg0, Local0, Local2)
                 PLAT (Arg0, Local1, Local4)
-                If (Local1 == 58 && Local3 < Zero - 4095) { Return (Zero) }
+            }
+            ElseIf (Local1 != 56 || Local2 == 17 || Local2 == 0x4111)
+            {
+                Local4 = MNOW ()
+                Local3 = SYFK (Arg0, Local0, Local5, Local6)
+                PLAT (Arg0, Local1, Local4)
+                If (Local5 && Local3 < Zero - 4095) { Return (Zero) }
             }
         }
         ElseIf (Local1 == 59) // execve
         {
+            If (TGOT (Arg0))
+            {
+                // The other threads exit first, then the syscall restarts.
+                TGKL (Arg0)
+                XSTQ (Local0 + 15 * 8, XVWD (Local0 + 15 * 8, Ones) - 2)
+                SQAP (Arg0)
+                Return (Zero)
+            }
+            If (TGRL (Arg0) != Arg0) { TADP (Arg0) }
             Local4 = MNOW ()
             Local3 = SYEX (Arg0, Local2, XVWD (Local0 + 9 * 8, Ones),
                 XVWD (Local0 + 12 * 8, Ones))
@@ -6154,7 +6685,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Local3 = SYWT (Arg0, Local0)
             If (Local3 == Ones)
             {
-                XSTQ (XVWD (Arg0 + TSPR, Ones) + PRWT, One)
+                XSTQ (XVWD (Arg0 + TSPR, Ones) + PRWT, Arg0)
                 Return (Zero)
             }
         }
@@ -6269,7 +6800,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         ElseIf (Local1 == 95) // umask
         {
             Local3 = VMSK (Arg0)
-            XSTQ (Arg0 + TSUM, 0x200 | (Local2 & 0x1FF))
+            XSTQ (TGRL (Arg0) + TSUM, 0x200 | (Local2 & 0x1FF))
         }
         ElseIf (Local1 == 158)
         {
@@ -6284,8 +6815,23 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         ElseIf (Local1 == 39 || Local1 == 186 || Local1 == 218) // getpid / gettid / set_tid_address
         {
             // libc uses set_tid_address to initialize its thread ID.
-            // Each process owns its address space, so no peer waits for clear_child_tid.
+            If (Local1 == 218) { XSTQ (Arg0 + TSCT, Local2) }
             Local3 = XVWD (XVWD (Arg0 + TSPR, Ones) + PRID, Ones)
+            If (Local1 != 39 && XVWD (Arg0 + TSTD, Ones)) { Local3 = XVWD (Arg0 + TSTD, Ones) }
+        }
+        ElseIf (Local1 == 202) // futex
+        {
+            Local3 = SYFX (Arg0, Local0)
+            If (Local3 == Ones) { Return (Zero) }
+        }
+        ElseIf (Local1 == 200) // tkill
+        {
+            Local3 = SGTK (Arg0, Local2 & 0xFFFFFFFF, XVWD (Local0 + 9 * 8, Ones) & 0xFFFFFFFF, Ones)
+        }
+        ElseIf (Local1 == 234) // tgkill
+        {
+            Local3 = SGTK (Arg0, XVWD (Local0 + 9 * 8, Ones) & 0xFFFFFFFF,
+                XVWD (Local0 + 12 * 8, Ones) & 0xFFFFFFFF, Local2 & 0xFFFFFFFF)
         }
         ElseIf (Local1 == 102 || Local1 == 104 || Local1 == 107 || Local1 == 108)
         {
@@ -6561,10 +7107,15 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Local3 = XVWD (Local0 + TSFR, Ones)
             If (Local4)
             {
+                If (XVWD (Local0 + TSKX, Ones))
+                {
+                    PREX (Local0, Zero, Zero)
+                    Return (Zero)
+                }
                 Local5 = SGDL (Local0, Local3)
                 If (Local5)
                 {
-                    PREX (Local0, Local5)
+                    PREX (Local0, Local5, One)
                     Return (Zero)
                 }
             }
@@ -6609,6 +7160,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             }
             If (Local1 == SYEV)
             {
+                // A killed thread may enter a syscall before it is preempted.
+                If (XVWD (Local0 + TSKX, Ones))
+                {
+                    PREX (Local0, Zero, Zero)
+                    Return (Zero)
+                }
                 Local6 = XTSC ()
                 Local5 = SYSC (Local0)
                 Local7 = Local0
@@ -6636,7 +7193,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             If (Local4)
             {
-                PREX (Local0, 11) // Userspace fault reported as SIGSEGV
+                PREX (Local0, 11, One) // Userspace fault reported as SIGSEGV
                 PUTS ("Userspace fault terminated task")
             }
             Else { SDEL (Local0) }

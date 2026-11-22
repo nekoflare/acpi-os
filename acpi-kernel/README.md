@@ -255,7 +255,7 @@ byte streams (`pipe2` accepts `O_CLOEXEC` and `O_NONBLOCK`), `mmap` (9) for priv
 `mprotect` (10) for anonymous pages with no access, read-only access, or
 read/write access, `munmap`
 (11) for a complete mapped range, `ioctl` (16) with `TIOCGWINSZ` on console
-descriptors, `getpid` (39), fork-style `clone` (56), `fork` (57), `vfork` (58), `execve` (59), `exit` (60),
+descriptors, `getpid` (39), `clone` (56), `fork` (57), `vfork` (58), `execve` (59), `exit` (60),
 `wait4` (61), `uname` (63), `getcwd` (79), the UID and GID queries (which return zero),
 `getppid` (110), `arch_prctl` (158) with `ARCH_SET_FS`, `gettid` (186),
 `getdents64` (217), `exit_group` (231), `openat` (257), `newfstatat` (262),
@@ -275,10 +275,36 @@ short counts. Unknown syscall numbers return `-ENOSYS`.
 
 Fork eagerly copies the user mappings, saved registers, and TLS state.
 The parent receives the child PID and the child receives zero. Inherited
-descriptors share file offsets. The libc-compatible clone form takes
-`SIGCHLD` and a null stack. With `vfork`, the child runs in the parent's
+descriptors share file offsets. The fork-style clone form takes
+`SIGCHLD` and an optional new stack. With `vfork`, or musl `posix_spawn`'s
+`CLONE_VM | CLONE_VFORK | SIGCHLD` clone, the child runs in the parent's
 address space and the parent resumes after the child successfully executes
-a new image or exits. On exit or a handled user fault, the scheduler
+a new image or exits. A process with several threads gets a copying fork
+instead.
+
+`clone` with `CLONE_VM | CLONE_SIGHAND | CLONE_THREAD` creates a thread,
+so pthreads work. Threads share the address space, descriptors, working
+directory, umask and signal actions, which stay in the thread group
+leader's task record. Each thread has its own registers, FPU state, TLS
+base (`CLONE_SETTLS`), signal mask and TID. `CLONE_PARENT_SETTID`,
+`CLONE_CHILD_SETTID` and `CLONE_CHILD_CLEARTID` are honoured. `futex` (202)
+supports `FUTEX_WAIT`, `FUTEX_WAKE`, the `_BITSET` variants and
+`FUTEX_REQUEUE`/`FUTEX_CMP_REQUEUE`, with timeouts. `tkill` (200) and
+`tgkill` (234) signal one thread. `exit` ends one thread. `exit_group`,
+fatal signals and faults end the whole group. The process exits with its
+last thread. `execve` from a threaded process first makes the other
+threads exit.
+
+Known gap: there is no TLB shootdown. When a thread changes or removes
+mappings (`munmap`, `mprotect`, `mremap`-style replacement through
+`mmap`), threads of the same process running on other CPUs keep stale
+TLB entries until their next kernel entry (timer tick, interrupt or
+syscall), which reloads CR3. Freed pages can be reused during that window,
+so a program that unmaps memory and immediately hands the same addresses
+to a thread on another CPU could see stale data or write to a page that
+now belongs to someone else. A fix needs per-CPU tracking of the running
+address space and an IPI that waits for the other CPUs to flush before
+the pages are freed. On exit or a handled user fault, the scheduler
 releases the task's memory and descriptors. The parent can collect the
 exit status with `wait4`, optionally using `WNOHANG`. Faults report
 `SIGSEGV` in the wait status. Orphans are reaped automatically.

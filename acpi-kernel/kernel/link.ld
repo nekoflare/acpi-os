@@ -17,7 +17,7 @@ SECTIONS {
     } :requests
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
-    .text : { *(.text .text.*) } :text
+    .text : { __kernel_text_start = .; *(.text .text.*) __kernel_text_end = .; } :text
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
     .rodata : { *(.rodata .rodata.*) } :rodata

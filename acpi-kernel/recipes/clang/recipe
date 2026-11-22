@@ -1,0 +1,68 @@
+version=23.1.6
+revision=1
+cross_compile=yes
+tarball_url=https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.6/llvm-project-23.1.6.src.tar.xz
+tarball_sha256=d3b86ab29cfb4445a6652e5c2642ccc75e04e38084dde3701d323320f35a31da
+builddeps="musl musl-cxx"
+imagedeps="cmake ninja-build python3"
+
+# Static musl clang plus the LLVM tools that aac drives (llvm-link, opt),
+# and lld so the guest can link native executables.
+# build() reruns the cmake step: jinx skips configure() when it resumes a
+# configured tree, and cmake must still see changed options.
+clang_cmake() {
+    local toolchain="$sysroot/opt/acpi-musl-cxx/bin"
+    cmake -S "$source_dir/llvm" -B obj -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER="$toolchain/x86_64-linux-gcc" \
+        -DCMAKE_CXX_COMPILER="$toolchain/x86_64-linux-g++" \
+        -DCMAKE_C_FLAGS="$APP_CPU_FLAGS" \
+        -DCMAKE_CXX_FLAGS="$APP_CPU_FLAGS" \
+        -DCMAKE_EXE_LINKER_FLAGS="-static -no-pie" \
+        -DLLVM_ENABLE_PROJECTS="clang;lld" \
+        -DLLVM_TARGETS_TO_BUILD=X86 \
+        -DLLVM_HOST_TRIPLE=x86_64-linux-musl \
+        -DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-linux-musl \
+        -DLLVM_BUILD_STATIC=ON \
+        -DLLVM_ENABLE_PIC=OFF \
+        -DLLVM_ENABLE_ZLIB=OFF \
+        -DLLVM_ENABLE_ZSTD=OFF \
+        -DLLVM_ENABLE_LIBXML2=OFF \
+        -DLLVM_ENABLE_LIBEDIT=OFF \
+        -DLLVM_ENABLE_LIBPFM=OFF \
+        -DLLVM_INCLUDE_TESTS=OFF \
+        -DLLVM_INCLUDE_EXAMPLES=OFF \
+        -DLLVM_INCLUDE_BENCHMARKS=OFF \
+        -DLLVM_INCLUDE_DOCS=OFF \
+        -DLLVM_PARALLEL_LINK_JOBS=2 \
+        -DCLANG_ENABLE_STATIC_ANALYZER=OFF \
+        -DCLANG_ENABLE_ARCMT=OFF \
+        -DCLANG_PLUGIN_SUPPORT=OFF
+}
+
+configure() { clang_cmake; }
+
+build() {
+    clang_cmake
+    cmake --build obj -j"$parallelism" --target clang lld llvm-link opt clang-resource-headers
+}
+
+package() {
+    local major=${version%%.*}
+    install -Dm755 obj/bin/clang "$dest_dir/usr/bin/clang"
+    install -Dm755 obj/bin/llvm-link "$dest_dir/usr/bin/llvm-link"
+    install -Dm755 obj/bin/opt "$dest_dir/usr/bin/opt"
+    # lld picks its flavor from argv[0]; clang runs it as ld.lld.
+    install -Dm755 obj/bin/lld "$dest_dir/usr/bin/ld.lld"
+    # Static link runtime: musl crt objects and libc, plus libgcc from the
+    # musl-cxx toolchain. clang.cfg points -B/-L at this directory.
+    local gcclib=$(echo "$sysroot"/opt/acpi-musl-cxx/lib/gcc/x86_64-*-linux-musl/*)
+    mkdir -p "$dest_dir/usr/lib/musl"
+    cp -a "$sysroot"/opt/acpi-musl/lib/{crt1.o,crti.o,crtn.o,libc.a} "$dest_dir/usr/lib/musl/"
+    cp -a "$gcclib"/{crtbegin.o,crtbeginT.o,crtend.o,libgcc.a,libgcc_eh.a} "$dest_dir/usr/lib/musl/"
+    mkdir -p "$dest_dir/usr/lib/clang/$major"
+    cp -a "obj/lib/clang/$major/include" "$dest_dir/usr/lib/clang/$major/"
+    # libc headers, so the guest clang can compile hosted C.
+    mkdir -p "$dest_dir/usr/include"
+    cp -a "$sysroot/opt/acpi-musl/include/." "$dest_dir/usr/include/"
+}

@@ -512,6 +512,7 @@ acpi_vector_entries:
     movq (%rsp), %rsi
     movq 8(%rsp), %rcx
     movq %cr2, %r8
+    movq 24(%rsp), %r9
     andq $-16, %rsp
     call acpi_log_fatal_vector
     movl %r12d, %eax

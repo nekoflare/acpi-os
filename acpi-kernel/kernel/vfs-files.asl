@@ -8,14 +8,14 @@
 
     Method (VMSK, 1, NotSerialized)
     {
-        Local0 = XVWD (Arg0 + TSUM, Ones)
+        Local0 = XVWD (TGRL (Arg0) + TSUM, Ones)
         If (!Local0) { Return (0x12) } // 0022
         Return (Local0 & 0x1FF)
     }
 
     Method (VCWD, 1, NotSerialized)
     {
-        Local0 = XVWD (Arg0 + TSWD, Ones)
+        Local0 = XVWD (TGRL (Arg0) + TSWD, Ones)
         If (!Local0) { Return (VROT) }
         Return (Local0)
     }
@@ -238,7 +238,7 @@
         If (XVWD (Local0 + VNTY, Ones) != 4) { Return (Zero - 20) }
         Local1 = VCWD (Arg0)
         VREF (Local0)
-        XSTQ (Arg0 + TSWD, Local0)
+        XSTQ (TGRL (Arg0) + TSWD, Local0)
         VREL (Local1)
         Return (Zero)
     }

@@ -1043,8 +1043,49 @@ static void fault_serial_hex(const char *label, uint64_t value)
     fault_serial_write(digits);
 }
 
+extern const char __kernel_text_start[], __kernel_text_end[];
+
+/* Whether the current page tables map Arg0, walked through the direct map. */
+static int fault_address_mapped(uint64_t address)
+{
+    if (!direct_map_offset)
+        return 0;
+    uint64_t table;
+    __asm__ volatile("movq %%cr3, %0" : "=r"(table));
+    for (int shift = 39; shift >= 12; shift -= 9) {
+        uint64_t entry = *(volatile uint64_t *)(direct_map_offset + (table & 0x000ffffffffff000ull) +
+                                                ((address >> shift) & 0x1ff) * 8);
+        if (!(entry & 1))
+            return 0;
+        if (shift < 39 && (entry & 0x80))
+            return 1;
+        table = entry;
+    }
+    return 1;
+}
+
+/* Kernel text addresses on the interrupted stack: a conservative backtrace. */
+static void fault_scan_stack(uint64_t rsp)
+{
+    const uint64_t text_start = (uint64_t)__kernel_text_start;
+    const uint64_t text_end = (uint64_t)__kernel_text_end;
+    unsigned found = 0;
+    rsp &= ~7ull;
+    for (unsigned i = 0; i < 2048 && found < 48; ++i, rsp += 8) {
+        if ((i == 0 || !(rsp & 0xfff)) && !fault_address_mapped(rsp))
+            break;
+        uint64_t value = *(volatile uint64_t *)rsp;
+        if (value >= text_start && value < text_end) {
+            fault_serial_hex("  stack 0x", rsp);
+            fault_serial_hex(" -> 0x", value);
+            fault_serial_write("\r\n");
+            ++found;
+        }
+    }
+}
+
 void acpi_log_fatal_vector(uint64_t vector, uint64_t rip, uint64_t error,
-                           uint64_t cs, uint64_t cr2)
+                           uint64_t cs, uint64_t cr2, uint64_t rsp)
 {
     fault_serial_hex("Fatal kernel interrupt vector=0x", vector);
     fault_serial_hex(" RIP=0x", rip);
@@ -1052,7 +1093,10 @@ void acpi_log_fatal_vector(uint64_t vector, uint64_t rip, uint64_t error,
     fault_serial_hex(" error=0x", error);
     if (vector == 14)
         fault_serial_hex(" CR2=0x", cr2);
+    fault_serial_hex(" RSP=0x", rsp);
     fault_serial_write("\r\n");
+    if (!(cs & 3))
+        fault_scan_stack(rsp);
 }
 
 uint64_t acpi_random_word(uint64_t address)

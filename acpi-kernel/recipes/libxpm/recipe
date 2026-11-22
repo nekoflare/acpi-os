@@ -1,0 +1,17 @@
+version=3.5.17
+revision=1
+cross_compile=yes
+tarball_url="https://www.x.org/releases/individual/lib/libXpm-3.5.17.tar.xz"
+tarball_sha256=64b31f81019e7d388c822b0b28af8d51c4622b83f1f0cb6fa3fc95e271226e43
+builddeps=musl
+deps="libx11 libxt libxext"
+
+configure() { static_configure ; }
+build() {
+    musl_env
+    make -C src -j"$parallelism" SUBDIRS="include src"
+}
+package() {
+    musl_env
+    make -C src DESTDIR="$dest_dir" SUBDIRS="include src" install
+}

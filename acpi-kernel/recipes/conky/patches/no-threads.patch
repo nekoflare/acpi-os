@@ -1,0 +1,42 @@
+--- a/src/update-cb.cc
++++ b/src/update-cb.cc
+@@ -104,12 +104,11 @@
+   return *p.first;
+ }
+ 
++// The guest kernel has no thread support, so callbacks run inline on the
++// main loop instead of on a per-callback worker thread.
+ void callback_base::run() {
+-  if (thread == nullptr) {
+-    thread = new std::thread(&callback_base::start_routine, this);
+-  }
+-
+-  sem_start.post();
++  if (done) { return; }
++  work();
+ }
+ 
+ void callback_base::start_routine() {
+@@ -134,7 +133,6 @@
+ void run_all_callbacks() {
+   using priv::callback_base;
+ 
+-  size_t wait = 0;
+   for (auto i = callback_base::callbacks.begin();
+        i != callback_base::callbacks.end();) {
+     callback_base &cb = **i;
+@@ -146,7 +144,6 @@
+       if (i->use_count() > 1 || ++cb.unused < UNUSED_MAX) {
+         cb.remaining = cb.period - 1;
+         cb.run();
+-        if (cb.wait) { ++wait; }
+       }
+     }
+     if (cb.unused == UNUSED_MAX) {
+@@ -158,6 +155,5 @@
+     }
+   }
+ 
+-  while (wait-- > 0) { sem_wait.wait(); }
+ }
+ }  // namespace conky

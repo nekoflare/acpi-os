@@ -1,5 +1,5 @@
 version=1.26.1
-revision=1
+revision=2
 cross_compile=yes
 tarball_url=https://github.com/brndnmtthws/conky/archive/refs/tags/v1.26.1.tar.gz
 tarball_sha256=5af3f1946fd0b8821556ce35b89fbf8408e9e1357799ca31d7a35c0fcf921356

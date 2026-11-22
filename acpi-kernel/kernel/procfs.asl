@@ -311,7 +311,7 @@
     Method (PCVM, 1, NotSerialized)
     {
         If (!Arg0) { Return (Zero) }
-        Local0 = XVWD (Arg0 + TSUL, Ones)
+        Local0 = XVWD (TGRL (Arg0) + TSUL, Ones)
         Local1 = Zero
         While (Local0)
         {
@@ -339,7 +339,8 @@
         {
             Local0 = 0x52 // R
             If (XVWD (Arg1 + PRWT, Ones)) { Return (0x53) }
-            If (PCBK (Arg0, SLHD) || PCBK (Arg0, PLHD) || PCBK (Arg0, SKWH) || PCBK (Arg0, KRHD))
+            If (PCBK (Arg0, SLHD) || PCBK (Arg0, PLHD) || PCBK (Arg0, SKWH) || PCBK (Arg0, KRHD) ||
+                PCBK (Arg0, FXHD))
             {
                 Return (0x53)
             }

@@ -1,0 +1,16 @@
+version=1.1.2
+revision=1
+cross_compile=yes
+tarball_url=https://www.x.org/releases/individual/app/xcalc-1.1.2.tar.xz
+tarball_sha256=8578dfa1457e94289f6d6ed6146714307d8a73a1b54d2f42af1321b625fc1cd4
+builddeps="musl libxaw libxt libx11 xorgproto"
+
+configure() (
+    copy_source
+    musl_env
+    cd src
+    XCALC_LIBS="$(pkg-config --static --libs xaw7 xmu xt x11)" \
+        ./configure --prefix=/usr --with-appdefaultdir=/usr/share/X11/app-defaults
+)
+build() { static_build; }
+package() { autoconf_package; }

@@ -1,0 +1,22 @@
+version=0.1.0
+revision=1
+cross_compile=yes
+source_dir=recipes/aac/amlaot
+imagedeps="cargo rustc"
+
+configure() {
+    copy_source
+}
+
+# Debian ships no musl Rust std, so link glibc statically instead.
+build() {
+    CARGO_HOME="$PWD/cargo-home" \
+    RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C target-cpu=${JINX_APP_ARCH:-native}" \
+        cargo build --offline --locked --release \
+            --manifest-path src/Cargo.toml --target-dir target \
+            --target x86_64-unknown-linux-gnu -j"$parallelism"
+}
+
+package() {
+    package_app target/x86_64-unknown-linux-gnu/release/amlaot aac
+}
