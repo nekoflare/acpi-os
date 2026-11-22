@@ -405,7 +405,9 @@
         Local0 = XVWD (Arg0 + VNPA, Ones)
         EXVL = XVWD (Local0 + VNFS, Ones)
         Local1 = Zero
-        If ((Arg1 & 0xF000) == 0x4000) { Local1 = One }
+        Local6 = One
+        If ((Arg1 & 0xF000) == 0x4000) { Local1 = One Local6 = 2 }
+        ElseIf ((Arg1 & 0xF000) == 0xA000) { Local6 = 7 }
         Local2 = EXAL (One, One, Ones, One, Local1)
         If (!Local2)
         {
@@ -440,7 +442,7 @@
         EXLE (Local4, 26, One + Local1, 2)
         EXHD (Local4, Local1 * PGSZ, Local3, Local1)
         If (!EXBW (EXIB, EXIN)) { Return (Zero - 5) }
-        Local5 = EXED (Local0, Arg0, Local2, One, One + Local1)
+        Local5 = EXED (Local0, Arg0, Local2, One, Local6)
         If (Local5)
         {
             If (XVWD (EXVL + EXRW, Ones)) { EXDL (Local2, Local1) }
@@ -459,7 +461,14 @@
 
     Method (EXDL, 2, NotSerialized)
     {
-        If (EXSZ (Arg0, Zero)) { Return (Zero) }
+        // Fast symlink targets live in i_block and own no data blocks.
+        Local2 = EXIR (Arg0)
+        If (Local2 && (ELWD (Local2, Zero, 2) & 0xF000) == 0xA000 &&
+            ELWD (Local2, 4, 4) <= 60)
+        {
+            // No EXSZ: i_block is the target, not an extent tree.
+        }
+        ElseIf (EXSZ (Arg0, Zero)) { Return (Zero) }
         Local0 = EXIR (Arg0)
         If (!Local0) { Return (Zero) }
         Local1 = XVWD (EXVL + EXIS, Ones)
@@ -494,11 +503,12 @@
         Local0 = XVWD (Arg1 + VNFO, Ones)
         Local1 = Zero
         If (XVWD (Arg1 + VNTY, Ones) == 4) { Local1 = One }
-        If (Arg3) { Local2 = EXED (Arg2, Arg3, Local0, 2, One + Local1) }
+        Local5 = EXFT (Arg1)
+        If (Arg3) { Local2 = EXED (Arg2, Arg3, Local0, 2, Local5) }
         Else
         {
             // The replacement name has been copied into a scratch VFS record.
-            Local2 = EXED (Arg2, XADR (EXNM), Local0, One, One + Local1)
+            Local2 = EXED (Arg2, XADR (EXNM), Local0, One, Local5)
         }
         If (Local2) { Return (Local2) }
         Local2 = EXED (Arg0, Arg1, Zero, Zero, Zero)
@@ -532,3 +542,56 @@
     }
 
     Name (EXNM, Buffer (40) {})
+
+    // ext4 dirent filetype for a VFS node: 1 file, 2 directory, 7 symlink.
+    Method (EXFT, 1, NotSerialized)
+    {
+        Local0 = XVWD (Arg0 + VNTY, Ones)
+        If (Local0 == 4) { Return (2) }
+        If (Local0 == 10) { Return (7) }
+        Return (One)
+    }
+
+    // Publish a symlink's cached target. Fast targets occupy i_block;
+    // longer targets use the same extent blocks as regular files.
+    Method (EXSV, 1, NotSerialized)
+    {
+        EXVL = XVWD (Arg0 + VNFS, Ones)
+        Local0 = EXIR (XVWD (Arg0 + VNFO, Ones))
+        If (!Local0 || (ELWD (Local0, Zero, 2) & 0xF000) != 0xA000) { Return (Zero - 5) }
+        Local1 = XVWD (Arg0 + VNSZ, Ones)
+        If (Local1 <= 60)
+        {
+            Local2 = Local0 + 40
+            Local3 = Zero
+            While (Local3 < 60)
+            {
+                XSTB (Local2 + Local3, Zero)
+                Increment (Local3)
+            }
+            If (Local1) { XMOV (Local2, XVWD (Arg0 + VNDA, Ones), Local1) }
+            EXLE (Local0, 4, Local1, 4)
+            EXLE (Local0, 28, Zero, 4)
+            If (!EXBW (EXIB, EXIN)) { Return (Zero - 5) }
+            If (!EXSY ()) { Return (Zero - 5) }
+            Return (Zero)
+        }
+        Local2 = EXSZ (XVWD (Arg0 + VNFO, Ones), Local1)
+        If (Local2) { Return (Local2) }
+        Local0 = EXIR (XVWD (Arg0 + VNFO, Ones))
+        If (!Local0) { Return (Zero - 5) }
+        Local2 = Zero
+        While (Local2 < Local1)
+        {
+            Local3 = EXMP (Local0, Local2 / PGSZ)
+            If (!Local3 || Local3 == Ones) { Return (Zero - 5) }
+            Local4 = Local1 - Local2
+            If (Local4 > PGSZ) { Local4 = PGSZ }
+            XCLR (EXDB)
+            XMOV (EXDB, XVWD (Arg0 + VNDA, Ones) + Local2, Local4)
+            If (!EXBW (Local3, EXDB)) { Return (Zero - 5) }
+            Local2 += PGSZ
+        }
+        If (!EXSY ()) { Return (Zero - 5) }
+        Return (Zero)
+    }

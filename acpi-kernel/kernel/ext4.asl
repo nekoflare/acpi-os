@@ -182,15 +182,50 @@
     Method (EXDE, 5, NotSerialized)
     {
         Local0 = XBYT (Arg1 + 7)
-        If (Local0 != One && Local0 != 2) { Return (One) }
+        If (Local0 != One && Local0 != 2 && Local0 != 7) { Return (One) }
         If (SHMT (Arg1 + 8, Arg2, ".") || SHMT (Arg1 + 8, Arg2, "..")) { Return (One) }
         If (!Arg2 || VFIN (Arg0, Arg1 + 8, Arg2)) { Return (Zero) }
         Local1 = 8
         If (Local0 == 2) { Local1 = 4 }
+        ElseIf (Local0 == 7) { Local1 = 10 }
         Local2 = VNOD (Arg0, Arg1 + 8, Arg2, Local1)
         If (!Local2) { Return (Zero) }
         If (Local0 == 2) { Return (EXDR (Local2, Arg3, Arg4 + One)) }
+        If (Local0 == 7) { Return (EXSL (Local2, Arg3)) }
         Return (EXFL (Local2, Arg3))
+    }
+
+    // Populate a symlink node with its target. Targets of up to 60 bytes
+    // live in i_block; longer targets use the regular block mapping.
+    Method (EXSL, 2, NotSerialized)
+    {
+        Local0 = EXIR (Arg1)
+        If (!Local0 || (ELWD (Local0, Zero, 2) & 0xF000) != 0xA000 ||
+            ELWD (Local0, 108, 4)) { Return (Zero) }
+        Local1 = ELWD (Local0, 4, 4)
+        If (Local1 > 0x100000) { Return (Zero) }
+        XSTQ (Arg0 + VNFS, EXVL)
+        XSTQ (Arg0 + VNMD, ELWD (Local0, Zero, 2))
+        If (ELWD (Local0, 26, 2) == One && !(ELWD (Local0, 32, 4) & 0x30))
+        {
+            XSTQ (Arg0 + VNFO, Arg1)
+        }
+        XSTQ (Arg0 + VNSZ, Local1)
+        If (!Local1) { Return (One) }
+        Local2 = WRIT
+        If (XNXE ()) { Local2 |= NOEX }
+        Local3 = (Local1 + PGSZ - One) & ~(PGSZ - One)
+        Local4 = VALL (Local3, Local2)
+        If (!Local4) { Return (Zero) }
+        If (Local1 <= 60) { XMOV (Local4, Local0 + 40, Local1) }
+        ElseIf (!EXLD (Local0, Local4, Local1))
+        {
+            VUNM (Local4, Local3)
+            Return (Zero)
+        }
+        XSTQ (Arg0 + VNDA, Local4)
+        XSTQ (Arg0 + VNCP, Local3)
+        Return (One)
     }
 
     Method (EXDR, 3, NotSerialized)

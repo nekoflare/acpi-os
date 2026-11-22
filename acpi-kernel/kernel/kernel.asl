@@ -2449,6 +2449,26 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 Local0 = XVWD (XVWD (Arg3 + TSPR, Ones) + PRND, Ones)
                 If (!Local0) { Return (Zero - 2) }
             }
+            If (Local0 != PCSL && XVWD (Local0 + VNTY, Ones) == 10)
+            {
+                If (!XVWD (Local0 + VNDA, Ones) && XVWD (Local0 + VNFO, Ones))
+                {
+                    If (!EXSL (Local0, XVWD (Local0 + VNFO, Ones))) { Return (Zero - 5) }
+                }
+                Local5 = Local1
+                While (Local5 < Arg2 && XBYT (Arg1 + Local5) == 0x2F) { Increment (Local5) }
+                If (Local5 < Arg2 || !(Arg4 & 2))
+                {
+                    If ((Arg4 >> 16) >= 40) { Return (Zero - 40) } // ELOOP
+                    Local6 = XVWD (Local0 + VNSZ, Ones)
+                    If (!Local6) { Return (Zero - 2) }
+                    Local4 = XVWD (Local0 + VNPA, Ones)
+                    If (XBYT (XVWD (Local0 + VNDA, Ones)) == 0x2F) { Local4 = VROT }
+                    Local0 = VWAT (Local4, XVWD (Local0 + VNDA, Ones), Local6, Arg3,
+                        ((Arg4 >> 16) + 1) << 16)
+                    If (Local0 >= Zero - 4095) { Return (Local0) }
+                }
+            }
         }
         Return (Local0)
     }
@@ -2666,6 +2686,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         Local1 = XVWD (Local0 + VNTY, Ones)
         If (Local0 == NULD) { Return (Local0) }
+        If (Local1 == 10) { Return (Zero - 40) } // ELOOP: unfollowed symlink
         If (Local1 != 4 && (Arg4 & 0x10000)) { Return (Zero - 20) }
         If (Local1 == 4 && (Arg4 & 0x243)) { Return (Zero - 21) }
         If (((Arg4 & 3) && Local1 != 12 && !EXWR (Local0)) ||
@@ -5755,6 +5776,15 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Local3 = PCRL (Arg0, Local2, XVWD (Local0 + 9 * 8, Ones),
                 XVWD (Local0 + 12 * 8, Ones), XVWD (Local0 + 5 * 8, Ones))
+        }
+        ElseIf (Local1 == 88) // symlink
+        {
+            Local3 = VSLK (Arg0, 0xFFFFFF9C, Local2, XVWD (Local0 + 9 * 8, Ones))
+        }
+        ElseIf (Local1 == 266) // symlinkat
+        {
+            Local3 = VSLK (Arg0, XVWD (Local0 + 9 * 8, Ones), Local2,
+                XVWD (Local0 + 12 * 8, Ones))
         }
         ElseIf (Local1 == 35) // nanosleep
         {

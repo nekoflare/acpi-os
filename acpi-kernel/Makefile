@@ -152,7 +152,7 @@ check-bash: bash
 check-bash-uefi: bash
 	$(MAKE) $(BASH_BOOT) check-uefi
 
-.PHONY: xorg-server xorg-image xorg-desktop-image run-xorg-uefi st
+.PHONY: xorg-server xorg-image xorg-desktop-image run-xorg-uefi st busybox
 XORG_BUILD ?= $(abspath ../target/acpi-kernel-xorg)
 XORG_IMAGE_BUILD ?= $(abspath ../target/acpi-kernel-xorg-probe)
 XORG_DESKTOP_BUILD ?= $(abspath ../target/acpi-kernel-xorg-desktop)
@@ -185,8 +185,8 @@ XORG_LS := $(XORG_BUILD)/busybox-ls
 $(eval $(call jinx_artifact,$(XORG_LS),busybox-ls,usr/bin/busybox-ls))
 
 XORG_DISK := $(XORG_DESKTOP_BUILD)/acpi-xorg.img
-XORG_APPS := $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/Xvfb \
-	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(XORG_BUILD)/picom $(XORG_BUILD)/xsetroot $(XORG_BUILD)/xwallpaper $(XORG_BUILD)/xdpyinfo $(XORG_BUILD)/grep $(XORG_BUILD)/sed $(XORG_BUILD)/awk $(XORG_BUILD)/tail $(XORG_BUILD)/head $(XORG_BUILD)/find $(XORG_BUILD)/xargs $(XORG_BUILD)/sort $(XORG_BUILD)/uniq $(XORG_BUILD)/cut $(XORG_BUILD)/tr $(XORG_BUILD)/wc $(XORG_BUILD)/tee $(XORG_BUILD)/diff $(XORG_BUILD)/patch $(XORG_BUILD)/file $(XORG_BUILD)/strings $(XORG_BUILD)/stat $(XORG_BUILD)/readlink $(XORG_BUILD)/realpath $(XORG_BUILD)/lspci $(XORG_BUILD)/lscpu $(XORG_BUILD)/clear $(XORG_BUILD)/tar $(XORG_BUILD)/gzip $(XORG_BUILD)/xz $(XORG_BUILD)/lua $(XORG_BUILD)/python3.15 $(XORG_BUILD)/python3 $(XORG_BUILD)/python $(XORG_BUILD)/date $(XORG_BUILD)/sleep $(XORG_BUILD)/conky $(XORG_BUILD)/btop $(XORG_BUILD)/git $(XORG_BUILD)/less $(XORG_BUILD)/make $(XORG_BUILD)/nproc $(XORG_BUILD)/sh $(ST_BUILD)/st \
+XORG_APPS := $(XORG_BUILD)/busybox $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/Xvfb \
+	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(XORG_BUILD)/picom $(XORG_BUILD)/xsetroot $(XORG_BUILD)/xwallpaper $(XORG_BUILD)/xdpyinfo $(XORG_BUILD)/x11perf $(XORG_BUILD)/grep $(XORG_BUILD)/sed $(XORG_BUILD)/awk $(XORG_BUILD)/tail $(XORG_BUILD)/head $(XORG_BUILD)/find $(XORG_BUILD)/xargs $(XORG_BUILD)/sort $(XORG_BUILD)/uniq $(XORG_BUILD)/cut $(XORG_BUILD)/tr $(XORG_BUILD)/wc $(XORG_BUILD)/tee $(XORG_BUILD)/diff $(XORG_BUILD)/patch $(XORG_BUILD)/file $(XORG_BUILD)/strings $(XORG_BUILD)/stat $(XORG_BUILD)/readlink $(XORG_BUILD)/realpath $(XORG_BUILD)/lspci $(XORG_BUILD)/lscpu $(XORG_BUILD)/clear $(XORG_BUILD)/tar $(XORG_BUILD)/gzip $(XORG_BUILD)/xz $(XORG_BUILD)/lua $(XORG_BUILD)/python3.15 $(XORG_BUILD)/python3 $(XORG_BUILD)/python $(XORG_BUILD)/date $(XORG_BUILD)/sleep $(XORG_BUILD)/conky $(XORG_BUILD)/btop $(XORG_BUILD)/git $(XORG_BUILD)/less $(XORG_BUILD)/make $(XORG_BUILD)/nproc $(XORG_BUILD)/sh $(ST_BUILD)/st \
 	$(XORG_BUILD)/nsxiv $(XORG_BUILD)/nano $(XORG_BUILD)/vim $(XORG_BUILD)/iasl $(XORG_BUILD)/acpixtract $(XORG_BUILD)/uacpi-test-runner $(XORG_BUILD)/uacpi-barebones-test-runner \
 	$(BASH_BUILD)/fastfetch
 XORG_BASH := bin/bash=$(BASH_BUILD)/bash.elf
@@ -208,12 +208,17 @@ XORG_WALLPAPER := serval_wp.jpg
 XORG_WALLPAPER_CREDIT := serval_wp.jpg.txt
 XORG_WALLPAPER_FILES := $(addprefix usr/share/wallpapers/,$(foreach file,$(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT),$(file)=$(file)))
 
+$(eval $(call jinx_artifact,$(XORG_BUILD)/busybox,busybox,usr/bin/busybox))
+
+busybox: $(XORG_BUILD)/busybox
+
 $(eval $(call jinx_artifact,$(XORG_BUILD)/nsxiv,nsxiv,usr/bin/nsxiv))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/nano,nano,usr/bin/nano))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/vim,vim,usr/bin/vim))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/xsetroot,xsetroot,usr/bin/xsetroot))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/xwallpaper,xwallpaper,usr/bin/xwallpaper))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/xdpyinfo,xdpyinfo,usr/bin/xdpyinfo))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/x11perf,x11perf,usr/bin/x11perf))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/grep,grep,usr/bin/grep))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/sed,sed,usr/bin/sed))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/awk,awk,usr/bin/awk))
@@ -288,9 +293,9 @@ $(XORG_DESKTOP_BUILD)/kernel.elf: kernel-build-force
 endif
 
 $(XORG_DISK): scripts/pack-xorg-disk.sh $(XORG_DESKTOP_BUILD)/kernel.elf $(LIMINE_DIR)/BOOTX64.EFI \
-	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_BUILD)/uacpi-tests config/uacpi-run-tests $(XORG_BUILD)/python-lib $(BASH_BUILD)/bash.elf $(XORG_BUILD)/git-upload-pack $(XORG_BUILD)/git-template-description $(XORG_DATA) $(XORG_BUILD)/magic.mgc $(XORG_BUILD)/pci.ids config/picom.conf config/lua-test.lua config/acpi-example.asl config/python-test.py config/python-static-modules.txt $(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) $(addprefix $(XORG_BUILD)/,$(XORG_DEJAVU_FONTS)) catflare.gif Makefile
+	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_BUILD)/uacpi-tests config/uacpi-run-tests config/bashrc $(XORG_BUILD)/python-lib $(BASH_BUILD)/bash.elf $(XORG_BUILD)/git-upload-pack $(XORG_BUILD)/git-template-description $(XORG_DATA) $(XORG_BUILD)/magic.mgc $(XORG_BUILD)/pci.ids config/picom.conf config/lua-test.lua config/acpi-example.asl config/python-test.py config/python-static-modules.txt $(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) $(addprefix $(XORG_BUILD)/,$(XORG_DEJAVU_FONTS)) catflare.gif Makefile
 	sh $< "$@" "$(XORG_DESKTOP_BUILD)/kernel.elf" "$(LIMINE_DIR)/BOOTX64.EFI" \
-		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_BASH) $(XORG_DATA) $(XORG_PICOM_CONFIG) $(XORG_CONKY_CONFIG) $(XORG_LUA_TEST) $(XORG_IASL_EXAMPLE) $(XORG_UACPI_TESTS) bin/uacpi-run-tests=config/uacpi-run-tests $(XORG_PYTHON_LIB) $(XORG_PYTHON_TEST) $(XORG_PYTHON_MARKER) $(XORG_FILE_MAGIC) $(XORG_PCI_IDS) $(XORG_WALLPAPER_FILES) usr/libexec/git-core/git-upload-pack=$(XORG_BUILD)/git-upload-pack usr/share/git-core/templates/description=$(XORG_BUILD)/git-template-description usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
+		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_BASH) $(XORG_DATA) $(XORG_PICOM_CONFIG) $(XORG_CONKY_CONFIG) .bashrc=config/bashrc $(XORG_LUA_TEST) $(XORG_IASL_EXAMPLE) $(XORG_UACPI_TESTS) bin/uacpi-run-tests=config/uacpi-run-tests $(XORG_PYTHON_LIB) $(XORG_PYTHON_TEST) $(XORG_PYTHON_MARKER) $(XORG_FILE_MAGIC) $(XORG_PCI_IDS) $(XORG_WALLPAPER_FILES) usr/libexec/git-core/git-upload-pack=$(XORG_BUILD)/git-upload-pack usr/share/git-core/templates/description=$(XORG_BUILD)/git-template-description usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
 		bin/ls=$(XORG_LS) $(foreach cmd,$(XORG_FS_COMMANDS),bin/$(cmd)=$(XORG_FS_TOOLS)) \
 		fonts/dwm-font.ttf="$(XORG_FONT)" $(XORG_FONT_FILES) catflare.gif=catflare.gif
 

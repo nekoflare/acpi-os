@@ -35,3 +35,10 @@ make -C acpi-kernel -j2 check check-uefi
 - Inspect `target/acpi-kernel/serial.log` and `serial-uefi.log` for boot results. Both checks expect GDT and IDT load messages, the ASL breakpoint handler, all 20 register values, a message confirming execution resumed after `int3`, PIT delivery via the MADT IRQ 0 override, successful calibration, a periodic LAPIC tick count of 100, and the ring-3 `hello.elf` prompt, a greeting after injected PS/2 keystrokes, and exit status zero.
 - When changing code generation or compiler flags, inspect `kernel.bc` for `noredzone` and disassemble `kernel.elf` to check that the final executable uses no SIMD registers. Run `cargo test --locked` and `cargo clippy --locked -- -D warnings` when changing AMLAOT.
 - Build products and VM logs belong under `target/acpi-kernel/`.
+
+## Userspace Recipes
+
+- The acpi-kernel is Linux-compatible. Userspace applications do not need kernel-specific cross-compilation headers; treat the build environment as a standard Linux one.
+- QEMU runs are KVM-only (`-enable-kvm`, `-cpu host`); TCG is not a supported target. Guest binaries may use host ISA features such as AVX — do not rebuild them for baseline x86-64.
+- busybox applets are installed as `/bin/<applet> -> /bin/busybox` symlinks by `scripts/pack-xorg-disk.sh` for every applet without a real binary; names owned by packaged tools are skipped.
+- busybox (`recipes/busybox/recipe`): `networking/tc.c` references CBQ traffic-control structs (`tc_cbq_lssopt`, `tc_cbq_wrropt`, `tc_cbq_fopt`, `tc_cbq_ovl`) and constants (`TCA_CBQ_*`, `TCF_CBQ_*`) that were removed from Linux UAPI headers in kernel 6.x. The fix is to disable `CONFIG_TC` in the busybox `.config` before `make oldconfig` runs. The `tc` applet is not needed by this image.

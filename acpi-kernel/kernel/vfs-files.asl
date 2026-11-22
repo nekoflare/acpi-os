@@ -107,6 +107,64 @@
         Return (Local2)
     }
 
+    // Create a symbolic link. The target is an opaque NUL-terminated string;
+    // only the link path is resolved.
+    Method (VSLK, 4, NotSerialized)
+    {
+        Local0 = Zero
+        While (Local0 < 4096)
+        {
+            Local1 = UPHY (Arg0, Arg2 + Local0, Zero)
+            If (!Local1) { Return (Zero - 14) }
+            If (!XBYT (Local1)) { Break }
+            Increment (Local0)
+        }
+        If (Local0 == 4096) { Return (Zero - 36) }
+        If (!Local0) { Return (Zero - 2) }
+        Local2 = UPAR (Arg0, Arg1, Arg3)
+        If (Local2 == Zero - 16) { Return (Zero - 17) }
+        If (Local2 >= Zero - 4095) { Return (Local2) }
+        If (SHMT (VBNM, VBLN, ".") || SHMT (VBNM, VBLN, "..") ||
+            VFIN (Local2, VBNM, VBLN)) { Return (Zero - 17) }
+        If (VBTR) { Return (Zero - 21) }
+        If (!VMUT (Local2)) { Return (Zero - 30) }
+        Local3 = VNOD (Local2, VBNM, VBLN, 10)
+        If (!Local3) { Return (Zero - 12) }
+        Local4 = (Local0 + PGSZ - One) & ~(PGSZ - One)
+        Local5 = VALL (Local4, WRIT)
+        If (!Local5)
+        {
+            VDET (Local2, Local3)
+            VDIS (Local3)
+            Return (Zero - 12)
+        }
+        If (!UCPY (Arg0, Local5, Arg2, Local0))
+        {
+            VUNM (Local5, Local4)
+            VDET (Local2, Local3)
+            VDIS (Local3)
+            Return (Zero - 14)
+        }
+        XSTQ (Local3 + VNDA, Local5)
+        XSTQ (Local3 + VNCP, Local4)
+        XSTQ (Local3 + VNSZ, Local0)
+        Local4 = EXCR (Local3, 0xA1FF)
+        If (Local4)
+        {
+            VDET (Local2, Local3)
+            VDIS (Local3)
+            Return (Local4)
+        }
+        Local4 = EXSV (Local3)
+        If (Local4)
+        {
+            EXUL (Local2, Local3)
+            VDEL (Local2, Local3)
+            Return (Local4)
+        }
+        Return (Zero)
+    }
+
     Method (VCHM, 2, NotSerialized)
     {
         EXVL = XVWD (Arg0 + VNFS, Ones)
@@ -140,7 +198,9 @@
         If (Local3 && XVWD (Local2 + VNCH, Ones)) { Return (Zero - 39) }
         If (Local3 && XVWD (Local2 + VNRF, Ones)) { Return (Zero - 16) }
         EXVL = XVWD (Local2 + VNFS, Ones)
-        If (EXEC (EXIR (XVWD (Local2 + VNFO, Ones))) == Ones) { Return (Zero - 95) }
+        // Fast symlink targets live in i_block, not an extent tree.
+        If (!(XVWD (Local2 + VNTY, Ones) == 10 && XVWD (Local2 + VNSZ, Ones) <= 60) &&
+            EXEC (EXIR (XVWD (Local2 + VNFO, Ones))) == Ones) { Return (Zero - 95) }
         Local4 = EXUL (Local0, Local2)
         If (Local4) { Return (Local4) }
         Return (VDEL (Local0, Local2))
@@ -298,7 +358,8 @@
             If (!XVWD (Local4 + VNFO, Ones)) { Return (Zero - 30) }
             If (XVWD (Local3 + VNFS, Ones) != XVWD (Local4 + VNFS, Ones)) { Return (Zero - 16) }
             EXVL = XVWD (Local3 + VNFS, Ones)
-            If (EXEC (EXIR (XVWD (Local4 + VNFO, Ones))) == Ones) { Return (Zero - 95) }
+            If (!(XVWD (Local4 + VNTY, Ones) == 10 && XVWD (Local4 + VNSZ, Ones) <= 60) &&
+                EXEC (EXIR (XVWD (Local4 + VNFO, Ones))) == Ones) { Return (Zero - 95) }
             If (Local5 && XVWD (Local4 + VNCH, Ones)) { Return (Zero - 39) }
             If (Local5 && XVWD (Local4 + VNRF, Ones)) { Return (Zero - 16) }
         }

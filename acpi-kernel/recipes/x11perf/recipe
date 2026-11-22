@@ -1,0 +1,25 @@
+version=1.6.1
+revision=1
+cross_compile=yes
+tarball_url=https://www.x.org/releases/individual/app/x11perf-1.6.1.tar.gz
+tarball_sha256=a1874618df0e30ae1a9b2470fb50e77a40c4a6f6ddf87a5c154f7a3b913ac0b3
+builddeps="musl libx11 xmuu xorgproto libxft libxext libxrender"
+
+configure() {
+    copy_source
+    musl_env
+    cd src
+    ./configure --prefix=/usr --libdir=/usr/lib --disable-shared --enable-static
+}
+build() {
+    musl_env
+    make -C src -j"$parallelism" \
+        X11PERF_LIBS="$(pkg-config --static --libs x11 xmuu xproto)" \
+        XRENDER_LIBS="$(pkg-config --static --libs xrender)" \
+        XFT_LIBS="$(pkg-config --static --libs xft)" \
+        XEXT_LIBS="$(pkg-config --static --libs xext)"
+}
+package() {
+    musl_env
+    make -C src DESTDIR="$dest_dir" install
+}

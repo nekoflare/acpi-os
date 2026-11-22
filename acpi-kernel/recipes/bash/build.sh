@@ -33,7 +33,7 @@ source=$6
 script=$(realpath "$0")
 mkdir -p "$build/obj"
 # Give the bundled interactive shell the same identity shown by Fastfetch.
-sed -i 's|^#define PPROMPT .*|#define PPROMPT "root@localhost:~# "|' \
+sed -i 's|^#define PPROMPT .*|#define PPROMPT "root@localhost# "|' \
     "$source/config-top.h"
 sed -i 's|set_if_not ("PS1", current_user.euid == 0 ? "# " : primary_prompt);|set_if_not ("PS1", primary_prompt);|' \
     "$source/variables.c"
@@ -50,7 +50,7 @@ printf 'Configuring GNU Bash\n'
 CC="sh $script --cc" CFLAGS="-O2 $app_cpu_flags -fno-pie -std=gnu17" \
     "$source/configure" --enable-minimal-config --disable-nls \
     --without-bash-malloc --disable-readline --disable-job-control --enable-static-link
-sed -i 's|^#  define PPROMPT .*|#  define PPROMPT "root@localhost:~# "|' \
+sed -i 's|^#  define PPROMPT .*|#  define PPROMPT "root@localhost# "|' \
     "$source/config-bot.h"
 make clean
 printf 'Compiling GNU Bash\n'

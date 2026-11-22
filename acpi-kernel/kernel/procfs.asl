@@ -77,6 +77,12 @@
         XSTB (Local6, 10)
         XSTQ (Local5 + VNDA, Local6)
         XSTQ (Local5 + VNSZ, One)
+        // No USB controller is wired up; give lsusb an empty device tree.
+        Local5 = PCNO (Local0, "bus", 4, Zero)
+        If (!Local5) { Return (Zero) }
+        Local5 = PCNO (Local5, "usb", 4, Zero)
+        If (!Local5) { Return (Zero) }
+        If (!PCNO (Local5, "devices", 4, Zero)) { Return (Zero) }
         Return (SCFS (Local3, Local4))
     }
 
@@ -602,11 +608,26 @@
         If (!Arg4) { Return (Zero - 22) }
         Local0 = UPRS (Arg0, Arg2, Arg1, 2)
         If (Local0 >= Zero - 4095) { Return (Local0) }
-        If (Local0 != PCSL) { Return (Zero - 22) }
-        Local1 = XADR (PCNM)
-        Local2 = CDEC (Local1, XVWD (XVWD (Arg0 + TSPR, Ones) + PRID, Ones)) - Local1
-        If (Local2 > Arg4) { Local2 = Arg4 }
-        If (!UCOP (Arg0, Arg3, Local1, Local2)) { Return (Zero - 14) }
+        If (Local0 == PCSL)
+        {
+            Local1 = XADR (PCNM)
+            Local2 = CDEC (Local1, XVWD (XVWD (Arg0 + TSPR, Ones) + PRID, Ones)) - Local1
+            If (Local2 > Arg4) { Local2 = Arg4 }
+            If (!UCOP (Arg0, Arg3, Local1, Local2)) { Return (Zero - 14) }
+            Return (Local2)
+        }
+        If (XVWD (Local0 + VNTY, Ones) != 10) { Return (Zero - 22) }
+        If (!XVWD (Local0 + VNDA, Ones) && XVWD (Local0 + VNFO, Ones))
+        {
+            If (!EXSL (Local0, XVWD (Local0 + VNFO, Ones))) { Return (Zero - 5) }
+        }
+        Local1 = XVWD (Local0 + VNSZ, Ones)
+        Local2 = Arg4
+        If (Local2 > Local1) { Local2 = Local1 }
+        If (Local2 && !UCOP (Arg0, Arg3, XVWD (Local0 + VNDA, Ones), Local2))
+        {
+            Return (Zero - 14)
+        }
         Return (Local2)
     }
 
@@ -852,6 +873,8 @@
         Local0 += XCFL (Local0)
         XSTB (Local0, 10)
         Increment (Local0)
+        // CPUID leaf 0x16 is Intel-only and zero under KVM; fall back to
+        // the PIT-calibrated TSC rate, which is the nominal clock on modern CPUs.
         Local1 = XFRQ ()
         If (!Local1) { Local1 = CTMH }
         If (Local1) { Local0 = CNUM (Local0, "cpu MHz\t\t: ", Local1) }
@@ -874,8 +897,6 @@
         Local2 = Zero
         Local3 = XADR (CIDB)
         Local4 = CIDE (Local3) - Local3
-        // CPUID leaf 0x16 is Intel-only and zero under KVM; fall back to
-        // the PIT-calibrated TSC rate, which is the nominal clock on modern CPUs.
         While (Local2 < Local1)
         {
             Local0 = CNUM (Local0, "processor\t: ", Local2)

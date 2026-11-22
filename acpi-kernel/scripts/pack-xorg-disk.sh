@@ -31,6 +31,16 @@ for spec do
     fi
 done
 
+# busybox applets dispatch on argv[0]. Link every applet that does not
+# already have a real binary in the image.
+if [ -f "$work/apps/bin/busybox" ]; then
+    "$work/apps/bin/busybox" --list | while IFS= read -r applet; do
+        if [ ! -e "$work/apps/bin/$applet" ] && [ ! -L "$work/apps/bin/$applet" ]; then
+            ln -s /bin/busybox "$work/apps/bin/$applet"
+        fi
+    done
+fi
+
 # Preserve the existing ext4 volume when refreshing the boot image.
 # qemu-img refuses to copy the disk while a running VM holds its write lock.
 if [ -f "$output" ]; then
@@ -75,6 +85,10 @@ if [ -f "$output" ]; then
                     if cmp -s "$name" "$work/current"; then
                         continue
                     fi
+                    debugfs -w -R "rm \"/$name\"" "$work/apps.img"
+                    ;;
+                *"Type: symlink"*)
+                    # A real binary replaces a former applet link.
                     debugfs -w -R "rm \"/$name\"" "$work/apps.img"
                     ;;
                 '') ;;
@@ -139,6 +153,21 @@ if [ -f "$output" ]; then
                 fi
                 ;;
         esac
+
+        # Refresh symlinks (busybox applets) in one debugfs batch. rm
+        # tolerates missing names so stale links are replaced cleanly.
+        {
+            find . -type l -print | while IFS= read -r path; do
+                name=${path#./}
+                ensure_directory "$(dirname "$name")"
+                printf 'rm "/%s"\n' "$name"
+                printf 'symlink "/%s" "%s"\n' "$name" "$(readlink "$path")"
+            done
+        } > "$work/links.cmds"
+        if [ -s "$work/links.cmds" ]; then
+            debugfs -w -f "$work/links.cmds" "$work/apps.img" 2>&1 |
+                grep -v 'rm: File not found' || true
+        fi
     )
     e2fsck -fn "$work/apps.img"
 else

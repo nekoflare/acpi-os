@@ -1,0 +1,3 @@
+# This bash build lacks PROMPT_STRING_DECODE, so \w in PS1 stays literal.
+# PROMPT_COMMAND runs before every prompt and can assign an expanded path.
+PROMPT_COMMAND='PS1="root@localhost:$PWD# "'
