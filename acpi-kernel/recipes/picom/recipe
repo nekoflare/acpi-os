@@ -1,5 +1,5 @@
 version=13
-revision=5
+revision=6
 cross_compile=yes
 tarball_url=https://github.com/yshui/picom/archive/refs/tags/v13.tar.gz
 tarball_sha256=db9791a54255742c924ef82a6a882042636d61de0fa61bc14c5e56279cf5791c

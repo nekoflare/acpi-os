@@ -1,0 +1,24 @@
+--- a/src/backend/xrender/xrender.c
++++ b/src/backend/xrender/xrender.c
+@@ -554,14 +554,19 @@
+ 	auto source = (struct xrender_image_data_inner *)source_handle;
+ 	auto target = (struct xrender_image_data_inner *)target_handle;
+ 	auto extent = pixman_region32_extents(region);
+-	x_set_picture_clip_region(base->c, source->pict, 0, 0, region);
+-	x_clear_picture_clip_region(base->c, target->pict);
++	// Clip the destination, not the source. The fb Render implementation
++	// (Xvfb, and Xorg without glamor) ignores source clips, so a source clip
++	// lets PictOpSrc overwrite the whole extent of a multi-rectangle region.
++	x_clear_picture_clip_region(base->c, source->pict);
++	x_set_picture_clip_region(base->c, target->pict, to_i16_checked(origin.x),
++	                          to_i16_checked(origin.y), region);
+ 	xrender_set_picture_repeat(xd, source->pict, XCB_RENDER_REPEAT_PAD);
+ 	xcb_render_composite(
+ 	    base->c->c, XCB_RENDER_PICT_OP_SRC, source->pict, XCB_NONE, target->pict,
+ 	    to_i16_checked(extent->x1), to_i16_checked(extent->y1), 0, 0,
+ 	    to_i16_checked(origin.x + extent->x1), to_i16_checked(origin.y + extent->y1),
+ 	    to_u16_checked(extent->x2 - extent->x1), to_u16_checked(extent->y2 - extent->y1));
++	x_clear_picture_clip_region(base->c, target->pict);
+ 	xrender_record_back_damage(xd, target, region);
+ 	return true;
+ }
