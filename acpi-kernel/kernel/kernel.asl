@@ -34,6 +34,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     External (XMOV, MethodObj)
     External (XBYT, MethodObj)
     External (XSTB, MethodObj)
+    External (XLDQ, MethodObj)
+    External (XSQW, MethodObj)
     External (XTRG, MethodObj)
     External (XBRK, MethodObj)
     External (XMEM, MethodObj)
@@ -147,20 +149,19 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (FBVS, Buffer (160) {})
     Name (FBFS, Buffer (80) {})
 
+    // Kernel virtual qword access. Native loads and stores replace a
+    // per-call SystemMemory OperationRegion, which allocated two objects
+    // and moved the value bit by bit on every access.
     Method (XVWD, 2, NotSerialized)
     {
-        OperationRegion (MEM0, SystemMemory, Arg0, 8)
-        Field (MEM0, QWordAcc, NoLock, Preserve) { DATA, 64 }
-        If (Arg1 == Ones) { Return (DATA) }
-        DATA = Arg1
+        If (Arg1 == Ones) { Return (XLDQ (Arg0)) }
+        XSQW (Arg0, Arg1)
         Return (Zero)
     }
 
     Method (XSTQ, 2, NotSerialized)
     {
-        OperationRegion (MEM0, SystemMemory, Arg0, 8)
-        Field (MEM0, QWordAcc, NoLock, Preserve) { DATA, 64 }
-        DATA = Arg1
+        XSQW (Arg0, Arg1)
         Return (Zero)
     }
     Name (DEVN, Buffer () {0x64, 0x65, 0x76})

@@ -1463,6 +1463,8 @@ error:
             "XMOV" => Some(("acpi_copy_memory", 3)),
             "XBYT" => Some(("acpi_virtual_byte", 1)),
             "XSTB" => Some(("acpi_store_byte", 2)),
+            "XLDQ" => Some(("acpi_load_qword", 1)),
+            "XSQW" => Some(("acpi_store_qword", 2)),
             "XTRG" => Some(("acpi_load_tr", 1)),
             "XCLR" => Some(("acpi_clear_page", 1)),
             "XINV" => Some(("acpi_invalidate_page", 1)),

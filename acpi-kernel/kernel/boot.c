@@ -902,6 +902,17 @@ uint64_t acpi_store_byte(uint64_t address, uint64_t value)
     return 0;
 }
 
+uint64_t acpi_load_qword(uint64_t address)
+{
+    return *(const volatile uint64_t *)address;
+}
+
+uint64_t acpi_store_qword(uint64_t address, uint64_t value)
+{
+    *(volatile uint64_t *)address = value;
+    return 0;
+}
+
 uint64_t acpi_load_tr(uint64_t selector)
 {
     __asm__ volatile("ltr %0" : : "r"((uint16_t)selector) : "memory");
