@@ -767,6 +767,7 @@
     Name (MTOT, Buffer () {0x4D, 0x65, 0x6D, 0x54, 0x6F, 0x74, 0x61, 0x6C, 0x3A, 0x20})
     Name (MFRE, Buffer () {0x4D, 0x65, 0x6D, 0x46, 0x72, 0x65, 0x65, 0x3A, 0x20})
     Name (MAVL, Buffer () {0x4D, 0x65, 0x6D, 0x41, 0x76, 0x61, 0x69, 0x6C, 0x61, 0x62, 0x6C, 0x65, 0x3A, 0x20})
+    Name (MCAC, Buffer () {0x43, 0x61, 0x63, 0x68, 0x65, 0x64, 0x3A, 0x20})
 
     Method (MLIN, 3, NotSerialized)
     {
@@ -788,16 +789,15 @@
         Return (Arg0 + 4)
     }
 
-    // Free pages are the only reclaimable memory in the physical allocator.
+    // Free pages and the file cache (vfs-cache.asl) are the reclaimable memory.
     Method (MGEN, 1, NotSerialized)
     {
         Local0 = (PTOT - PUSE) * (PGSZ / 1024)
         Local1 = MLIN (Arg0, MTOT, PTOT * (PGSZ / 1024))
         Local1 = MLIN (Local1, MFRE, Local0)
-        Local1 = MLIN (Local1, MAVL, Local0)
-        Local1 = PCAT (Local1, "Cached: 0 kB")
-        XSTB (Local1, 10)
-        Local1 = PCAT (Local1 + One, "SwapTotal: 0 kB")
+        Local1 = MLIN (Local1, MAVL, Local0 + VCPC * (PGSZ / 1024))
+        Local1 = MLIN (Local1, MCAC, VCPC * (PGSZ / 1024))
+        Local1 = PCAT (Local1, "SwapTotal: 0 kB")
         XSTB (Local1, 10)
         Local1 = PCAT (Local1 + One, "SwapFree: 0 kB")
         XSTB (Local1, 10)

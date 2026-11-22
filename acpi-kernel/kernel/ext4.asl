@@ -206,34 +206,17 @@
         Return (One)
     }
 
-    // Populate the existing VFS and cache file bytes for ELF and read calls.
+    // Populate the existing VFS. File bytes are read on first use; see
+    // vfs-cache.asl.
     Method (EXFL, 2, NotSerialized)
     {
         Local0 = EXIR (Arg1)
         If (!Local0 || (ELWD (Local0, Zero, 2) & 0xF000) != 0x8000 ||
             ELWD (Local0, 108, 4)) { Return (Zero) }
         Local1 = ELWD (Local0, 4, 4)
-        If (Local1 > 0x4000000) { Return (Zero) }
-        If (Local1)
-        {
-            Local2 = WRIT
-            If (XNXE ()) { Local2 |= NOEX }
-            Local3 = VALL (Local1, Local2)
-            If (!Local3) { Return (Zero) }
-            If (!EXLD (Local0, Local3, Local1))
-            {
-                VUNM (Local3, Local1)
-                Return (Zero)
-            }
-            Local4 = Local1
-            While (Local4 % PGSZ)
-            {
-                XSTB (Local3 + Local4, Zero)
-                Increment (Local4)
-            }
-            XSTQ (Arg0 + VNDA, Local3)
-            XSTQ (Arg0 + VNCP, (Local1 + PGSZ - One) & ~(PGSZ - One))
-        }
+        If (Local1 > VFMX) { Return (Zero) }
+        XSTQ (Arg0 + VNIN, Arg1)
+        XSTQ (Arg0 + VNVL, Local1)
         XSTQ (Arg0 + VNSZ, Local1)
         XSTQ (Arg0 + VNFS, EXVL)
         XSTQ (Arg0 + VNMD, ELWD (Local0, Zero, 2))
@@ -400,8 +383,12 @@
             EXFR (Local0)
             Local0 = XVWD (Local0 + VNXT, Ones)
         }
-        Local1 = XVWD (Arg0 + VNSZ, Ones)
-        If (Local1) { VUNM (XVWD (Arg0 + VNDA, Ones), Local1) }
+        If (XVWD (Arg0 + VNIN, Ones)) { VCRL (Arg0) }
+        Else
+        {
+            Local1 = XVWD (Arg0 + VNSZ, Ones)
+            If (Local1) { VUNM (XVWD (Arg0 + VNDA, Ones), Local1) }
+        }
     }
 
     Method (EXWR, 1, NotSerialized)
@@ -448,8 +435,8 @@
 
     // Delayed writeback for linked ext4 regular files. write() and
     // ftruncate() only change the in-memory cache (VNDA/VNSZ) and record
-    // dirty pages in a bitmap page at VNDB; one page covers 128 MiB, past the
-    // 64 MiB file limit. Dirty nodes are linked through VNDQ from EXDH.
+    // dirty pages in a VDBS-byte bitmap at VNDB, which covers the VFMX file
+    // limit. Dirty nodes are linked through VNDQ from EXDH.
     // Writeback (fsync, sync, or an idle CPU after EXPI) resizes the inode
     // to the cached size in one step, so appends get one contiguous
     // allocation, and writes each dirty page once. No syscall but those
@@ -457,6 +444,7 @@
     Name (EXDH, Zero) // Dirty node list
     Name (EXDT, Zero) // MNOW of the last periodic writeback
     Name (EXPI, 5000000000) // Periodic writeback interval in nanoseconds
+    Name (VDBS, 0x10000) // Dirty bitmap bytes: one bit per page up to 2 GiB
 
     // Mark cache pages [Arg1, Arg2) dirty. Arg1 == Arg2 marks only the size.
     Method (EXDM, 3, NotSerialized)
@@ -464,15 +452,15 @@
         Local0 = XVWD (Arg0 + VNDB, Ones)
         If (!Local0)
         {
-            Local0 = PALC ()
+            Local1 = WRIT
+            If (XNXE ()) { Local1 |= NOEX }
+            Local0 = VALL (VDBS, Local1)
             If (!Local0) { Return (Zero) }
-            Local0 += HHDO
-            XCLR (Local0)
             XSTQ (Arg0 + VNDB, Local0)
             XSTQ (Arg0 + VNDQ, EXDH)
             EXDH = Arg0
         }
-        If (Arg2 > PGSZ * 8) { Arg2 = PGSZ * 8 }
+        If (Arg2 > VDBS * 8) { Arg2 = VDBS * 8 }
         While (Arg1 < Arg2)
         {
             Local1 = Local0 + Arg1 / 8
@@ -499,7 +487,7 @@
         }
         XSTQ (Arg0 + VNDQ, Zero)
         XSTQ (Arg0 + VNDB, Zero)
-        PDEL (Local0 - HHDO)
+        VUNM (Local0, VDBS)
         Return (Zero)
     }
 
@@ -543,16 +531,15 @@
         {
             // Growth makes the old tail block's bytes past its end visible.
             If (Local2 > Local5 && (Local5 % PGSZ)) { EXDM (Arg0, Local5 / PGSZ, Local5 / PGSZ + One) }
-            EXSP = XVWD (Arg0 + VNDA, Ones)
+            EXSN = Arg0
             EXSD = Local0
             Local6 = EXSZ (Local1, Local2)
-            EXSP = Zero
+            EXSN = Zero
             EXSD = Zero
             If (Local6) { Return (Local6) }
             Local4 = EXIR (Local1)
             If (!Local4) { Return (Zero - 5) }
         }
-        Local5 = XVWD (Arg0 + VNDA, Ones)
         Local6 = Zero
         While (Local6 < Local3)
         {
@@ -565,10 +552,25 @@
             {
                 Local7 = EXMP (Local4, Local6)
                 If (!Local7 || Local7 == Ones) { Return (Zero - 5) }
-                If (!EXBW (Local7, Local5 + Local6 * PGSZ)) { Return (Zero - 5) }
+                Local5 = VCPA (Arg0, Local6)
+                If (!Local5)
+                {
+                    // Truncated away and not rewritten: zeros, unless part
+                    // of the page still comes from the disk.
+                    Local5 = EXDB
+                    XCLR (EXDB)
+                    If (Local6 * PGSZ < XVWD (Arg0 + VNVL, Ones))
+                    {
+                        If (VPOP (Arg0, Local6, Local4)) { Return (Zero - 5) }
+                        Local5 = VCPA (Arg0, Local6)
+                    }
+                }
+                If (!EXBW (Local7, Local5)) { Return (Zero - 5) }
             }
             Increment (Local6)
         }
+        // The inode now holds every byte, so later misses may read it.
+        XSTQ (Arg0 + VNVL, Local2)
         EXDC (Arg0)
         Return (Zero)
     }

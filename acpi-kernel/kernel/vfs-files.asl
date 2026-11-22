@@ -201,6 +201,8 @@
         // Fast symlink targets live in i_block, not an extent tree.
         If (!(XVWD (Local2 + VNTY, Ones) == 10 && XVWD (Local2 + VNSZ, Ones) <= 60) &&
             EXEC (EXIR (XVWD (Local2 + VNFO, Ones))) == Ones) { Return (Zero - 95) }
+        Local4 = VCMZ (Local2)
+        If (Local4) { Return (Local4) }
         Local4 = EXUL (Local0, Local2)
         If (Local4) { Return (Local4) }
         Return (VDEL (Local0, Local2))
@@ -219,6 +221,7 @@
     Method (VDEL, 2, NotSerialized)
     {
         EXDC (Arg1) // The inode is freed, so pending data has nowhere to go.
+        XSTQ (Arg1 + VNVL, Zero) // and misses must not read it
         EXVL = XVWD (Arg1 + VNFS, Ones)
         Local0 = EXDL (XVWD (Arg1 + VNFO, Ones), XVWD (Arg1 + VNTY, Ones) == 4)
         XSTQ (Arg1 + VNFO, Zero)
@@ -272,8 +275,16 @@
     Method (VTRN, 1, NotSerialized)
     {
         EXDC (Arg0)
-        Local0 = XVWD (Arg0 + VNCP, Ones)
-        If (Local0) { VUNM (XVWD (Arg0 + VNDA, Ones), Local0) }
+        If (XVWD (Arg0 + VNIN, Ones))
+        {
+            VCRL (Arg0)
+            XSTQ (Arg0 + VNVL, Zero)
+        }
+        Else
+        {
+            Local0 = XVWD (Arg0 + VNCP, Ones)
+            If (Local0) { VUNM (XVWD (Arg0 + VNDA, Ones), Local0) }
+        }
         XSTQ (Arg0 + VNDA, Zero)
         XSTQ (Arg0 + VNCP, Zero)
         XSTQ (Arg0 + VNSZ, Zero)
@@ -281,6 +292,7 @@
 
     Method (VGRW, 2, NotSerialized)
     {
+        If (XVWD (Arg0 + VNIN, Ones)) { Return (VCGR (Arg0, Arg1)) }
         Local0 = XVWD (Arg0 + VNCP, Ones)
         If (Arg1 <= Local0) { Return (One) }
         Local1 = PGSZ
@@ -312,9 +324,13 @@
         Local2 = XVWD (Arg1 + 8, Ones)
         Local3 = XVWD (Local0 + VNSZ, Ones)
         If (Local1 & 0x400) { Local2 = Local3 }
-        If (Local2 > 0x4000000 - Arg3) { Return (Zero - 27) }
+        If (Local2 > VFMX - Arg3) { Return (Zero - 27) }
         Local4 = Local2 + Arg3
         If (!VGRW (Local0, Local4)) { Return (Zero - 12) }
+        // URNG has checked the source, so the copy below cannot fail and
+        // leave unread pages that were skipped as about to be overwritten.
+        Local5 = VENS (Local0, Local2, Arg3, One)
+        If (Local5) { Return (Local5) }
         If (!UCPY (Arg0, XVWD (Local0 + VNDA, Ones) + Local2, Arg2, Arg3))
         {
             Return (Zero - 14)
@@ -364,6 +380,8 @@
                 EXEC (EXIR (XVWD (Local4 + VNFO, Ones))) == Ones) { Return (Zero - 95) }
             If (Local5 && XVWD (Local4 + VNCH, Ones)) { Return (Zero - 39) }
             If (Local5 && XVWD (Local4 + VNRF, Ones)) { Return (Zero - 16) }
+            Local5 = VCMZ (Local4)
+            If (Local5) { Return (Local5) }
         }
         XSTQ (XADR (EXNM) + VNNA, VBNM)
         XSTQ (XADR (EXNM) + VNNL, VBLN)
@@ -658,7 +676,7 @@
         If (Local0 == XADR (SKND)) { Return (Zero - 22) }
         If (!(XVWD (Arg0 + 40, Ones) & 3)) { Return (Zero - 22) }
         If (Arg1 >> 63) { Return (Zero - 22) }
-        If (Arg1 > 0x4000000) { Return (Zero - 27) } // EFBIG
+        If (Arg1 > VFMX) { Return (Zero - 27) } // EFBIG
         If (!XVWD (Local0 + VNMD, Ones)) { Return (Zero - 22) }
         If (XVWD (Local0 + VNTY, Ones) != 8) { Return (Zero - 22) }
         Local1 = XVWD (Local0 + VNSZ, Ones)
@@ -674,7 +692,12 @@
         If (!VGRW (Local0, Arg1)) { Return (Zero - 12) }
         If (Arg1 < Local1)
         {
-            FTZC (XVWD (Local0 + VNDA, Ones) + Arg1, Local1 - Arg1)
+            If (XVWD (Local0 + VNIN, Ones))
+            {
+                Local3 = VCZR (Local0, Arg1, Local1)
+                If (Local3) { Return (Local3) }
+            }
+            Else { FTZC (XVWD (Local0 + VNDA, Ones) + Arg1, Local1 - Arg1) }
             // Cleared pages may still hold old bytes on disk if the file
             // grows again before writeback, so they are written too.
             If (!Local2) { EXDM (Local0, Arg1 / PGSZ, (Local1 + PGSZ - One) / PGSZ) }

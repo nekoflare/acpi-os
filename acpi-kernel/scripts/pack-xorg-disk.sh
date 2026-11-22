@@ -7,6 +7,11 @@ limine=$3
 config=$4
 shift 4
 
+# 32 GiB image: 1 MiB GPT, 64 MiB ESP, ext4 to 1 MiB before the end (the
+# backup GPT lives there). Images are sparse, so unused space costs nothing.
+disk_mib=32768
+apps_mib=$((disk_mib - 66))
+
 exec 9>"$output.lock"
 flock -n 9 || { echo "The desktop disk is in use: $output" >&2; exit 1; }
 
@@ -49,12 +54,14 @@ if [ -f "$output" ]; then
     case "$old_size" in
         $((194 * 1024 * 1024))) old_apps_size=128 ;;
         $((322 * 1024 * 1024))) old_apps_size=256 ;;
+        $((disk_mib * 1024 * 1024))) old_apps_size=$apps_mib ;;
         *) echo "Unexpected Xorg disk image size: $old_size" >&2; exit 1 ;;
     esac
-    dd if="$work/old-disk.img" of="$work/apps.img" bs=1M skip=65 count="$old_apps_size" status=none
+    dd if="$work/old-disk.img" of="$work/apps.img" bs=1M skip=65 count="$old_apps_size" conv=sparse status=none
+    rm -f "$work/old-disk.img"
     [ "$(blkid -p -s LABEL -o value "$work/apps.img")" = acpi-apps ]
     e2fsck -fn "$work/apps.img"
-    truncate -s 256M "$work/apps.img"
+    truncate -s "${apps_mib}M" "$work/apps.img"
     resize2fs "$work/apps.img"
 
     ensure_directory()
@@ -172,16 +179,16 @@ if [ -f "$output" ]; then
     e2fsck -fn "$work/apps.img"
 else
     # The guest driver expects 4 KiB blocks and this explicit feature set.
-    truncate -s 256M "$work/apps.img"
+    truncate -s "${apps_mib}M" "$work/apps.img"
     mkfs.ext4 -q -F -b 4096 -I 256 -O none,filetype,extent -L acpi-apps \
         -d "$work/apps" "$work/apps.img"
 fi
 
-truncate -s 322M "$work/disk.img"
-sfdisk --quiet "$work/disk.img" <<'PARTITIONS'
+truncate -s "${disk_mib}M" "$work/disk.img"
+sfdisk --quiet "$work/disk.img" <<PARTITIONS
 label: gpt
 start=2048, size=131072, type=U, name="EFI System"
-start=133120, size=524288, type=L, name="acpi-apps"
+start=133120, size=$((apps_mib * 2048)), type=L, name="acpi-apps"
 PARTITIONS
 
 truncate -s 64M "$work/esp.img"
@@ -192,5 +199,5 @@ mcopy -i "$work/esp.img" "$config" ::/boot/limine/limine.conf
 mcopy -i "$work/esp.img" "$kernel" ::/boot/kernel.elf
 
 dd if="$work/esp.img" of="$work/disk.img" bs=1M seek=1 conv=notrunc status=none
-dd if="$work/apps.img" of="$work/disk.img" bs=1M seek=65 conv=notrunc status=none
+dd if="$work/apps.img" of="$work/disk.img" bs=1M seek=65 conv=notrunc,sparse status=none
 mv -- "$work/disk.img" "$output"

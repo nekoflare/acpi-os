@@ -96,6 +96,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Include ("ext4-write.asl")
     Include ("fstab.asl")
     Include ("vfs-files.asl")
+    Include ("vfs-cache.asl")
     Include ("procfs.asl")
 
     Name (HHDO, Zero)
@@ -2235,6 +2236,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (Arg1)
         {
             Local0 = XVWD (Arg1 + VNSZ, Ones)
+            If (VENS (Arg1, Zero, Local0, Zero)) { Return (Zero) }
             Local6 = XVWD (Arg1 + VNDA, Ones)
         }
         Else { Local0 = XIMG (Zero, Zero) }
@@ -2737,10 +2739,38 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (!Arg3 || Local2 >= Local3) { Return (Zero) }
         Local4 = Local3 - Local2
         If (Local4 > Arg3) { Local4 = Arg3 }
-        If (Local4 > PGSZ) { Local4 = PGSZ }
+        // Regular files must not return short reads before EOF: libX11's
+        // ReadInFile and others issue a single read() for st_size bytes.
+        If (Local4 > 0x7FFFF000) { Local4 = 0x7FFFF000 }
+        If (XVWD (Local1 + VNIN, Ones))
+        {
+            // Demand-paged: fill and copy a bounded stretch at a time so a
+            // large read never needs the whole file resident.
+            Local6 = Zero
+            Local5 = Zero
+            While (Local6 < Local4)
+            {
+                Local7 = Local4 - Local6
+                If (Local7 > 0x100000) { Local7 = 0x100000 }
+                Local5 = VENS (Local1, Local2 + Local6, Local7, Zero)
+                If (Local5) { Break }
+                If (!UCOP (Arg0, Arg2 + Local6,
+                    XVWD (Local1 + VNDA, Ones) + Local2 + Local6, Local7))
+                {
+                    Local5 = Zero - 14
+                    Break
+                }
+                Local6 += Local7
+            }
+            If (!Local6) { Return (Local5) }
+            If (Arg4 == Ones) { XSTQ (Local0 + 8, Local2 + Local6) }
+            Return (Local6)
+        }
         Local5 += Local2
         If (XVWD (Local1 + VNTY, Ones) == 12)
         {
+            // The framebuffer is staged through the one-page FBIO buffer.
+            If (Local4 > PGSZ) { Local4 = PGSZ }
             If (!FBAD || FBPP != 4) { Return (Zero - 19) }
             Local5 = XADR (FBIO)
             XFBL (Local5, FBAD + Local2, Local4)
@@ -2863,8 +2893,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Method (VFEX, 1, NotSerialized)
     {
-        Return (XVWD (Arg0 + VNSZ, Ones) >= 64 &&
-            ELWD (XVWD (Arg0 + VNDA, Ones), Zero, 4) == 0x464C457F)
+        If (XVWD (Arg0 + VNSZ, Ones) < 64 || VENS (Arg0, Zero, 4, Zero)) { Return (Zero) }
+        Return (ELWD (XVWD (Arg0 + VNDA, Ones), Zero, 4) == 0x464C457F)
     }
 
     Method (SYAC, 4, NotSerialized)
@@ -3426,6 +3456,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                     Else { Local6 -= Local5 }
                     If (Local6 > Local0) { Local6 = Local0 }
                     If (Local6) { Local3 += Local5 }
+                    If (Local6 && XVWD (Local4 + VNIN, Ones))
+                    {
+                        // UMAP copies the file bytes, so they need only be
+                        // resident for this call.
+                        If (VENS (Local4, Local5, Local6, Zero)) { Return (Zero - 12) }
+                        Local3 = XVWD (Local4 + VNDA, Ones) + Local5
+                    }
                 }
                 Else { Local3 = Zero Local6 = Zero }
                 Local4 = UANO
@@ -4205,6 +4242,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     {
         If (XVWD (Arg0 + VNTY, Ones) != 8) { Return (Zero) }
         If (XVWD (Arg0 + VNSZ, Ones) < 3) { Return (Zero) }
+        If (VENS (Arg0, Zero, 2, Zero)) { Return (Zero) }
         Return (ELWD (XVWD (Arg0 + VNDA, Ones), Zero, 2) == 0x2123)
     }
 
@@ -4212,9 +4250,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     {
         If (XVWD (Arg1 + VNTY, Ones) != 8) { Return (Zero - 13) } // EACCES
         If (!SBOK (Arg1)) { Return (Zero - 8) } // ENOEXEC
-        Local0 = XVWD (Arg1 + VNDA, Ones)
         Local1 = XVWD (Arg1 + VNSZ, Ones)
         If (Local1 > 256) { Local1 = 256 }
+        If (VENS (Arg1, Zero, Local1, Zero)) { Return (Zero - 5) }
+        Local0 = XVWD (Arg1 + VNDA, Ones)
         Local2 = 2
         While (Local2 < Local1)
         {
@@ -6706,7 +6745,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (VNFO, 80)
     Name (VNDB, 384) // Dirty-page bitmap page of a delayed ext4 file, or zero
     Name (VNDQ, 392) // Next node on the EXDH dirty list
-    Name (VNSL, 400)
+    Name (VNSL, 432) // Node size; vfs-cache.asl defines the last fields
 
     // Pack nodes into allocator pages and reuse detached ext4 nodes.
     Method (VNOD, 4, NotSerialized)
@@ -6864,6 +6903,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (XVWD (Local0 + VNTY, Ones) == 4)
         {
             PUTS ("File not found")
+            Return (Zero)
+        }
+        If (VENS (Local0, Zero, XVWD (Local0 + VNSZ, Ones), Zero))
+        {
+            PUTS ("Read error")
             Return (Zero)
         }
         Local1 = XVWD (Local0 + VNDA, Ones)

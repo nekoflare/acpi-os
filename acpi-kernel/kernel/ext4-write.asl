@@ -261,25 +261,38 @@
     }
 
     Name (EXOL, Buffer (48) {}) // Snapshot of the four inline extent entries
-    Name (EXSP, Zero) // During writeback, the cache EXSZ fills new blocks from
+    Name (EXSN, Zero) // During writeback, the node whose cache EXSZ fills new blocks from
     Name (EXSD, Zero) // During writeback, the dirty bitmap of that cache
 
     // Fill block Arg0, logical block Arg1 of the file being resized: from
     // the writeback cache when there is one (clearing its dirty bit), or
-    // with zeros.
+    // with zeros. A page that is not resident comes from the old block.
     Method (EXZW, 2, NotSerialized)
     {
-        If (!EXSP)
+        If (EXSN)
         {
-            XCLR (EXDB)
-            Return (EXBW (Arg0, EXDB))
+            If (EXSD)
+            {
+                Local0 = EXSD + Arg1 / 8
+                XSTB (Local0, XBYT (Local0) & ~(One << (Arg1 % 8)))
+            }
+            Local0 = VCPA (EXSN, Arg1)
+            If (Local0) { Return (EXBW (Arg0, Local0)) }
         }
-        If (EXSD)
+        XCLR (EXDB)
+        If (EXSN)
         {
-            Local0 = EXSD + Arg1 / 8
-            XSTB (Local0, XBYT (Local0) & ~(One << (Arg1 % 8)))
+            Local1 = XVWD (EXSN + VNVL, Ones) - Arg1 * PGSZ
+            If (Arg1 * PGSZ < XVWD (EXSN + VNVL, Ones))
+            {
+                // The extent tree is still the old one until EXHD.
+                Local0 = EXMP (EXIR (XVWD (EXSN + VNIN, Ones)), Arg1)
+                If (!Local0) { Return (Zero) }
+                If (Local0 != Ones && !EXRD (Local0, EXDB)) { Return (Zero) }
+                If (Local1 < PGSZ) { FTZC (EXDB + Local1, PGSZ - Local1) }
+            }
         }
-        Return (EXBW (Arg0, EXSP + Arg1 * PGSZ))
+        Return (EXBW (Arg0, EXDB))
     }
 
     Method (EXFB, 1, NotSerialized)
@@ -350,7 +363,7 @@
         While (Local7 < Local3)
         {
             Local0 = Ones
-            If (Local7 < Local4 && !Local6 && !EXSP)
+            If (Local7 < Local4 && !Local6 && !EXSN)
             {
                 Local0 = EXMP (EXIR (Arg0), Local7)
             }
@@ -665,6 +678,7 @@
         XSTQ (Arg0 + VNFS, EXVL)
         XSTQ (Arg0 + VNFO, Local2)
         XSTQ (Arg0 + VNMD, Arg1)
+        If (Local6 == One) { XSTQ (Arg0 + VNIN, Local2) }
         If (!EXSY ()) { Return (Zero - 5) }
         Return (Zero)
     }
