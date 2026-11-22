@@ -853,7 +853,8 @@
         XSTB (Local0, 10)
         Increment (Local0)
         Local1 = XFRQ ()
-        If (Local1) { Local0 = CNUM (Local0, "cpu MHz static : ", Local1) }
+        If (!Local1) { Local1 = CTMH }
+        If (Local1) { Local0 = CNUM (Local0, "cpu MHz\t\t: ", Local1) }
         If (XCPD (0x80000000, Zero) >= 0x80000008)
         {
             Local1 = XCPD (0x80000008, Zero)
@@ -873,9 +874,11 @@
         Local2 = Zero
         Local3 = XADR (CIDB)
         Local4 = CIDE (Local3) - Local3
+        // CPUID leaf 0x16 is Intel-only and zero under KVM; fall back to
+        // the PIT-calibrated TSC rate, which is the nominal clock on modern CPUs.
         While (Local2 < Local1)
         {
-            Local0 = CNUM (Local0, "processor : ", Local2)
+            Local0 = CNUM (Local0, "processor\t: ", Local2)
             XMOV (Local0, Local3, Local4)
             Local0 += Local4
             XSTB (Local0, 10)
