@@ -1,0 +1,22 @@
+version=2.0
+revision=1
+cross_compile=yes
+tarball_url=https://codeload.github.com/abishekvashok/cmatrix/tar.gz/refs/tags/v2.0
+tarball_sha256=ad93ba39acd383696ab6a9ebbed1259ecf2d3cf9f49d6b97038c66f80749e99a
+builddeps=musl
+deps=ncurses
+
+# Single-file program: compile it directly with the definitions the upstream
+# CMakeLists.txt would pass. USE_TIOCSTI is left out; it only pushes a byte
+# back into the tty on screensaver-mode exit.
+build() {
+    musl_env
+    "$CC" $CFLAGS $CPPFLAGS $LDFLAGS -DEXCLUDE_CONFIG_H -DVERSION='"2.0"' \
+        -DHAVE_NCURSES_H -DHAVE_SYS_IOCTL_H -DHAVE_UNISTD_H -DHAVE_TERMIOS_H \
+        -DHAVE_RESIZETERM -DHAVE_WRESIZE -DHAVE_USE_DEFAULT_COLORS \
+        "$source_dir/cmatrix.c" -lncursesw -o cmatrix
+}
+package() {
+    package_app cmatrix
+    install -Dm644 "$source_dir/COPYING" "$dest_dir/usr/share/licenses/cmatrix/COPYING"
+}

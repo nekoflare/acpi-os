@@ -32,13 +32,13 @@ Candidate packages for `acpi-kernel/recipes`. Pick by ID and I'll add them.
 - [ ] **R20 `m4`** — small; missing prerequisite for autoconf-style builds.
 - [ ] **R21 `ninja` + `meson`** — meson runs on the packaged Python; makes the guest a real build environment.
 - [ ] **R22 `tig`** — curses git browser; `git` already works.
-- [ ] **R23 `sqlite3`** — VFS stress test. `pread`, `fcntl`, `fsync` exist; `ftruncate` on regular files may need kernel work.
+- [x] **R23 `sqlite3`** — added at `recipes/sqlite3/recipe`; `/bin/sqlite3-test` exercises it. Needed kernel `fcntl` record locks, `pwrite64`, and `ftruncate` on regular files. Shared-memory WAL still needs `MAP_SHARED` file mappings.
 
 ## Tier 4 — fun / showpiece
 
 - [ ] **R24 `nethack`** or **`bsdgames`** — classic ncurses stress test: `TIOCGWINSZ`, file I/O, signals.
 - [ ] **R25 `timg`** or **`catimg`** — terminal image viewer using the existing `libjpeg`/`libpng`/`giflib`; shows off 24-bit SGR.
-- [ ] **R26 `cmatrix` / `nyancat` / `cbonsai`** — trivial builds; good first recipes.
+- [x] **R26 `cmatrix` / `nyancat`** — added at `recipes/cmatrix/recipe` and `recipes/nyancat/recipe`.
 
 ## Tier 5 — data / polish
 

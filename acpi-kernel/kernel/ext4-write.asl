@@ -21,8 +21,15 @@
         If (!XVWD (EXVL + EXRW, Ones)) { Return (Zero) }
         If (Arg0 < XVWD (EXVL + EXBL, Ones))
         {
+            Local0 = XVWD (EXVL, Ones) + Arg0 * 8
             XMOV (VDMA, Arg1, PGSZ)
-            If (VBRQ (One, XVWD (EXVL, Ones) + Arg0 * 8, PGSZ)) { Return (One) }
+            If (VBRQ (One, Local0, PGSZ))
+            {
+                Local1 = EXCG (Local0)
+                If (Local1) { XMOV (Local1, VDMA, PGSZ) }
+                Return (One)
+            }
+            EXCX (Local0)
         }
         XSTQ (EXVL + EXRW, Zero)
         Return (Zero)
@@ -77,14 +84,22 @@
         If (Local4 > Local3) { Local4 = Local3 }
         If (Arg0) { Local5 = Zero }
         Local6 = Arg3
-        If (Local6 == Ones) { Local6 = EXSR (Local5, Local4, Arg2) }
+        If (Local6 == Ones)
+        {
+            // EXSQ asks for a longer free run so the file can grow in place.
+            Local7 = Arg2
+            If (EXSQ > Local7) { Local7 = EXSQ }
+            Local6 = EXSR (Local5, Local4, Local7)
+        }
         If (Local6 < Local5 || Local6 >= Local4 ||
             Arg2 > Local4 - Local6) { Return (Zero) }
 
         Local7 = Zero
         While (Local7 < Arg2)
         {
-            If ((EXBT (Local6 + Local7) != Zero) == Arg4) { Return (Zero) }
+            // Allocation needs clear bits and freeing needs set ones. Compare
+            // LNot results: AML truth is Ones, so "bit != 0" never equals One.
+            If (!EXBT (Local6 + Local7) == !Arg4) { Return (Zero) }
             Increment (Local7)
         }
         If (!EXRD (Zero, EXDB)) { Return (Zero) }
@@ -120,13 +135,27 @@
         }
         If (Arg2 == Ones)
         {
-            Local2 = Zero
-            While (Local2 * Local0 < Local1)
+            // First look for an EXSW-block run, then settle for an exact fit.
+            Local4 = EXSW
+            If (Arg0 || Local4 <= Arg1) { Local4 = Zero }
+            While (One)
             {
-                Local3 = EXAG (Local2, Arg0, Arg1, Ones, One, Arg4)
-                If (Local3 || !XVWD (EXVL + EXRW, Ones)) { Return (Local3) }
-                Increment (Local2)
+                EXSQ = Local4
+                Local2 = Zero
+                While (Local2 * Local0 < Local1)
+                {
+                    Local3 = EXAG (Local2, Arg0, Arg1, Ones, One, Arg4)
+                    If (Local3 || !XVWD (EXVL + EXRW, Ones))
+                    {
+                        EXSQ = Zero
+                        Return (Local3)
+                    }
+                    Increment (Local2)
+                }
+                If (!Local4) { Break }
+                Local4 = Zero
             }
+            EXSQ = Zero
             Return (Zero)
         }
         If (Arg2 >= Local1 || Arg1 > Local1 - Arg2) { Return (Zero) }
@@ -152,11 +181,32 @@
         Return (Local2 + Arg0)
     }
 
+    Name (EXSW, Zero) // Preferred free-run length for the next block search
+    Name (EXSQ, Zero) // Run length EXAG searches for, set by EXAL
+
+    // Find Arg2 clear bits in [Arg0, Arg1). Whole qwords that are full, or
+    // empty without completing the run, are skipped without bit tests.
     Method (EXSR, 3, NotSerialized)
     {
         Local0 = Zero
         While (Arg0 < Arg1)
         {
+            If (!(Arg0 & 63) && Arg0 + 64 <= Arg1)
+            {
+                Local1 = XVWD (EXBM + Arg0 / 8, Ones)
+                If (Local1 == Ones)
+                {
+                    Local0 = Zero
+                    Arg0 += 64
+                    Continue
+                }
+                If (!Local1 && Local0 + 64 < Arg2)
+                {
+                    Local0 += 64
+                    Arg0 += 64
+                    Continue
+                }
+            }
             If (EXBT (Arg0)) { Local0 = Zero }
             Else
             {
@@ -211,6 +261,26 @@
     }
 
     Name (EXOL, Buffer (48) {}) // Snapshot of the four inline extent entries
+    Name (EXSP, Zero) // During writeback, the cache EXSZ fills new blocks from
+    Name (EXSD, Zero) // During writeback, the dirty bitmap of that cache
+
+    // Fill block Arg0, logical block Arg1 of the file being resized: from
+    // the writeback cache when there is one (clearing its dirty bit), or
+    // with zeros.
+    Method (EXZW, 2, NotSerialized)
+    {
+        If (!EXSP)
+        {
+            XCLR (EXDB)
+            Return (EXBW (Arg0, EXDB))
+        }
+        If (EXSD)
+        {
+            Local0 = EXSD + Arg1 / 8
+            XSTB (Local0, XBYT (Local0) & ~(One << (Arg1 % 8)))
+        }
+        Return (EXBW (Arg0, EXSP + Arg1 * PGSZ))
+    }
 
     Method (EXFB, 1, NotSerialized)
     {
@@ -245,6 +315,14 @@
             If (!EXBW (EXIB, EXIN)) { Return (Zero - 5) }
             Return (Zero)
         }
+        If (Local1 && Local3 > Local4)
+        {
+            Local5 = EXAP (Arg0, Arg1, Local1, Local3, Local4)
+            If (Local5 != One) { Return (Local5) }
+            Local0 = EXIR (Arg0)
+            If (!Local0) { Return (Zero - 5) }
+        }
+        ElseIf (Local1 && Local3) { Return (EXSH (Arg0, Arg1, Local3)) }
         XMOV (XADR (EXOL), Local0 + 52, 48)
         Local5 = Zero
         Local6 = Zero
@@ -256,7 +334,11 @@
         }
         If (Local3 && !Local6)
         {
+            // Leave room to grow in place, so relocation stays rare.
+            EXSW = Local3 * 2
+            If (EXSW > 0x8000) { EXSW = 0x8000 }
             Local5 = EXAL (Zero, Local3, Ones, One, Zero)
+            EXSW = Zero
             If (!Local5)
             {
                 If (!XVWD (EXVL + EXRW, Ones)) { Return (Zero - 5) }
@@ -268,13 +350,18 @@
         While (Local7 < Local3)
         {
             Local0 = Ones
-            If (Local7 < Local4 && !Local6)
+            If (Local7 < Local4 && !Local6 && !EXSP)
             {
                 Local0 = EXMP (EXIR (Arg0), Local7)
             }
-            If (Local0 == Ones) { XCLR (EXDB) }
-            ElseIf (!Local0 || !EXRD (Local0, EXDB)) { Return (Zero - 5) }
-            If (!EXBW (Local5 + Local7, EXDB)) { Return (Zero - 5) }
+            If (Local0 == Ones)
+            {
+                If (!EXZW (Local5 + Local7, Local7)) { Return (Zero - 5) }
+            }
+            ElseIf (!Local0 || !EXRD (Local0, EXDB) || !EXBW (Local5 + Local7, EXDB))
+            {
+                Return (Zero - 5)
+            }
             Increment (Local7)
         }
         Local0 = EXIR (Arg0)
@@ -284,6 +371,129 @@
         If (!Local6)
         {
             If (!EXFB (Local1)) { Return (Zero - 5) }
+        }
+        Return (Zero)
+    }
+
+    // Grow a file by extending its last extent in place, or by adding an
+    // inline extent elsewhere, so existing blocks are never copied. Returns
+    // One when neither applies and the caller must relocate the file.
+    Method (EXAP, 5, NotSerialized)
+    {
+        Local0 = EXIR (Arg0)
+        If (!Local0) { Return (Zero - 5) }
+        Local1 = Local0 + 52 + (Arg2 - One) * 12
+        Local2 = ELWD (Local1, Zero, 4)
+        Local3 = ELWD (Local1, 4, 2)
+        Local4 = ELWD (Local1, 8, 4)
+        If (Local2 + Local3 != Arg4) { Return (One) }
+        Local5 = Arg3 - Arg4
+        Local6 = Zero
+        Local7 = Zero
+        If (Local3 + Local5 <= 0x8000)
+        {
+            If (EXAL (Zero, Local5, Local4 + Local3, One, Zero)) { Local6 = Local4 + Local3 }
+            ElseIf (!XVWD (EXVL + EXRW, Ones)) { Return (Zero - 5) }
+        }
+        If (!Local6)
+        {
+            If (Arg2 >= 4 || ELWD (Local0, 44, 2) <= Arg2 || Local5 > 0x8000) { Return (One) }
+            EXSW = Arg3
+            If (EXSW > 0x8000) { EXSW = 0x8000 }
+            Local6 = EXAL (Zero, Local5, Ones, One, Zero)
+            EXSW = Zero
+            If (!Local6)
+            {
+                If (!XVWD (EXVL + EXRW, Ones)) { Return (Zero - 5) }
+                Return (Zero - 28)
+            }
+            Local7 = One
+        }
+        Local2 = Zero
+        While (Local2 < Local5)
+        {
+            If (!EXZW (Local6 + Local2, Arg4 + Local2)) { Return (Zero - 5) }
+            Increment (Local2)
+        }
+        Local0 = EXIR (Arg0)
+        If (!Local0) { Return (Zero - 5) }
+        If (Local7)
+        {
+            Local1 = Local0 + 52 + Arg2 * 12
+            EXLE (Local1, Zero, Arg4, 4)
+            EXLE (Local1, 4, Local5, 2)
+            EXLE (Local1, 6, Zero, 2)
+            EXLE (Local1, 8, Local6, 4)
+            EXLE (Local0, 42, Arg2 + One, 2)
+        }
+        Else
+        {
+            Local1 = Local0 + 52 + (Arg2 - One) * 12
+            EXLE (Local1, 4, ELWD (Local1, 4, 2) + Local5, 2)
+        }
+        EXLE (Local0, 4, Arg1, 4)
+        EXLE (Local0, 28, ELWD (Local0, 28, 4) + Local5 * 8, 4)
+        If (!EXBW (EXIB, EXIN)) { Return (Zero - 5) }
+        Return (Zero)
+    }
+
+    // Shrink to Arg2 > 0 blocks by trimming extents in place. Blocks are
+    // freed only after the inode no longer references them.
+    Method (EXSH, 3, NotSerialized)
+    {
+        Local0 = EXIR (Arg0)
+        If (!Local0) { Return (Zero - 5) }
+        Local1 = ELWD (Local0, 42, 2)
+        XMOV (XADR (EXOL), Local0 + 52, 48)
+        Local2 = Zero // Blocks released
+        Local3 = Zero // Extents kept
+        Local4 = Zero
+        While (Local4 < Local1)
+        {
+            Local5 = Local0 + 52 + Local4 * 12
+            Local6 = ELWD (Local5, Zero, 4)
+            Local7 = ELWD (Local5, 4, 2)
+            If (Local6 >= Arg2) { Local2 += Local7 }
+            Else
+            {
+                If (Local6 + Local7 > Arg2)
+                {
+                    Local2 += Local6 + Local7 - Arg2
+                    EXLE (Local5, 4, Arg2 - Local6, 2)
+                }
+                Increment (Local3)
+            }
+            Increment (Local4)
+        }
+        Local4 = 52 + Local3 * 12
+        While (Local4 < 52 + Local1 * 12)
+        {
+            XSTB (Local0 + Local4, Zero)
+            Increment (Local4)
+        }
+        EXLE (Local0, 42, Local3, 2)
+        EXLE (Local0, 4, Arg1, 4)
+        EXLE (Local0, 28, ELWD (Local0, 28, 4) - Local2 * 8, 4)
+        If (!EXBW (EXIB, EXIN)) { Return (Zero - 5) }
+        Local0 = XADR (EXOL)
+        While (Local1)
+        {
+            Local6 = ELWD (Local0, Zero, 4)
+            Local7 = ELWD (Local0, 4, 2)
+            Local5 = ELWD (Local0, 8, 4)
+            If (Local6 >= Arg2)
+            {
+                If (!EXAL (Zero, Local7, Local5, Zero, Zero)) { Return (Zero - 5) }
+            }
+            ElseIf (Local6 + Local7 > Arg2)
+            {
+                If (!EXAL (Zero, Local6 + Local7 - Arg2, Local5 + Arg2 - Local6, Zero, Zero))
+                {
+                    Return (Zero - 5)
+                }
+            }
+            Local0 += 12
+            Decrement (Local1)
         }
         Return (Zero)
     }

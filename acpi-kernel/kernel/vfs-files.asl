@@ -218,6 +218,7 @@
     // the anonymous file's cache alive until their last close.
     Method (VDEL, 2, NotSerialized)
     {
+        EXDC (Arg1) // The inode is freed, so pending data has nowhere to go.
         EXVL = XVWD (Arg1 + VNFS, Ones)
         Local0 = EXDL (XVWD (Arg1 + VNFO, Ones), XVWD (Arg1 + VNTY, Ones) == 4)
         XSTQ (Arg1 + VNFO, Zero)
@@ -270,6 +271,7 @@
 
     Method (VTRN, 1, NotSerialized)
     {
+        EXDC (Arg0)
         Local0 = XVWD (Arg0 + VNCP, Ones)
         If (Local0) { VUNM (XVWD (Arg0 + VNDA, Ones), Local0) }
         XSTQ (Arg0 + VNDA, Zero)
@@ -305,7 +307,7 @@
         Local1 = XVWD (Arg1 + 40, Ones)
         If (!(Local1 & 3)) { Return (Zero - 9) }
         If (!Arg3) { Return (Zero) }
-        If (Arg3 > PGSZ) { Arg3 = PGSZ }
+        If (Arg3 > 0x10000) { Arg3 = 0x10000 }
         If (!URNG (Arg0, Arg2, Arg3, Zero)) { Return (Zero - 14) }
         Local2 = XVWD (Arg1 + 8, Ones)
         Local3 = XVWD (Local0 + VNSZ, Ones)
@@ -425,5 +427,258 @@
         XSTQ (Local1 + 72, PGSZ)
         XSTQ (Local1 + 80, Local3)
         If (!UCOP (Arg0, Arg2, Local1, SizeOf (SFST))) { Return (Zero - 14) }
+        Return (Zero)
+    }
+
+    // POSIX advisory record locks (fcntl F_GETLK/F_SETLK/F_SETLKW). Each
+    // 40-byte entry holds the lock key, the owning process record, the
+    // half-open byte range [start, end) with Ones meaning end of file, and
+    // the type (0 read, 1 write). A process's own ranges never overlap.
+    Name (RLMX, 128)
+    Name (RLTB, Buffer (5120) {})
+    Name (RLFB, Buffer (32) {}) // Linux x86-64 struct flock
+
+    // Memfds share one node marker, so their description is the identity.
+    Method (RLKY, 1, NotSerialized)
+    {
+        Local0 = XVWD (Arg0, Ones)
+        If (!Local0 || Local0 == XADR (MFND)) { Return (Arg0) }
+        Return (Local0)
+    }
+
+    Method (RLCF, 5, NotSerialized)
+    {
+        Local0 = XADR (RLTB)
+        Local1 = Zero
+        While (Local1 < RLMX)
+        {
+            If (XVWD (Local0, Ones) == Arg0)
+            {
+                If (XVWD (Local0 + 8, Ones) != Arg1)
+                {
+                    If (XVWD (Local0 + 16, Ones) < Arg3)
+                    {
+                        If (Arg2 < XVWD (Local0 + 24, Ones))
+                        {
+                            If (Arg4 == One || XVWD (Local0 + 32, Ones) == One) { Return (Local0) }
+                        }
+                    }
+                }
+            }
+            Local0 += 40
+            Increment (Local1)
+        }
+        Return (Zero)
+    }
+
+    Method (RLFR, 0, NotSerialized)
+    {
+        Local0 = XADR (RLTB)
+        Local1 = Zero
+        Local2 = Zero
+        While (Local1 < RLMX)
+        {
+            If (!XVWD (Local0, Ones)) { Increment (Local2) }
+            Local0 += 40
+            Increment (Local1)
+        }
+        Return (Local2)
+    }
+
+    Method (RLNW, 5, NotSerialized)
+    {
+        Local0 = XADR (RLTB)
+        Local1 = Zero
+        While (Local1 < RLMX)
+        {
+            If (!XVWD (Local0, Ones))
+            {
+                XSTQ (Local0 + 8, Arg1)
+                XSTQ (Local0 + 16, Arg2)
+                XSTQ (Local0 + 24, Arg3)
+                XSTQ (Local0 + 32, Arg4)
+                XSTQ (Local0, Arg0)
+                Return (One)
+            }
+            Local0 += 40
+            Increment (Local1)
+        }
+        Return (Zero)
+    }
+
+    // Remove [Arg2, Arg3) from the owner's locks, splitting a straddling range.
+    Method (RLTR, 4, NotSerialized)
+    {
+        Local0 = XADR (RLTB)
+        Local1 = Zero
+        While (Local1 < RLMX)
+        {
+            If (XVWD (Local0, Ones) == Arg0)
+            {
+                If (XVWD (Local0 + 8, Ones) == Arg1)
+                {
+                    Local2 = XVWD (Local0 + 16, Ones)
+                    Local3 = XVWD (Local0 + 24, Ones)
+                    If (Local2 < Arg3)
+                    {
+                        If (Arg2 < Local3)
+                        {
+                            If (Local2 < Arg2)
+                            {
+                                If (Local3 > Arg3)
+                                {
+                                    RLNW (Arg0, Arg1, Arg3, Local3, XVWD (Local0 + 32, Ones))
+                                }
+                                XSTQ (Local0 + 24, Arg2)
+                            }
+                            ElseIf (Local3 > Arg3) { XSTQ (Local0 + 16, Arg3) }
+                            Else { XSTQ (Local0, Zero) }
+                        }
+                    }
+                }
+            }
+            Local0 += 40
+            Increment (Local1)
+        }
+    }
+
+    // Drop the owner's locks on one key, or on every key when Arg0 is zero.
+    Method (RLRL, 2, NotSerialized)
+    {
+        Local0 = XADR (RLTB)
+        Local1 = Zero
+        While (Local1 < RLMX)
+        {
+            Local2 = XVWD (Local0, Ones)
+            If (Local2)
+            {
+                If (XVWD (Local0 + 8, Ones) == Arg1)
+                {
+                    If (!Arg0 || Local2 == Arg0) { XSTQ (Local0, Zero) }
+                }
+            }
+            Local0 += 40
+            Increment (Local1)
+        }
+    }
+
+    // Arg1 is the open description, Arg2 the command, Arg3 the user flock.
+    // F_SETLKW reports a conflict as EAGAIN instead of sleeping.
+    Method (RLSY, 4, NotSerialized)
+    {
+        Local0 = XADR (RLFB)
+        If (!UCPY (Arg0, Local0, Arg3, 32)) { Return (Zero - 14) }
+        Local1 = ELWD (Local0, Zero, 2)
+        Local2 = ELWD (Local0, 2, 2)
+        Local3 = XVWD (Local0 + 8, Ones)
+        Local4 = XVWD (Local0 + 16, Ones)
+        If (Local1 > 2) { Return (Zero - 22) }
+        If (Local2 == One) { Local3 += XVWD (Arg1 + 8, Ones) }
+        ElseIf (Local2 == 2)
+        {
+            Local5 = XVWD (Arg1, Ones)
+            Local6 = XVWD (Arg1 + 24, Ones)
+            If (Local5 != XADR (MFND))
+            {
+                If (XVWD (Local5 + VNMD, Ones)) { Local6 = XVWD (Local5 + VNSZ, Ones) }
+            }
+            Local3 += Local6
+        }
+        ElseIf (Local2) { Return (Zero - 22) }
+        If (Local3 >> 63) { Return (Zero - 22) }
+        If (!Local4) { Local5 = Ones }
+        ElseIf (Local4 >> 63)
+        {
+            Local5 = Local3
+            Local3 += Local4
+            If (Local3 >> 63) { Return (Zero - 22) }
+        }
+        Else
+        {
+            Local5 = Local3 + Local4
+            If (Local5 >> 63) { Return (Zero - 75) } // EOVERFLOW
+        }
+        Local6 = RLKY (Arg1)
+        Local7 = XVWD (Arg0 + TSPR, Ones)
+        If (Arg2 == 5) // F_GETLK
+        {
+            If (Local1 == 2) { Return (Zero - 22) }
+            Local6 = RLCF (Local6, Local7, Local3, Local5, Local1)
+            If (!Local6) { EXLE (Local0, Zero, 2, 2) }
+            Else
+            {
+                EXLE (Local0, Zero, XVWD (Local6 + 32, Ones), 2)
+                EXLE (Local0, 2, Zero, 2)
+                Local3 = XVWD (Local6 + 16, Ones)
+                XSTQ (Local0 + 8, Local3)
+                Local5 = XVWD (Local6 + 24, Ones)
+                If (Local5 == Ones) { XSTQ (Local0 + 16, Zero) }
+                Else { XSTQ (Local0 + 16, Local5 - Local3) }
+                Local5 = XVWD (Local6 + 8, Ones)
+                Local4 = Zero
+                If (Local5) { Local4 = XVWD (Local5 + PRID, Ones) }
+                EXLE (Local0, 24, Local4, 4)
+            }
+            If (!UCOP (Arg0, Arg3, Local0, 32)) { Return (Zero - 14) }
+            Return (Zero)
+        }
+        Local2 = XVWD (Arg1 + 40, Ones) & 3
+        If (Local1 == Zero && Local2 == One) { Return (Zero - 9) }
+        If (Local1 == One && !Local2) { Return (Zero - 9) }
+        If (Local1 != 2)
+        {
+            If (RLCF (Local6, Local7, Local3, Local5, Local1)) { Return (Zero - 11) }
+        }
+        Local4 = 2
+        If (Local1 == 2) { Local4 = One }
+        If (RLFR () < Local4) { Return (Zero - 37) } // ENOLCK
+        RLTR (Local6, Local7, Local3, Local5)
+        If (Local1 != 2) { RLNW (Local6, Local7, Local3, Local5, Local1) }
+        Return (Zero)
+    }
+
+    Method (FTZC, 2, NotSerialized)
+    {
+        Local0 = XADR (EXZR)
+        While (Arg1)
+        {
+            Local1 = Arg1
+            If (Local1 > 512) { Local1 = 512 }
+            XMOV (Arg0, Local0, Local1)
+            Arg0 += Local1
+            Arg1 -= Local1
+        }
+    }
+
+    // ftruncate for disk-backed and unlinked regular files. Cache bytes past
+    // the size stay zero so later growth and tail-block writes expose zeros.
+    Method (FTRN, 2, NotSerialized)
+    {
+        Local0 = XVWD (Arg0, Ones)
+        If (Local0 == XADR (SKND)) { Return (Zero - 22) }
+        If (!(XVWD (Arg0 + 40, Ones) & 3)) { Return (Zero - 22) }
+        If (Arg1 >> 63) { Return (Zero - 22) }
+        If (Arg1 > 0x4000000) { Return (Zero - 27) } // EFBIG
+        If (!XVWD (Local0 + VNMD, Ones)) { Return (Zero - 22) }
+        If (XVWD (Local0 + VNTY, Ones) != 8) { Return (Zero - 22) }
+        Local1 = XVWD (Local0 + VNSZ, Ones)
+        If (Arg1 == Local1) { Return (Zero) }
+        Local2 = !XVWD (Local0 + VNPA, Ones)
+        If (!Local2)
+        {
+            If (!EXWR (Local0)) { Return (Zero - 30) } // EROFS
+            If (!Arg1) { Return (EXTR (Local0)) }
+            // The disk catches up at writeback; see EXWB.
+            If (!EXDM (Local0, Zero, Zero)) { Return (Zero - 12) }
+        }
+        If (!VGRW (Local0, Arg1)) { Return (Zero - 12) }
+        If (Arg1 < Local1)
+        {
+            FTZC (XVWD (Local0 + VNDA, Ones) + Arg1, Local1 - Arg1)
+            // Cleared pages may still hold old bytes on disk if the file
+            // grows again before writeback, so they are written too.
+            If (!Local2) { EXDM (Local0, Arg1 / PGSZ, (Local1 + PGSZ - One) / PGSZ) }
+        }
+        XSTQ (Local0 + VNSZ, Arg1)
         Return (Zero)
     }

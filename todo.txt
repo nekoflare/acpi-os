@@ -1,0 +1,1 @@
+Investigate the lag during sqlite3-test (its very bad.)

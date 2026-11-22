@@ -10,14 +10,80 @@
     Name (EXIC, 40)
     Name (EXRW, 48)
 
-    Method (EXRD, 2, NotSerialized)
+    // Write-through cache of whole blocks, direct-mapped by disk LBA. Every
+    // ext4 write passes through EXBW, which refreshes a cached copy, so the
+    // cache always matches the disk. Reads fill it; writes never allocate,
+    // which keeps streaming file data from evicting group descriptors,
+    // bitmaps, inode tables and the superblock.
+    Name (EXCT, Zero) // Tag page: LBA + 1 for each slot, zero when empty
+    Name (EXCP, Zero) // Page of per-slot data page addresses
+    Name (EXCM, 511) // Slot mask; one tag page holds 512 slots
+
+    Method (EXCI, 0, NotSerialized)
     {
-        If (Arg0 >= XVWD (EXVL + EXBL, Ones) ||
-            !VBRQ (Zero, XVWD (EXVL, Ones) + Arg0 * 8, PGSZ))
+        Local0 = PALC ()
+        If (!Local0) { Return (Zero) }
+        Local1 = PALC ()
+        If (!Local1)
         {
+            PDEL (Local0)
             Return (Zero)
         }
+        XCLR (Local0 + HHDO)
+        XCLR (Local1 + HHDO)
+        EXCP = Local1 + HHDO
+        EXCT = Local0 + HHDO
+        Return (One)
+    }
+
+    // Return the cached copy of LBA Arg0, or zero.
+    Method (EXCG, 1, NotSerialized)
+    {
+        If (!EXCT) { Return (Zero) }
+        Local0 = ((Arg0 >> 3) & EXCM) * 8
+        If (XVWD (EXCT + Local0, Ones) != Arg0 + One) { Return (Zero) }
+        Return (XVWD (EXCP + Local0, Ones))
+    }
+
+    // Record the page at Arg1 as the contents of LBA Arg0.
+    Method (EXCF, 2, NotSerialized)
+    {
+        If (!EXCT) { Return (Zero) }
+        Local0 = ((Arg0 >> 3) & EXCM) * 8
+        Local1 = XVWD (EXCP + Local0, Ones)
+        If (!Local1)
+        {
+            Local1 = PALC ()
+            If (!Local1) { Return (Zero) }
+            Local1 += HHDO
+            XSTQ (EXCP + Local0, Local1)
+        }
+        XMOV (Local1, Arg1, PGSZ)
+        XSTQ (EXCT + Local0, Arg0 + One)
+        Return (One)
+    }
+
+    Method (EXCX, 1, NotSerialized)
+    {
+        If (!EXCT) { Return (Zero) }
+        Local0 = ((Arg0 >> 3) & EXCM) * 8
+        If (XVWD (EXCT + Local0, Ones) == Arg0 + One) { XSTQ (EXCT + Local0, Zero) }
+        Return (Zero)
+    }
+
+    Method (EXRD, 2, NotSerialized)
+    {
+        If (Arg0 >= XVWD (EXVL + EXBL, Ones)) { Return (Zero) }
+        Local0 = XVWD (EXVL, Ones) + Arg0 * 8
+        Local1 = EXCG (Local0)
+        If (Local1)
+        {
+            XMOV (Arg1, Local1, PGSZ)
+            Return (One)
+        }
+        If (!VBRQ (Zero, Local0, PGSZ)) { Return (Zero) }
         XMOV (Arg1, VDMA, PGSZ)
+        EXCF (Local0, VDMA)
         Return (One)
     }
 
@@ -356,6 +422,14 @@
         XSTQ (Arg1 + 16, ELWD (Local0, 26, 2))
         XSTQ (Arg1 + 48, ELWD (Local0, 4, 4))
         XSTQ (Arg1 + 64, ELWD (Local0, 28, 4))
+        If (XVWD (Arg0 + VNDB, Ones))
+        {
+            // Delayed writeback: the cache is newer than the disk inode.
+            Local1 = XVWD (Arg0 + VNSZ, Ones)
+            XSTQ (Arg1 + 48, Local1)
+            Local1 = (Local1 + PGSZ - One) / PGSZ * 8
+            If (Local1 > ELWD (Local0, 28, 4)) { XSTQ (Arg1 + 64, Local1) }
+        }
         XSTQ (Arg1 + 72, ELWD (Local0, 8, 4))
         XSTQ (Arg1 + 88, ELWD (Local0, 16, 4))
         XSTQ (Arg1 + 104, ELWD (Local0, 12, 4))
@@ -372,49 +446,152 @@
         Return (Zero)
     }
 
-    // Resize the shared cache before touching disk. Each call writes at most
-    // one block, and publishes its bytes to readers only after disk I/O.
-    Method (EXIO, 4, NotSerialized)
+    // Delayed writeback for linked ext4 regular files. write() and
+    // ftruncate() only change the in-memory cache (VNDA/VNSZ) and record
+    // dirty pages in a bitmap page at VNDB; one page covers 128 MiB, past the
+    // 64 MiB file limit. Dirty nodes are linked through VNDQ from EXDH.
+    // Writeback (fsync, sync, or an idle CPU after EXPI) resizes the inode
+    // to the cached size in one step, so appends get one contiguous
+    // allocation, and writes each dirty page once. No syscall but those
+    // waits on the disk.
+    Name (EXDH, Zero) // Dirty node list
+    Name (EXDT, Zero) // MNOW of the last periodic writeback
+    Name (EXPI, 5000000000) // Periodic writeback interval in nanoseconds
+
+    // Mark cache pages [Arg1, Arg2) dirty. Arg1 == Arg2 marks only the size.
+    Method (EXDM, 3, NotSerialized)
+    {
+        Local0 = XVWD (Arg0 + VNDB, Ones)
+        If (!Local0)
+        {
+            Local0 = PALC ()
+            If (!Local0) { Return (Zero) }
+            Local0 += HHDO
+            XCLR (Local0)
+            XSTQ (Arg0 + VNDB, Local0)
+            XSTQ (Arg0 + VNDQ, EXDH)
+            EXDH = Arg0
+        }
+        If (Arg2 > PGSZ * 8) { Arg2 = PGSZ * 8 }
+        While (Arg1 < Arg2)
+        {
+            Local1 = Local0 + Arg1 / 8
+            XSTB (Local1, XBYT (Local1) | (One << (Arg1 % 8)))
+            Increment (Arg1)
+        }
+        Return (One)
+    }
+
+    // Drop a node's dirty state without writing it.
+    Method (EXDC, 1, NotSerialized)
+    {
+        Local0 = XVWD (Arg0 + VNDB, Ones)
+        If (!Local0) { Return (Zero) }
+        If (EXDH == Arg0) { EXDH = XVWD (Arg0 + VNDQ, Ones) }
+        Else
+        {
+            Local1 = EXDH
+            While (Local1 && XVWD (Local1 + VNDQ, Ones) != Arg0)
+            {
+                Local1 = XVWD (Local1 + VNDQ, Ones)
+            }
+            If (Local1) { XSTQ (Local1 + VNDQ, XVWD (Arg0 + VNDQ, Ones)) }
+        }
+        XSTQ (Arg0 + VNDQ, Zero)
+        XSTQ (Arg0 + VNDB, Zero)
+        PDEL (Local0 - HHDO)
+        Return (Zero)
+    }
+
+    // write() to a linked ext4 file: copy into the cache and mark it dirty.
+    Method (EXWC, 4, NotSerialized)
     {
         Local0 = XVWD (Arg1, Ones)
-        Local1 = XVWD (Arg1 + 40, Ones)
-        If (!(Local1 & 3)) { Return (Zero - 9) }
+        If (!(XVWD (Arg1 + 40, Ones) & 3)) { Return (Zero - 9) }
         If (!Arg3) { Return (Zero) }
+        If (!EXDM (Local0, Zero, Zero)) { Return (Zero - 12) }
         Local2 = XVWD (Arg1 + 8, Ones)
-        Local3 = XVWD (Local0 + VNSZ, Ones)
-        If (Local1 & 0x400) { Local2 = Local3 }
-        Local4 = PGSZ - Local2 % PGSZ
-        If (Arg3 > Local4) { Arg3 = Local4 }
-        If (Local2 > 0x4000000 - Arg3) { Return (Zero - 27) }
-        If (!URNG (Arg0, Arg2, Arg3, Zero)) { Return (Zero - 14) }
-        Local4 = Local2 + Arg3
-        If (!VGRW (Local0, Local4)) { Return (Zero - 12) }
-        EXVL = XVWD (Local0 + VNFS, Ones)
-        Local5 = XVWD (Local0 + VNFO, Ones)
-        If (Local4 > Local3)
+        If (XVWD (Arg1 + 40, Ones) & 0x400) { Local2 = XVWD (Local0 + VNSZ, Ones) }
+        Local1 = VOWR (Arg0, Arg1, Arg2, Arg3)
+        If (Local1 && Local1 < Zero - 4095)
         {
-            If ((Local3 % PGSZ) && Local2 / PGSZ > Local3 / PGSZ)
-            {
-                Local6 = EXMP (EXIR (Local5), Local3 / PGSZ)
-                If (!Local6 || Local6 == Ones) { Return (Zero - 5) }
-                If (!EXBW (Local6, XVWD (Local0 + VNDA, Ones) + (Local3 & ~(PGSZ - One))))
-                {
-                    Return (Zero - 5)
-                }
-            }
-            Local6 = EXSZ (Local5, Local4)
-            If (Local6) { Return (Local6) }
+            EXDM (Local0, Local2 / PGSZ, (Local2 + Local1 + PGSZ - One) / PGSZ)
         }
-        Local6 = EXMP (EXIR (Local5), Local2 / PGSZ)
-        If (Local6 == Ones) { Return (Zero - 95) }
-        If (!Local6) { Return (Zero - 5) }
-        Local7 = XVWD (Local0 + VNDA, Ones) + (Local2 & ~(PGSZ - One))
-        XMOV (EXDB, Local7, PGSZ)
-        If (!UCPY (Arg0, EXDB + Local2 % PGSZ, Arg2, Arg3)) { Return (Zero - 14) }
-        If (!EXBW (Local6, EXDB)) { Return (Zero - 5) }
-        XMOV (Local7, EXDB, PGSZ)
-        If (Local4 > Local3) { XSTQ (Local0 + VNSZ, Local4) }
-        If (!EXSY ()) { Return (Zero - 5) }
-        XSTQ (Arg1 + 8, Local4)
-        Return (Arg3)
+        Return (Local1)
+    }
+
+    // Write one dirty node back. Data reaches newly allocated blocks before
+    // the inode that publishes them. The caller issues the FLUSH.
+    Method (EXWB, 1, NotSerialized)
+    {
+        Local0 = XVWD (Arg0 + VNDB, Ones)
+        If (!Local0) { Return (Zero) }
+        Local1 = XVWD (Arg0 + VNFO, Ones)
+        If (!Local1 || !XVWD (Arg0 + VNPA, Ones))
+        {
+            EXDC (Arg0)
+            Return (Zero)
+        }
+        EXVL = XVWD (Arg0 + VNFS, Ones)
+        If (!XVWD (EXVL + EXRW, Ones)) { Return (Zero - 5) }
+        Local2 = XVWD (Arg0 + VNSZ, Ones)
+        Local3 = (Local2 + PGSZ - One) / PGSZ
+        Local4 = EXIR (Local1)
+        If (!Local4) { Return (Zero - 5) }
+        Local5 = ELWD (Local4, 4, 4)
+        If (Local5 != Local2)
+        {
+            // Growth makes the old tail block's bytes past its end visible.
+            If (Local2 > Local5 && (Local5 % PGSZ)) { EXDM (Arg0, Local5 / PGSZ, Local5 / PGSZ + One) }
+            EXSP = XVWD (Arg0 + VNDA, Ones)
+            EXSD = Local0
+            Local6 = EXSZ (Local1, Local2)
+            EXSP = Zero
+            EXSD = Zero
+            If (Local6) { Return (Local6) }
+            Local4 = EXIR (Local1)
+            If (!Local4) { Return (Zero - 5) }
+        }
+        Local5 = XVWD (Arg0 + VNDA, Ones)
+        Local6 = Zero
+        While (Local6 < Local3)
+        {
+            If (!(Local6 & 63) && !XVWD (Local0 + Local6 / 8, Ones))
+            {
+                Local6 += 64
+                Continue
+            }
+            If (XBYT (Local0 + Local6 / 8) & (One << (Local6 % 8)))
+            {
+                Local7 = EXMP (Local4, Local6)
+                If (!Local7 || Local7 == Ones) { Return (Zero - 5) }
+                If (!EXBW (Local7, Local5 + Local6 * PGSZ)) { Return (Zero - 5) }
+            }
+            Increment (Local6)
+        }
+        EXDC (Arg0)
+        Return (Zero)
+    }
+
+    // Write back every dirty node, then FLUSH once.
+    Method (EXWA, 0, NotSerialized)
+    {
+        Local0 = EXDH
+        Local1 = Zero
+        While (Local0)
+        {
+            Local2 = XVWD (Local0 + VNDQ, Ones)
+            If (EXWB (Local0)) { Local1 = One }
+            Local0 = Local2
+        }
+        If (EXVL) { EXSY () }
+        EXDT = MNOW ()
+        Return (Local1)
+    }
+
+    // Called by an idle CPU while dirty nodes exist.
+    Method (EXPW, 0, NotSerialized)
+    {
+        If (MNOW () - EXDT < EXPI) { Return (Zero) }
+        Return (EXWA ())
     }

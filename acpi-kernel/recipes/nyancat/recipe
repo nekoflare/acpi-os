@@ -1,0 +1,14 @@
+version=1.5.2
+revision=1
+cross_compile=yes
+tarball_url=https://codeload.github.com/klange/nyancat/tar.gz/refs/tags/1.5.2
+tarball_sha256=88cdcaa9c7134503dd0364a97fa860da3381a09cb555c3aae9918360827c2032
+builddeps=musl
+
+# Single translation unit (nyancat.c #includes animation.c); no curses needed,
+# it writes escape sequences directly and detects st via $TERM.
+build() {
+    musl_env
+    "$CC" $CFLAGS $LDFLAGS -std=c99 "$source_dir/src/nyancat.c" -o nyancat
+}
+package() { package_app nyancat; }

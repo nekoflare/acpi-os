@@ -73,6 +73,7 @@
         EXBM = PALC ()
         EXDB = PALC ()
         If (!EXGD || !EXBM || !EXDB) { Return (Zero) }
+        EXCI ()
         EXGD += HHDO
         EXBM += HHDO
         EXDB += HHDO

@@ -2592,6 +2592,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         Local3 = XVWD (Local0, Ones)
         If (Local3 == XADR (SKND)) { Return (SKFC (Local0, Arg2, Arg3)) }
+        If (Arg2 >= 5 && Arg2 <= 7) { Return (RLSY (Arg0, Local0, Arg2, Arg3)) } // F_GETLK, F_SETLK, F_SETLKW
         If (Local3 == XADR (MFND))
         {
             If (Arg2 == 1034) { Return (XVWD (Local0 + MFSL, Ones)) } // F_GET_SEALS
@@ -2633,6 +2634,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         Local0 = Local4
         Local3 += HHDO
+        // Recycled pages keep stale fields such as SKPI, which made fstat
+        // report a reused directory description as a pipe.
+        XCLR (Local3)
         Local2 = Arg0 + TSFD + Local1 * 8
         VREF (Local0)
         XSTQ (Local3, Local0)
@@ -2868,7 +2872,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (Arg3 & ~7) { Return (Zero - 22) }
         Local0 = UENT (Arg0, Arg2, Arg1)
         If (Local0 >= Zero - 4095) { Return (Local0) }
-        If (((Arg3 & 2) && !EXWR (Local0) && !VMUT (Local0)) || ((Arg3 & One) && XVWD (Local0 + VNTY, Ones) != 4 && !VFEX (Local0)))
+        If (((Arg3 & 2) && !EXWR (Local0) && !VMUT (Local0)) || ((Arg3 & One) && XVWD (Local0 + VNTY, Ones) != 4 && !VFEX (Local0) && !SBOK (Local0)))
         {
             Return (Zero - 13)
         }
@@ -2979,7 +2983,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 Return (VOWR (Arg0, Local0, Arg2, Arg3))
             }
-            If (EXWR (Local1)) { Return (EXIO (Arg0, Local0, Arg2, Arg3)) }
+            If (EXWR (Local1)) { Return (EXWC (Arg0, Local0, Arg2, Arg3)) }
             If (!FBAD || FBPP != 4) { Return (Zero - 19) } // ENODEV
             If (XVWD (Local1 + VNTY, Ones) != 12) { Return (Zero - 9) }
             Local2 = Arg3
@@ -3998,6 +4002,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     {
         Local0 = XVWD (Arg0 + TSPR, Ones)
         Local1 = XVWD (Local0 + PRPA, Ones)
+        RLRL (Zero, Local0)
         XSTQ (Local0 + PRTK, Zero)
         XSTQ (Local0 + PRST, Arg1)
         VFRE (Arg0)
@@ -4084,11 +4089,36 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     // Copy argv and envp into the top stack page of the new address space.
     // Reserve 656 bytes for argc, up to 64 pointers, terminators and auxv.
-    Method (EXST, 4, NotSerialized)
+    // Arg4 strings from SBBF replace argv[0] for an interpreted script.
+    Method (EXST, 5, NotSerialized)
     {
         Local0 = UPHY (Arg1, USTP - PGSZ, WRIT)
         Local1 = Local0 + 8
         Local2 = Local0 + 656
+        If (Arg4)
+        {
+            Local5 = XADR (SBBF)
+            While (Arg4)
+            {
+                XSTQ (Local1, USTP - PGSZ + Local2 - Local0)
+                Local1 += 8
+                While (One)
+                {
+                    Local7 = XBYT (Local5)
+                    XSTB (Local2, Local7)
+                    Increment (Local2)
+                    Increment (Local5)
+                    If (!Local7) { Break }
+                }
+                Decrement (Arg4)
+            }
+            If (Arg2)
+            {
+                Local5 = URDQ (Arg0, Arg2)
+                If (Local5 >= USTP) { Return (Zero - 14) }
+                If (Local5) { Arg2 += 8 }
+            }
+        }
         Local3 = Arg2
         Local4 = Zero
         While (One)
@@ -4164,11 +4194,111 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (Zero)
     }
 
+    // "#!" scripts: the first line names an ELF interpreter and at most one
+    // argument. SBBF receives "interp\0[arg\0]script\0" for EXST to place
+    // ahead of argv[1..]; SBCT counts those strings.
+    Name (SBBF, Buffer (1536) {})
+    Name (SBCT, Zero)
+    Name (SBIV, Zero)
+
+    Method (SBOK, 1, NotSerialized)
+    {
+        If (XVWD (Arg0 + VNTY, Ones) != 8) { Return (Zero) }
+        If (XVWD (Arg0 + VNSZ, Ones) < 3) { Return (Zero) }
+        Return (ELWD (XVWD (Arg0 + VNDA, Ones), Zero, 2) == 0x2123)
+    }
+
+    Method (SBPR, 3, NotSerialized)
+    {
+        If (XVWD (Arg1 + VNTY, Ones) != 8) { Return (Zero - 13) } // EACCES
+        If (!SBOK (Arg1)) { Return (Zero - 8) } // ENOEXEC
+        Local0 = XVWD (Arg1 + VNDA, Ones)
+        Local1 = XVWD (Arg1 + VNSZ, Ones)
+        If (Local1 > 256) { Local1 = 256 }
+        Local2 = 2
+        While (Local2 < Local1)
+        {
+            Local3 = XBYT (Local0 + Local2)
+            If (Local3 != 0x20 && Local3 != 9) { Break }
+            Increment (Local2)
+        }
+        Local4 = XADR (SBBF)
+        Local5 = Zero
+        While (Local2 < Local1)
+        {
+            Local3 = XBYT (Local0 + Local2)
+            If (Local3 == 0x20 || Local3 == 9 || Local3 == 0x0A || !Local3) { Break }
+            XSTB (Local4 + Local5, Local3)
+            Increment (Local2)
+            Increment (Local5)
+        }
+        If (!Local5) { Return (Zero - 8) }
+        Local6 = Local5
+        XSTB (Local4 + Local5, Zero)
+        Increment (Local5)
+        SBCT = One
+        While (Local2 < Local1)
+        {
+            Local3 = XBYT (Local0 + Local2)
+            If (Local3 != 0x20 && Local3 != 9) { Break }
+            Increment (Local2)
+        }
+        Local7 = Local5
+        While (Local2 < Local1)
+        {
+            Local3 = XBYT (Local0 + Local2)
+            If (Local3 == 0x0A || !Local3) { Break }
+            XSTB (Local4 + Local5, Local3)
+            Increment (Local2)
+            Increment (Local5)
+        }
+        While (Local5 > Local7)
+        {
+            Local3 = XBYT (Local4 + Local5 - One)
+            If (Local3 != 0x20 && Local3 != 9 && Local3 != 0x0D) { Break }
+            Decrement (Local5)
+        }
+        If (Local5 > Local7)
+        {
+            XSTB (Local4 + Local5, Zero)
+            Increment (Local5)
+            SBCT = 2
+        }
+        Local3 = VROT
+        If (XBYT (Local4) != 0x2F) { Local3 = VCWD (Arg0) }
+        Local3 = VWAT (Local3, Local4, Local6, Arg0, Zero)
+        If (Local3 >= Zero - 4095) { Return (Local3) }
+        If (!VFEX (Local3)) { Return (Zero - 8) } // Nested interpreters are unsupported
+        SBIV = Local3
+        Local6 = Zero
+        While (One)
+        {
+            If (Local5 >= SizeOf (SBBF)) { Return (Zero - 36) }
+            If (Arg2 + Local6 >= USTP) { Return (Zero - 14) }
+            Local7 = UPHY (Arg0, Arg2 + Local6, Zero)
+            If (!Local7) { Return (Zero - 14) }
+            Local7 = XBYT (Local7)
+            XSTB (Local4 + Local5, Local7)
+            Increment (Local5)
+            Increment (Local6)
+            If (!Local7) { Break }
+        }
+        Increment (SBCT)
+        Return (Zero)
+    }
+
     Method (SYEX, 4, NotSerialized)
     {
         Local0 = UENT (Arg0, Arg1, 0xFFFFFF9C)
         If (Local0 >= Zero - 4095) { Return (Local0) }
-        If (!VFEX (Local0)) { Return (Zero - 13) }
+        SBCT = Zero
+        Local5 = Local0
+        If (!VFEX (Local0))
+        {
+            Local5 = SBPR (Arg0, Local0, Arg1)
+            If (Local5) { Return (Local5) }
+            Local5 = SBIV
+        }
 
         Local1 = STAL ()
         If (!Local1) { Return (Zero - 12) }
@@ -4180,9 +4310,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         XCLR (HHDO + Local2)
         XSTQ (Local1 + TSCR, Local2)
-        Local3 = ELLD (Local1, Local0)
+        Local3 = ELLD (Local1, Local5)
         Local4 = Zero - 8 // ENOEXEC
-        If (Local3) { Local4 = EXST (Arg0, Local1, Arg2, Arg3) }
+        If (Local3) { Local4 = EXST (Arg0, Local1, Arg2, Arg3, SBCT) }
         If (Local4)
         {
             SDEL (Local1)
@@ -5672,7 +5802,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                     XSTQ (Arg0 + TSCL, XVWD (Arg0 + TSCL, Ones) | (One << Local2))
                     Local3 = Zero
                 }
-                Else { Local3 = FDCL (Arg0 + TSFD + Local2 * 8) }
+                Else
+                {
+                    // Closing any descriptor drops the process's locks on that file.
+                    Local4 = UFDL (Arg0, Local2)
+                    If (Local4) { RLRL (RLKY (Local4), XVWD (Arg0 + TSPR, Ones)) }
+                    Local3 = FDCL (Arg0 + TSFD + Local2 * 8)
+                }
             }
         }
         ElseIf (Local1 == 4 || Local1 == 6) // stat or lstat
@@ -5741,6 +5877,31 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 Local3 = SYFR (Arg0, Local2 & 0xFFFFFFFF, XVWD (Local0 + 9 * 8, Ones),
                     XVWD (Local0 + 12 * 8, Ones), Local4)
+            }
+        }
+        ElseIf (Local1 == 18) // pwrite64
+        {
+            // Write at the given offset, then restore the description's offset.
+            Local4 = XVWD (Local0 + 5 * 8, Ones)
+            Local5 = UFDL (Arg0, Local2 & 0xFFFFFFFF)
+            If (Local4 >> 63) { Local3 = Zero - 22 }
+            ElseIf (SSTD (Arg0, Local2 & 0xFFFFFFFF)) { Local3 = Zero - 29 }
+            ElseIf (!Local5) { Local3 = Zero - 9 }
+            Else
+            {
+                Local6 = XVWD (Local5, Ones)
+                If (Local6 == XADR (SKND) || Local6 == KSND || Local6 == MSND)
+                {
+                    Local3 = Zero - 29 // ESPIPE
+                }
+                Else
+                {
+                    Local6 = XVWD (Local5 + 8, Ones)
+                    XSTQ (Local5 + 8, Local4)
+                    Local3 = SYWR (Arg0, Local2, XVWD (Local0 + 9 * 8, Ones),
+                        XVWD (Local0 + 12 * 8, Ones))
+                    XSTQ (Local5 + 8, Local6)
+                }
             }
         }
         ElseIf (Local1 == 19) // readv on open descriptions
@@ -5864,7 +6025,16 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         ElseIf (Local1 == 77) // ftruncate
         {
-            Local3 = MFSZ (UFDL (Arg0, Local2 & 0xFFFFFFFF), XVWD (Local0 + 9 * 8, Ones))
+            Local4 = UFDL (Arg0, Local2 & 0xFFFFFFFF)
+            Local3 = Zero - 9
+            If (Local4)
+            {
+                If (XVWD (Local4, Ones) == XADR (MFND))
+                {
+                    Local3 = MFSZ (Local4, XVWD (Local0 + 9 * 8, Ones))
+                }
+                Else { Local3 = FTRN (Local4, XVWD (Local0 + 9 * 8, Ones)) }
+            }
         }
         ElseIf (Local1 == 293) // pipe2
         {
@@ -5969,11 +6139,20 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 Local5 = XVWD (Local4, Ones)
                 If (Local5 != XADR (SKND) && XVWD (Local5 + VNFS, Ones))
                 {
-                    EXVL = XVWD (Local5 + VNFS, Ones)
-                    Local3 = Zero - 5
-                    If (EXSY ()) { Local3 = Zero }
+                    Local3 = EXWB (Local5)
+                    If (!Local3)
+                    {
+                        EXVL = XVWD (Local5 + VNFS, Ones)
+                        Local3 = Zero - 5
+                        If (EXSY ()) { Local3 = Zero }
+                    }
                 }
             }
+        }
+        ElseIf (Local1 == 162 || Local1 == 306) // sync, syncfs
+        {
+            EXWA ()
+            Local3 = Zero
         }
         ElseIf (Local1 == 79) // getcwd
         {
@@ -6316,6 +6495,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local0 = SQHD
         If (!Local0)
         {
+            If (EXDH) { EXPW () }
             // Publish idle under the queue lock. IF stays clear until
             // XWAI's sti/hlt, so an early IPI remains pending.
             Local5 = XIDX ()
@@ -6524,7 +6704,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (VNID, 64)
     Name (VNFS, 72)
     Name (VNFO, 80)
-    Name (VNSL, 384)
+    Name (VNDB, 384) // Dirty-page bitmap page of a delayed ext4 file, or zero
+    Name (VNDQ, 392) // Next node on the EXDH dirty list
+    Name (VNSL, 400)
 
     // Pack nodes into allocator pages and reuse detached ext4 nodes.
     Method (VNOD, 4, NotSerialized)
