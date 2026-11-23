@@ -126,6 +126,8 @@ int main(void)
     printf("lazy RWX ok\n");
 
     if (munmap(big, 1024 * MIB) || munmap(reserve, reserve_size)) { return fail("munmap"); }
+    // The pipe's ring buffer is kernel memory too; it is freed on the last close.
+    if (close(pipes[0]) || close(pipes[1])) { return fail("close pipe"); }
     long end = mem_free_kib();
     printf("MemFree start=%ld end=%ld kB\n", start, end);
     if (end < start - 128) { return fail("leak"); }

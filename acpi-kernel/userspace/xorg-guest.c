@@ -531,6 +531,12 @@ mouse_ready(int fd, int ready, void *data)
         return;
     DeviceIntPtr mouse = data;
     static const int button_map[] = {1, 3, 2};
+    // Pass QEMU's motion through 1:1. Xvfb's default acceleration slows small
+    // moves and doubles fast ones, which makes games (GLFW without raw input
+    // measures warped core motion) feel erratic. The device only has its
+    // valuators once it is initialised, so switch here rather than at setup.
+    if (mouse->valuator && mouse->valuator->accelScheme.number != PtrAccelNoOp)
+        InitPointerAccelerationScheme(mouse, PtrAccelNoOp);
     uint8_t packets[32][8];
     ssize_t bytes = read(fd, packets, sizeof(packets));
     if (bytes <= 0)

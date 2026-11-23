@@ -332,7 +332,10 @@
         Local1 = XVWD (Arg1 + 40, Ones)
         If (!(Local1 & 3)) { Return (Zero - 9) }
         If (!Arg3) { Return (Zero) }
-        If (Arg3 > 0x10000) { Arg3 = 0x10000 }
+        // Linux writes regular files whole up to MAX_RW_COUNT, and programs
+        // rely on it: Minecraft writes each screenshot PNG in one call and
+        // ignores a short count, which a 64 KiB cap here cut off.
+        If (Arg3 > 0x7FFFF000) { Arg3 = 0x7FFFF000 }
         If (!URNG (Arg0, Arg2, Arg3, Zero)) { Return (Zero - 14) }
         Local2 = XVWD (Arg1 + 8, Ones)
         Local3 = XVWD (Local0 + VNSZ, Ones)

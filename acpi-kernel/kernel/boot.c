@@ -121,7 +121,15 @@ _Static_assert(offsetof(struct acpi_cpu_local, user_cr3) == 88, "GS ABI");
 static struct acpi_cpu_local cpu_locals[ACPI_MAX_CPUS];
 static uint64_t cpu_count = 1;
 static volatile uint64_t secondary_cpus_online;
-static uint8_t scheduler_lock;
+// A ticket lock: CPUs take the scheduler lock in arrival order, so a CPU that
+// releases and re-acquires it cannot starve the others.
+static uint32_t scheduler_next_ticket;
+static uint32_t scheduler_owner_ticket;
+// Bumped under the lock whenever a kernel mapping is removed or replaced.
+// Each CPU flushes its TLB on acquire only when this has moved since it
+// last flushed, instead of on every acquire.
+static uint64_t kernel_mapping_generation;
+static uint64_t cpu_mapping_generation[ACPI_MAX_CPUS];
 static volatile uint32_t smp_release;
 static volatile uint64_t scheduler_timer_ticks;
 static volatile uint64_t scheduler_lapic_virtual;
@@ -157,21 +165,52 @@ static inline uint64_t profile_tsc(void)
     return ((uint64_t)hi << 32) | lo;
 }
 
+// TEMP segment profile: cycles spent holding the lock between consecutive
+// probe points (acquire, XKMK marks, release), keyed by call site.
+struct lock_segment { uint64_t from, to, cycles, count; };
+static struct lock_segment lock_segments[256];
+static uint64_t lock_mark_site, lock_mark_tsc;
+static void lock_segment_dump(void);
+
+static void lock_charge(uint64_t site, uint64_t now)
+{
+    uint64_t key = (lock_mark_site * 31 + site) >> 2;
+    for (unsigned i = 0; i < 256; ++i) {
+        struct lock_segment *seg = &lock_segments[(key + i) & 255];
+        if (!seg->count || (seg->from == lock_mark_site && seg->to == site)) {
+            seg->from = lock_mark_site;
+            seg->to = site;
+            seg->cycles += now - lock_mark_tsc;
+            seg->count++;
+            break;
+        }
+    }
+    lock_mark_site = site;
+    lock_mark_tsc = now;
+}
+
 static void scheduler_acquire(void)
 {
     uint64_t start = profile_tsc();
-    while (__atomic_test_and_set(&scheduler_lock, __ATOMIC_ACQUIRE))
+    uint32_t ticket = __atomic_fetch_add(&scheduler_next_ticket, 1, __ATOMIC_RELAXED);
+    while (__atomic_load_n(&scheduler_owner_ticket, __ATOMIC_ACQUIRE) != ticket)
         __asm__ volatile("pause" ::: "memory");
     uint64_t got = profile_tsc();
     __atomic_fetch_add(&lock_spin_total, got - start, __ATOMIC_RELAXED);
 
     // Other CPUs can recycle kernel mappings while this CPU is unlocked.
     // Task stacks and native task arguments remain mapped while in use.
-    uint64_t root;
-    __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=&r"(root) : : "memory");
+    struct acpi_cpu_local *local = current_cpu();
+    uint64_t *seen = &cpu_mapping_generation[local ? local->index : 0];
+    if (*seen != kernel_mapping_generation) {
+        uint64_t root;
+        __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=&r"(root) : : "memory");
+        *seen = kernel_mapping_generation;
+    }
     lock_profile[4] += profile_tsc() - got;
     lock_profile[1]++;
     lock_held_since = got;
+    lock_mark_tsc = got;
 }
 
 static void scheduler_release(void)
@@ -180,7 +219,14 @@ static void scheduler_release(void)
     lock_profile[0] += held;
     if (held > lock_profile[3])
         lock_profile[3] = held;
-    __atomic_clear(&scheduler_lock, __ATOMIC_RELEASE);
+    __atomic_store_n(&scheduler_owner_ticket, scheduler_owner_ticket + 1, __ATOMIC_RELEASE);
+}
+
+// Called with the lock held after a kernel mapping is removed or replaced.
+uint64_t acpi_kernel_mapping_changed(void)
+{
+    kernel_mapping_generation++;
+    return 0;
 }
 
 // Read (and, with bit 8, clear) a lock profile counter. Call with the lock held.
@@ -193,6 +239,10 @@ uint64_t acpi_lock_profile(uint64_t which)
             __atomic_fetch_sub(&lock_spin_total, value, __ATOMIC_RELAXED);
         return value;
     }
+    if (index == 5) {
+        lock_segment_dump();
+        return 0;
+    }
     if (index > 4)
         return 0;
     value = lock_profile[index];
@@ -203,6 +253,7 @@ uint64_t acpi_lock_profile(uint64_t which)
 
 uint64_t acpi_scheduler_unlock(void)
 {
+    lock_charge((uint64_t)__builtin_return_address(0), profile_tsc());
     scheduler_release();
     return 0;
 }
@@ -210,15 +261,25 @@ uint64_t acpi_scheduler_unlock(void)
 uint64_t acpi_scheduler_lock(void)
 {
     scheduler_acquire();
+    lock_mark_site = (uint64_t)__builtin_return_address(0);
     return 0;
 }
+
+uint64_t acpi_lock_mark(void)
+{
+    lock_charge((uint64_t)__builtin_return_address(0), profile_tsc());
+    return 0;
+}
+
 
 uint64_t acpi_schedule_step(void)
 {
     uint64_t result = 0;
     scheduler_acquire();
+    lock_mark_site = 1; // acpi_schedule_step
     if (kernel_context)
         (void)aml_SSTP(kernel_context, &result);
+    lock_charge(2, profile_tsc()); // acpi_schedule_step
     scheduler_release();
     return result;
 }
@@ -1339,4 +1400,26 @@ _Noreturn void _start(void)
     }
     for (;;)
         __asm__ volatile("cli; hlt");
+}
+
+// TEMP: print and clear the segment profile, largest first.
+static void lock_segment_dump(void)
+{
+    for (unsigned printed = 0; printed < 40; ++printed) {
+        struct lock_segment *best = 0;
+        for (unsigned i = 0; i < 256; ++i)
+            if (lock_segments[i].count && (!best || lock_segments[i].cycles > best->cycles))
+                best = &lock_segments[i];
+        if (!best)
+            break;
+        fault_serial_hex("KSEG from=", best->from);
+        fault_serial_hex(" to=", best->to);
+        fault_serial_hex(" cycles=", best->cycles);
+        fault_serial_hex(" n=", best->count);
+        fault_serial_write("\r\n");
+        best->count = 0;
+        best->cycles = 0;
+    }
+    for (unsigned i = 0; i < 256; ++i)
+        lock_segments[i] = (struct lock_segment){0};
 }

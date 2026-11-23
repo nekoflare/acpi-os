@@ -27,6 +27,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     External (XSUL, MethodObj)
     External (XSLK, MethodObj)
     External (XLKP, MethodObj)
+    External (XKGN, MethodObj)
+    External (XKMK, MethodObj) // TEMP lock segment probe
     External (XMSR, MethodObj)
     External (XWAI, MethodObj)
     External (XRUN, MethodObj)
@@ -143,7 +145,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (FBSW, Zero)
     Name (FBVA, 0xFFFFFF0020000000)
     Name (FBYT, Zero) // Rows between scanout pages, including alignment padding
-    Name (FBPG, Zero) // Scanout page, with page zero reserved for the console
+    Name (FBPG, Zero) // Scanout slot (1 or 2) the owner last flipped to, zero before flipping
+    Name (FBPB, Zero) // VRAM page of slot 1: one when page zero can stay the console's
     Name (FBOW, Zero) // Open file description owning the visible desktop
     Name (FBCK, Zero) // Probe the display only once
     Name (FBRM, 64)
@@ -381,6 +384,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Method (FPUT, 1, NotSerialized)
     {
         If (!FBAD) { Return (Zero) }
+        // A client that writes or flips the framebuffer owns the screen until
+        // it closes it; console text then goes to the serial port only.
+        If (FBOW) { Return (Zero) }
         If (FANS (Arg0)) { Return (One) }
         If (Arg0 == 0x0D)
         {
@@ -1266,9 +1272,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (Arg0) { LREG (0xB0, Zero) }
         If (Local0) { KWAK () }
         // A partial PS/2 mouse packet cannot make a descriptor readable.
-        If (Arg0 == KBVC || Local1 != MSTL || (Arg0 == LAVC && XIDX () == Zero))
+        If (Arg0 == KBVC || Local1 != MSTL) { PWAK (One) }
+        ElseIf (Arg0 == LAVC && XIDX () == Zero)
         {
-            PWAK ()
+            // Readiness changes wake pollers directly; ticks only expire
+            // deadlines, with a full recheck every 100 ms as a safety net.
+            PWAK (!(TICK % 10))
         }
     }
 
@@ -1548,6 +1557,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
 
         XINV (Arg0)
+        If (Arg0 >> 63) { XKGN () } // The leaf may have replaced another mapping
         Return (One)
     }
 
@@ -1666,6 +1676,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         XVWD (Local0, Zero)
         If (Arg1 == 39 && (Arg2 >> 63)) { Increment (KPGE) }
         XINV (Arg2)
+        If (Arg2 >> 63) { XKGN () } // Other CPUs flush on their next lock
         If (Arg1 != 12 || Arg3) { PDEL (Local2) }
         Return (One)
     }
@@ -3497,6 +3508,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (EXWR (Local1)) { Return (EXWC (Arg0, Local0, Arg2, Arg3)) }
             If (!FBAD || FBPP != 4) { Return (Zero - 19) } // ENODEV
             If (XVWD (Local1 + VNTY, Ones) != 12) { Return (Zero - 9) }
+            If (!FBOW) { FBOW = Local0 } // The writer owns the screen; see FPUT
             Local2 = Arg3
             If (Local2 > PGSZ) { Local2 = PGSZ }
             Local3 = XVWD (Local0 + 8, Ones)
@@ -4412,9 +4424,14 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         While ((Local3 * FBPT) & (PGSZ - One)) { Increment (Local3) }
         Local4 = Local3 * FBPT
         Local5 = VBRD (0xA) << 16
-        If (Local3 > 0x7FFF || Local4 * 2 + FBSZ > Local5) { Return (Zero) }
+        If (Local3 > 0x7FFF || Local4 + FBSZ > Local5) { Return (Zero) }
+        // Flip between pages one and two when they fit, so page zero keeps the
+        // console. Otherwise (1920x1080 in 16 MiB) flip between pages zero and
+        // one: the console stops drawing while the client owns the screen.
+        FBPB = One
+        If (Local4 * 2 + FBSZ > Local5) { FBPB = Zero }
 
-        Local2 = (Local2 & ~0xF) + Local4
+        Local2 = (Local2 & ~0xF) + Local4 * FBPB
         Local5 = Local4 + FBSZ
         Local7 = FBCA ()
         Local6 = Zero
@@ -4560,7 +4577,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
         // The visible page already has this scanout offset.
         If (Arg3 == 3) { Return (Zero) }
-        Local2 = Local0 * FBYT
+        Local2 = (Local0 + FBPB - One) * FBYT
         VBIX = 9
         VBDT = Local2
         If (VBDT != Local2)
@@ -5466,6 +5483,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         SPNM (" cr3_us=0x", XLKP (0x104) / CTMH)
         SPUT (0x0D)
         SPUT (0x0A)
+        XLKP (5)
+        SPUT (0x0D)
+        SPUT (0x0A)
         Local1 = Zero
         While (Local1 < 512)
         {
@@ -6070,8 +6090,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (Local1)
     }
 
-    // Recheck after timer and keyboard interrupts while running in the kernel root.
-    Method (PWAK, 0, NotSerialized)
+    // Recheck poll and epoll waiters after a readiness change (Arg0 set), or
+    // only those whose deadline has passed.
+    Method (PWAK, 1, NotSerialized)
     {
         Local0 = Zero
         Local1 = PLHD
@@ -6080,6 +6101,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         While (Local1)
         {
             Local2 = XVWD (Local1, Ones)
+            If (!Arg0 && Local5 < XVWD (Local1 + TSDL, Ones))
+            {
+                Local0 = Local1
+                Local1 = Local2
+                Continue
+            }
             Local3 = XVWD (Local1 + TSFR, Ones)
             Local6 = XVWD (Local3 + 14 * 8, Ones) // Syscall number while blocked
             If (Local6 == 232 || Local6 == 281)
@@ -6143,6 +6170,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (EPND, Buffer (432) {}) // epoll vnode identity; VNSL bytes, see MFND
     Name (EPEN, 48) // Interest array, allocated on first EPOLL_CTL_ADD
     Name (EPMX, 1024)
+    Name (EPHW, 56) // Entries in use are all below this index
     Name (EPEV, Buffer (12) {}) // Packed Linux x86-64 struct epoll_event
 
     Method (EPCR, 2, NotSerialized)
@@ -6210,10 +6238,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (!Local2) { Return (Zero - 12) }
             XSTQ (Local0 + EPEN, Local2)
         }
+        Arg1 = Local0 // The epoll description; the descriptor is no longer needed.
         Local5 = Ones // Matching entry
         Local6 = Ones // First free entry
         Local7 = Zero
-        While (Local7 < EPMX)
+        While (Local7 < XVWD (Arg1 + EPHW, Ones))
         {
             Local0 = Local2 + Local7 * 32
             If (!XVWD (Local0, Ones))
@@ -6229,7 +6258,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (Arg2 == One)
         {
             If (Local5 != Ones) { Return (Zero - 17) } // EEXIST
-            If (Local6 == Ones) { Return (Zero - 28) } // ENOSPC
+            If (Local6 == Ones)
+            {
+                Local7 = XVWD (Arg1 + EPHW, Ones)
+                If (Local7 >= EPMX) { Return (Zero - 28) } // ENOSPC
+                Local6 = Local2 + Local7 * 32
+                XSTQ (Arg1 + EPHW, Local7 + One)
+            }
             XSTQ (Local6, Arg3 + One)
             XSTQ (Local6 + 8, Local3)
             XSTQ (Local6 + 16, Local4)
@@ -6241,6 +6276,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (Arg2 == 2)
         {
             XMOV (Local5, XADR (EXZR), 32)
+            // Trailing free entries no longer need scanning.
+            Local7 = XVWD (Arg1 + EPHW, Ones)
+            While (Local7 && !XVWD (Local2 + (Local7 - One) * 32, Ones)) { Decrement (Local7) }
+            XSTQ (Arg1 + EPHW, Local7)
             Return (Zero)
         }
         XSTQ (Local5 + 8, Local3)
@@ -6257,7 +6296,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (!Local0) { Return (Zero) }
         Local1 = Zero // Events reported
         Local2 = Zero
-        While (Local2 < EPMX && Local1 < Arg3)
+        Local7 = XVWD (Arg1 + EPHW, Ones)
+        While (Local2 < Local7 && Local1 < Arg3)
         {
             Local3 = Local0 + Local2 * 32
             Local4 = XVWD (Local3, Ones)
@@ -6398,8 +6438,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (SKRT, 128) // Receive ring tail
     Name (SKNM, 136) // sockaddr_un
     Name (SKPI, 144) // Anonymous pipe endpoint: 1 read end, 2 write end
-    Name (SKRX, 256) // Receive ring data
-    Name (SKMS, 2047) // One ring slot remains empty.
+    Name (SKRB, 2376) // Receive ring data, SKMS + 1 bytes allocated on the first write
+    Name (SKMS, 0x1FFFF) // Ring positions wrap at 128 KiB; one slot remains empty.
     Name (STTY, 2304) // Terminal stream role: 1 master, 2 slave
     Name (STTM, 2312) // Slave's Linux x86-64 termios (36 bytes)
     Name (STWS, 2352) // Slave's struct winsize (8 bytes)
@@ -6524,6 +6564,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             SKAF (Local0)
             Local0 = Local1
         }
+        Local0 = XVWD (Arg0 + SKRB, Ones)
+        If (Local0) { VUNM (Local0, SKMS + One) }
         PDEL (Arg0 - HHDO)
     }
 
@@ -6837,13 +6879,23 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Return (Ones)
         }
         If (Local4 > Arg3) { Local4 = Arg3 }
+        Local7 = XVWD (Local0 + SKRB, Ones)
+        If (!Local7)
+        {
+            // Only a writer reaches here with an empty ring.
+            Local7 = WRIT
+            If (XNXE ()) { Local7 |= NOEX }
+            Local7 = VALL (SKMS + One, Local7)
+            If (!Local7) { Return (Zero - 12) }
+            XSTQ (Local0 + SKRB, Local7)
+        }
         Local6 = SKMS + One - Local5
         If (Local6 > Local4) { Local6 = Local4 }
         If (Arg4 & One)
         {
             If (!URNG (Arg0, Arg2, Local4, Zero)) { Return (Zero - 14) }
-            If (!UCPY (Arg0, Local0 + SKRX + Local5, Arg2, Local6) ||
-                !UCPY (Arg0, Local0 + SKRX, Arg2 + Local6, Local4 - Local6))
+            If (!UCPY (Arg0, Local7 + Local5, Arg2, Local6) ||
+                !UCPY (Arg0, Local7, Arg2 + Local6, Local4 - Local6))
             {
                 Return (Zero - 14)
             }
@@ -6852,8 +6904,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Else
         {
             If (!URNG (Arg0, Arg2, Local4, WRIT)) { Return (Zero - 14) }
-            If (!UCOP (Arg0, Arg2, Local0 + SKRX + Local5, Local6) ||
-                !UCOP (Arg0, Arg2 + Local6, Local0 + SKRX, Local4 - Local6))
+            If (!UCOP (Arg0, Arg2, Local7 + Local5, Local6) ||
+                !UCOP (Arg0, Arg2 + Local6, Local7, Local4 - Local6))
             {
                 Return (Zero - 14)
             }
@@ -7219,7 +7271,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 SKCH = Zero
                 SKWK ()
             }
-            PWAK ()
+            PWAK (One)
         }
     }
 
@@ -8930,7 +8982,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                     PREX (Local0, Zero, Zero)
                     Return (Zero)
                 }
+                XKMK ()
                 Local5 = SGDL (Local0, Local3)
+                XKMK ()
                 If (Local5)
                 {
                     PREX (Local0, Local5, One)
@@ -8949,6 +9003,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 XMSR (0xC0000100, XVWD (Local0 + TSFS, Ones))
             }
             Increment (SACT)
+            XKMK ()
             XSUL ()
             Local6 = XTSC ()
             Local1 = XRUN (Local3, Local0 + TSFR, Local2, Local4, Local0 + TSFX)
@@ -8962,7 +9017,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 KPTH (Local0, 24, XTSC () - Local7)
                 KPTH (Local0, 8, Local7 - Local6)
             }
+            XKMK ()
             If (Local4) { PCAC (Local0, Local7 - Local6, Zero) }
+            XKMK ()
             Decrement (SACT)
             If (Local1 == UFEV && !Local4)
             {
@@ -8979,7 +9036,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 // CR2 is stored just below the saved frame for this event.
                 Local6 = XTSC ()
+                XKMK ()
                 Local5 = UFLT (Local0, XVWD (XVWD (Local0 + TSFR, Ones) - 8, Ones))
+                XKMK ()
                 If (KPRF)
                 {
                     Increment (KPFN)
@@ -9004,17 +9063,22 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 }
                 Local7 = XVWD (XVWD (Local0 + TSFR, Ones) + 14 * 8, Ones) // RAX, before the frame can go away
                 Local6 = XTSC ()
+                XKMK ()
                 Local5 = SYSC (Local0)
+                XKMK ()
                 If (KPRF)
                 {
                     KPSY (Local7, XTSC () - Local6)
                     If (Local5 != 2) { KPTH (Local0, 16, XTSC () - Local6) }
                     KPDM ()
                 }
+                XKMK ()
                 Local7 = Local0
                 If (Local5 == 2) { Local7 = Zero } // The task exited.
                 PCAC (Local7, XTSC () - Local6, One)
+                XKMK ()
                 SKNT ()
+                XKMK ()
                 If (Local5 == 2) { Return (Zero) }
                 If (Local5)
                 {

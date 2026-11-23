@@ -1456,6 +1456,8 @@ error:
             "XSUL" => Some(("acpi_scheduler_unlock", 0)),
             "XSLK" => Some(("acpi_scheduler_lock", 0)),
             "XLKP" => Some(("acpi_lock_profile", 1)),
+            "XKGN" => Some(("acpi_kernel_mapping_changed", 0)),
+            "XKMK" => Some(("acpi_lock_mark", 0)),
             "XMSR" => Some(("acpi_apic_msr", 2)),
             "XWAI" => Some(("acpi_wait_irq", 1)),
             "XRUN" => Some(("acpi_run_task", 5)),

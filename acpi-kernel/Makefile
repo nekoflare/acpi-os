@@ -220,12 +220,14 @@ XORG_JDK_TOOLS := java javac jar jshell jlink keytool
 XORG_JDK_FILES := $(XORG_JDK_HOME)=$(XORG_BUILD)/openjdk usr/lib/libasound.so.2=$(XORG_BUILD)/libasound.so.2 \
 	$(foreach tool,$(XORG_JDK_TOOLS),'bin/$(tool)->/$(XORG_JDK_HOME)/bin/$(tool)')
 # OpenGL for X clients (F1): Mesa's libGL with llvmpipe does GLX itself over
-# Xlib, so Xvfb needs no GLX extension. GLFW (LWJGL) dlopens libX11 and
-# libXrandr, so these are the shared builds; libGL needs the C++ runtime and
-# LWJGL's libopenal also libatomic.
+# Xlib, so Xvfb needs no GLX extension. GLFW (LWJGL) dlopens libX11,
+# libXrandr, libXcursor (for its hidden cursor) and libXi (raw mouse motion), so these are the shared
+# builds; libGL needs the C++ runtime and LWJGL's libopenal also libatomic.
 XORG_GL_LIBS := mesa:libGL.so.1 libx11-shared:libX11.so.6 libxcb-shared:libxcb.so.1 \
 	libxau-shared:libXau.so.6 libxdmcp-shared:libXdmcp.so.6 libxext-shared:libXext.so.6 \
-	libxrender-shared:libXrender.so.1 libxrandr:libXrandr.so.2
+	libxrender-shared:libXrender.so.1 libxrandr:libXrandr.so.2 \
+	libxfixes-shared:libXfixes.so.3 libxcursor-shared:libXcursor.so.1 \
+	libxi-shared:libXi.so.6
 XORG_CXX_RUNTIME := libstdc++.so.6 libgcc_s.so.1 libatomic.so.1
 XORG_GL_FILES := $(foreach lib,$(XORG_GL_LIBS),usr/lib/$(lastword $(subst :, ,$(lib)))=$(XORG_BUILD)/gl/$(lastword $(subst :, ,$(lib)))) \
 	$(foreach lib,$(XORG_CXX_RUNTIME),usr/lib/$(lib)=$(XORG_BUILD)/gl/$(lib))
@@ -352,6 +354,14 @@ XORG_FONT := $(XORG_DESKTOP_ASSETS)/dwm-font.ttf
 XORG_DISK_CONFIG := config/limine-xorg-disk.conf
 XORG_ACCEL ?= $(if $(wildcard /dev/kvm),kvm,tcg)
 XORG_CPU ?= $(if $(filter kvm,$(XORG_ACCEL)),$(or $(QEMU_CPU),host),max)
+# QEMU window, for example XORG_DISPLAY=sdl: on Wayland, SDL locks the mouse
+# while it is captured (click in the window; Ctrl+Alt+G releases it), so the
+# guest pointer does not stop where the host pointer meets the screen edge.
+# Empty keeps QEMU's default window.
+XORG_DISPLAY ?=
+# QEMU VGA memory in MiB, for example XORG_VGAMEM=256; empty keeps the default
+# 16, which flips 1920x1080 between two pages.
+XORG_VGAMEM ?=
 
 ifneq ($(DWM),1)
 ifeq ($(XORG_DESKTOP_ASSETS),$(DWM_BUILD))
@@ -392,6 +402,8 @@ run-xorg-uefi: xorg-desktop-image
 	@echo "X.Org VM: accel=$(XORG_ACCEL) cpu=$(XORG_CPU) vcpus=$(SMP_CPUS)"
 	@echo "X.Org serial log: $(XORG_DESKTOP_BUILD)/serial.log"
 	flock -n "$(XORG_DISK).lock" $(QEMU) -m 8G -accel $(XORG_ACCEL) -cpu $(XORG_CPU) -smp $(SMP_CPUS) -monitor none -no-reboot \
+		$(if $(XORG_DISPLAY),-display $(XORG_DISPLAY)) \
+		$(if $(XORG_VGAMEM),-global VGA.vgamem_mb=$(XORG_VGAMEM)) \
 		-chardev stdio,id=serial,logfile="$(XORG_DESKTOP_BUILD)/serial.log",logappend=off -serial chardev:serial \
 		-drive if=pflash,format=raw,readonly=on,file="$(OVMF)" \
 		-drive if=none,id=system,format=raw,file="$(XORG_DISK)" \

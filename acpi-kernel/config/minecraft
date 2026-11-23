@@ -4,6 +4,7 @@
 # (/opt/lwjgl); the natives from the lwjgl* recipes. uname says "ASL kernel",
 # which LWJGL and Minecraft do not know, hence os.name.
 #   minecraft [name]      plays as <name> (default Player); worlds go to /minecraft
+# It starts fullscreen; F11 switches to a window and back.
 name="${1:-Player}"
 game="${MINECRAFT_DIR:-/minecraft}"
 mkdir -p "$game"
@@ -16,4 +17,4 @@ exec java -Xmx2G -Dos.name=Linux -Dorg.lwjgl.librarypath=/usr/lib/lwjgl \
     -cp '/opt/minecraft/client.jar:/opt/minecraft/libraries/*:/opt/lwjgl/*' \
     net.minecraft.client.main.Main --username "$name" --uuid "$uuid" \
     --accessToken 0 --userType legacy --version 1.20.1 --versionType release \
-    --gameDir "$game" --assetsDir /opt/minecraft/assets --assetIndex 5
+    --gameDir "$game" --assetsDir /opt/minecraft/assets --assetIndex 5 --fullscreen

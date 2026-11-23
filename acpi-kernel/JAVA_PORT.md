@@ -215,3 +215,45 @@ serial log.
 
       JNA and oshi load. Packing the 3,600 new files into the desktop
       image took about 3 minutes the first time.
+
+## Phase G: performance
+
+In-world, Minecraft went from about 1 FPS to about 11 FPS (test settings,
+854x480) and about 47 FPS on the desktop with low settings:
+- a vDSO for `clock_gettime`;
+- 64 KiB fault-around for lazy anonymous memory;
+- 128 KiB socket and pipe buffers instead of 2 KB, so a frame reaches
+  Xorg in about 13 transfers instead of about 800;
+- tick-driven poll rescans limited to deadlines;
+- epoll scans stop at the last used entry;
+- a ticket scheduler lock;
+- a TLB flush on lock acquire only after a kernel mapping changes.
+
+The render thread now spends about 67% of its time in user mode, 17% in
+the kernel and 4% waiting for the scheduler lock. Next steps, in the
+recommended order:
+
+- [ ] G1. Clean up: remove the TEMP profiling.
+      - `KPRF`/`KPTT`/`KPTH`/`KPDM`/`KPSY` and their hooks in
+        `kernel.asl`.
+      - The `XLKP`/`XKMK` lock profiler in `boot.c`, `kernel.asl` and
+        `src/llvm.rs`.
+      - `GALLIUM_HUD` in `userspace/jdk-tests/minecraft.c`.
+      - Decide what to keep of the scratch `minecraft-world` test.
+      Rerun the suite, then commit. The probes run under the lock on
+      every syscall and fault, so this alone should help a little.
+- [ ] G2. Page faults and `munmap`.
+      - About 12k faults/s at about 9 us each, and 780 munmaps/s at
+        about 62 us each, which is most of the render thread's kernel
+        time.
+      - Probably per-frame mmap/munmap churn from malloc in Mesa.
+      - Look at the synchronous TLB-shootdown IPIs done under the lock,
+        and at how much fault-around zeroes for pages that are unmapped
+        soon after.
+- [ ] G3. Scheduler stage 2, then stage 3.
+      - Stage 2: per-CPU run queues and a futex fast path.
+      - Stage 3: split the global lock by subsystem (memory, sockets,
+        VFS).
+      - The expected gain is small now: lock wait is about 4% of the
+        render thread. Going idle and waking (`SSTP` entry, `TACK`)
+        are about 17% of lock hold time.
