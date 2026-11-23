@@ -1,0 +1,39 @@
+version=3.3.1
+revision=1
+cross_compile=yes
+tarball_url="https://github.com/LWJGL/lwjgl3/archive/refs/tags/3.3.1.tar.gz"
+tarball_sha256=bcb4da2014cee86b3cb24fde3fcf3fcc600957bac62ed0d12ba997050e0e34b9
+builddeps="musl-cxx openjdk libffi"
+deps="musl-runtime lwjgl-glfw lwjgl-openal lwjgl-jemalloc"
+
+# LWJGL 3.3.1 JNI libraries for Minecraft 1.20.1: core, opengl, stb and
+# tinyfd, in /usr/lib/lwjgl (pass -Dorg.lwjgl.librarypath=/usr/lib/lwjgl).
+# The generated C sources are in the tarball, so the Ant/Kotlin generator is
+# not needed; the flags follow config/linux/build.xml. Core links the static
+# libffi; LWJGL's bundled ffi.h matches its ffi_cif and closure layout.
+# The Java classes come from the Maven jars (scripts/fetch-lwjgl.sh).
+build() {
+    local cc="$sysroot/opt/acpi-musl-cxx/bin/x86_64-linux-gcc"
+    local m="$source_dir/modules/lwjgl" jdk="$sysroot/usr/lib/jvm/java-21-openjdk/include"
+    local core="$m/core/src/main/c"
+    local flags="-O2 $APP_CPU_FLAGS -fPIC -pthread -DNDEBUG -DLWJGL_LINUX -DLWJGL_x64
+        -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -I$jdk -I$jdk/linux -I$core -I$core/linux"
+    local link="-shared -Wl,--no-undefined -Wl,-z,noexecstack
+        -Wl,--version-script=$source_dir/config/linux/version.script"
+    "$cc" $flags $link -I"$core/libffi" -I"$core/libffi/x86" -DX86_64 \
+        -I"$core/linux/liburing" -I"$core/linux/liburing/include" -DCONFIG_HAVE_MEMFD_CREATE \
+        "$core"/linux/liburing/*.c "$core"/*.c "$m"/core/src/generated/c/*.c \
+        "$m"/core/src/generated/c/linux/*.c "$sysroot/usr/lib/libffi.a" -ldl -o liblwjgl.so
+    "$cc" $flags $link -I"$m/opengl/src/main/c" \
+        $(ls "$m"/opengl/src/generated/c/*.c | grep -v WGL) -o liblwjgl_opengl.so
+    "$cc" $flags $link -isystem "$m/stb/src/main/c" "$m"/stb/src/generated/c/*.c -lm \
+        -o liblwjgl_stb.so
+    "$cc" $flags $link -I"$m/tinyfd/src/main/c" "$m"/tinyfd/src/main/c/*.c \
+        "$m"/tinyfd/src/generated/c/*.c -o liblwjgl_tinyfd.so
+}
+package() {
+    mkdir -p "$dest_dir/usr/lib/lwjgl"
+    install -m755 liblwjgl.so liblwjgl_opengl.so liblwjgl_stb.so liblwjgl_tinyfd.so \
+        "$dest_dir/usr/lib/lwjgl/"
+    strip --strip-unneeded "$dest_dir"/usr/lib/lwjgl/*.so
+}

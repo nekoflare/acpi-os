@@ -1,0 +1,16 @@
+version=1.2.5
+revision=1
+cross_compile=yes
+builddeps=musl-cxx
+
+# The dynamic linker and C++ runtime from the musl toolchain, for programs it
+# links dynamically (OpenJDK). Its libc.so is musl 1.2.5 and doubles as
+# /lib/ld-musl-x86_64.so.1.
+package() {
+    local lib="$sysroot/opt/acpi-musl-cxx/x86_64-buildroot-linux-musl/sysroot/lib"
+    install -Dm755 "$lib/libc.so" "$dest_dir/lib/ld-musl-x86_64.so.1"
+    local lib64="$sysroot/opt/acpi-musl-cxx/x86_64-buildroot-linux-musl/lib64"
+    cp -L "$lib/libgcc_s.so.1" "$lib64/libstdc++.so.6" "$lib64/libatomic.so.1" "$dest_dir/lib/"
+    strip --strip-debug "$dest_dir/lib/"*
+    ln -s ld-musl-x86_64.so.1 "$dest_dir/lib/libc.musl-x86_64.so.1"
+}

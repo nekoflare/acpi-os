@@ -1,0 +1,35 @@
+version=3.3.1
+revision=1
+cross_compile=yes
+tarball_url="https://github.com/LWJGL-CI/openal-soft/archive/ae4eacf147e2c2340cc4e02a790df04c793ed0a9.tar.gz"
+tarball_sha256=d3e1e9bdd7dcc9c67a73f756f415f931245895054be688b735c6388e0d7eec05
+builddeps=musl-cxx
+deps=musl-runtime
+imagedeps="cmake ninja-build"
+
+# libopenal.so for LWJGL 3.3.1: OpenAL Soft 1.21.1 from the LWJGL-CI fork at
+# the commit LWJGL's natives-linux jar was built from. The guest has no sound
+# card, so only the Null (default) and WaveFile backends are built.
+configure() {
+    local tool="$sysroot/opt/acpi-musl-cxx/bin/x86_64-linux"
+    cmake -S "$source_dir" -B obj -G Ninja \
+        -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=x86_64 \
+        -DCMAKE_C_COMPILER="$tool-gcc" -DCMAKE_CXX_COMPILER="$tool-g++" \
+        -DCMAKE_C_FLAGS="$APP_CPU_FLAGS" -DCMAKE_CXX_FLAGS="$APP_CPU_FLAGS" \
+        -DCMAKE_FIND_ROOT_PATH="$sysroot" -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+        -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DALSOFT_UTILS=OFF -DALSOFT_EXAMPLES=OFF -DALSOFT_INSTALL_CONFIG=OFF \
+        -DALSOFT_INSTALL_HRTF_DATA=OFF -DALSOFT_INSTALL_AMBDEC_PRESETS=OFF \
+        -DALSOFT_UPDATE_BUILD_VERSION=OFF \
+        -DALSOFT_BACKEND_ALSA=OFF -DALSOFT_BACKEND_OSS=OFF -DALSOFT_BACKEND_SOLARIS=OFF \
+        -DALSOFT_BACKEND_SNDIO=OFF -DALSOFT_BACKEND_PORTAUDIO=OFF \
+        -DALSOFT_BACKEND_PULSEAUDIO=OFF -DALSOFT_BACKEND_JACK=OFF \
+        -DALSOFT_BACKEND_SDL2=OFF -DALSOFT_BACKEND_WAVE=ON
+}
+build() { cmake --build obj -j"$parallelism"; }
+package() {
+    install -Dm755 obj/libopenal.so.1.21.1 "$dest_dir/usr/lib/lwjgl/libopenal.so"
+    strip --strip-unneeded "$dest_dir/usr/lib/lwjgl/libopenal.so"
+}

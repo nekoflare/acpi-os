@@ -1,0 +1,28 @@
+version=3.3.1
+revision=1
+cross_compile=yes
+tarball_url="https://github.com/LWJGL-CI/glfw/archive/97da62a027794d9ff0f4512268cb9a73a8fb5073.tar.gz"
+tarball_sha256=768f5e36ee364c3968ff4f7e0f4776357e609e1349952f49d3e7308c5a7ac4c7
+builddeps="musl-cxx xorgproto libx11 libxext libxrender libxfixes libxrandr libxi xcursor libxinerama"
+deps="musl-runtime"
+
+# libglfw.so for LWJGL 3.3.1, from the LWJGL-CI GLFW fork (3.4 development)
+# at the commit LWJGL's natives-linux jar was built from. X11 only. GLFW
+# dlopens libX11 and its extensions at run time, so only headers are needed;
+# the sources are compiled directly instead of through CMake.
+build() {
+    local cc="$sysroot/opt/acpi-musl-cxx/bin/x86_64-linux-gcc" src="$source_dir/src" f
+    local files=
+    for f in context init input monitor platform vulkan window egl_context osmesa_context \
+        null_init null_monitor null_window null_joystick posix_module posix_time \
+        posix_thread x11_init x11_monitor x11_window xkb_unicode glx_context linux_joystick; do
+        files="$files $src/$f.c"
+    done
+    "$cc" -shared -fPIC -O2 $APP_CPU_FLAGS -D_GLFW_X11 -D_DEFAULT_SOURCE \
+        -I"$sysroot/usr/include" -I"$source_dir/include" $files -pthread -lm \
+        -Wl,--no-undefined -Wl,-z,noexecstack -Wl,-soname,libglfw.so -o libglfw.so
+}
+package() {
+    install -Dm755 libglfw.so "$dest_dir/usr/lib/lwjgl/libglfw.so"
+    strip --strip-unneeded "$dest_dir/usr/lib/lwjgl/libglfw.so"
+}

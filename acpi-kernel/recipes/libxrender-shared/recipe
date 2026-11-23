@@ -1,0 +1,34 @@
+from_source=libxrender
+revision=1
+cross_compile=yes
+builddeps="musl-cxx libxrender libx11-shared libxcb-shared libxau-shared libxdmcp-shared"
+
+# Shared libXrender for dynamically linked X clients. The static package
+# supplies headers and pkg-config files; this one adds only the shared
+# libraries.
+x11_shared() {
+    export PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH"
+    export PKG_CONFIG_LIBDIR="$sysroot/usr/lib/pkgconfig:$sysroot/usr/share/pkgconfig"
+    export PKG_CONFIG_SYSROOT_DIR="$sysroot"
+    # Link against the shared X libraries only: libtool would take the
+    # static packages' .la files and pull non-PIC archives in.
+    rm -rf shlib
+    mkdir shlib
+    ln -s "$sysroot"/usr/lib/*.so* shlib/ 2>/dev/null || true
+}
+configure() {
+    x11_shared
+    "$source_dir/configure" --host=x86_64-buildroot-linux-musl --prefix=/usr --libdir=/usr/lib \
+        --enable-shared --disable-static --disable-malloc0returnsnull CFLAGS="-O2 $APP_CPU_FLAGS" \
+        LDFLAGS="-L$PWD/shlib -Wl,-rpath-link,$PWD/shlib"
+}
+build() { x11_shared; make -j"$parallelism"; }
+package() {
+    # Copy the libraries libtool built instead of running "make install": its
+    # install-time relink with DESTDIR adds -L/usr/lib, which the cross
+    # compiler rejects as unsafe.
+    mkdir -p "$dest_dir/usr/lib"
+    find . -path ./stage -prune -o -path '*/.libs/*.so*' -print | while read -r f; do
+        cp -P "$f" "$dest_dir/usr/lib/"
+    done
+}

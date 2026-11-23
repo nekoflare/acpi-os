@@ -187,8 +187,8 @@ $(eval $(call jinx_artifact,$(XORG_LS),busybox-ls,usr/bin/busybox-ls))
 XORG_DISK := $(XORG_DESKTOP_BUILD)/acpi-xorg.img
 XORG_APPS := $(XORG_BUILD)/busybox $(XORG_BUILD)/xorg-probe $(XORG_BUILD)/Xvfb \
 	$(XORG_DESKTOP_ASSETS)/dwm $(XORG_DESKTOP_ASSETS)/xeyes $(XORG_BUILD)/picom $(XORG_BUILD)/xsetroot $(XORG_BUILD)/xwallpaper $(XORG_BUILD)/xdpyinfo $(XORG_BUILD)/x11perf $(XORG_BUILD)/xcalc $(XORG_BUILD)/grep $(XORG_BUILD)/sed $(XORG_BUILD)/awk $(XORG_BUILD)/tail $(XORG_BUILD)/head $(XORG_BUILD)/find $(XORG_BUILD)/xargs $(XORG_BUILD)/sort $(XORG_BUILD)/uniq $(XORG_BUILD)/cut $(XORG_BUILD)/tr $(XORG_BUILD)/wc $(XORG_BUILD)/tee $(XORG_BUILD)/diff $(XORG_BUILD)/patch $(XORG_BUILD)/file $(XORG_BUILD)/strings $(XORG_BUILD)/stat $(XORG_BUILD)/readlink $(XORG_BUILD)/realpath $(XORG_BUILD)/lspci $(XORG_BUILD)/lscpu $(XORG_BUILD)/clear $(XORG_BUILD)/tar $(XORG_BUILD)/gzip $(XORG_BUILD)/xz $(XORG_BUILD)/lua $(XORG_BUILD)/sqlite3 $(XORG_BUILD)/cmatrix $(XORG_BUILD)/nyancat $(XORG_BUILD)/python3.15 $(XORG_BUILD)/python3 $(XORG_BUILD)/python $(XORG_BUILD)/date $(XORG_BUILD)/sleep $(XORG_BUILD)/conky $(XORG_BUILD)/btop $(XORG_BUILD)/git $(XORG_BUILD)/less $(XORG_BUILD)/make $(XORG_BUILD)/nproc $(XORG_BUILD)/sh $(ST_BUILD)/st \
-	$(XORG_BUILD)/nsxiv $(XORG_BUILD)/nano $(XORG_BUILD)/vim $(XORG_BUILD)/iasl $(XORG_BUILD)/acpixtract $(XORG_BUILD)/aac $(XORG_BUILD)/clang $(XORG_BUILD)/ld.lld $(XORG_BUILD)/llvm-link $(XORG_BUILD)/opt $(XORG_BUILD)/uacpi-test-runner $(XORG_BUILD)/uacpi-barebones-test-runner \
-	$(BASH_BUILD)/fastfetch
+	$(XORG_BUILD)/nsxiv $(XORG_BUILD)/nano $(XORG_BUILD)/vim $(XORG_BUILD)/lite-xl $(XORG_BUILD)/iasl $(XORG_BUILD)/acpixtract $(XORG_BUILD)/aac $(XORG_BUILD)/clang $(XORG_BUILD)/ld.lld $(XORG_BUILD)/llvm-link $(XORG_BUILD)/opt $(XORG_BUILD)/uacpi-test-runner $(XORG_BUILD)/uacpi-barebones-test-runner \
+	$(BASH_BUILD)/fastfetch $(XORG_BUILD)/glxgears $(XORG_BUILD)/glxinfo
 XORG_BASH := bin/bash=$(BASH_BUILD)/bash.elf
 XORG_DATA := $(XORG_BUILD)/xorg-default.xkm config/dwm-fonts.conf config/conky.conf $(wildcard initramfs/*)
 XORG_PICOM_CONFIG := usr/share/picom/picom.conf=config/picom.conf
@@ -209,6 +209,47 @@ XORG_CLANG_FILES := lib/clang/23=$(XORG_BUILD)/clang-resource usr/include=$(XORG
 	usr/lib/musl=$(XORG_BUILD)/musl-runtime bin/clang.cfg=config/clang.cfg \
 	home/serval/pthread-test.c=config/pthread-test.c
 XORG_PCI_IDS := usr/share/hwdata/pci.ids=$(XORG_BUILD)/pci.ids
+# Shared musl: libc.so is also the dynamic linker that PT_INTERP names.
+XORG_MUSL_SHARED := $(XORG_BUILD)/musl-shared/lib/libc.so
+XORG_DYNAMIC_FILES := lib/ld-musl-x86_64.so.1=$(XORG_MUSL_SHARED) bin/hello-dynamic=$(XORG_BUILD)/hello-dynamic
+XORG_LITE_XL_DATA := usr/share/lite-xl=$(XORG_BUILD)/lite-xl-data
+# OpenJDK 21 (Server VM, plus Zero as `java -zero`). The desktop PATH is
+# /bin, so the tools are linked there. libasound is only for javax.sound.
+XORG_JDK_HOME := usr/lib/jvm/java-21-openjdk
+XORG_JDK_TOOLS := java javac jar jshell jlink keytool
+XORG_JDK_FILES := $(XORG_JDK_HOME)=$(XORG_BUILD)/openjdk usr/lib/libasound.so.2=$(XORG_BUILD)/libasound.so.2 \
+	$(foreach tool,$(XORG_JDK_TOOLS),'bin/$(tool)->/$(XORG_JDK_HOME)/bin/$(tool)')
+# OpenGL for X clients (F1): Mesa's libGL with llvmpipe does GLX itself over
+# Xlib, so Xvfb needs no GLX extension. GLFW (LWJGL) dlopens libX11 and
+# libXrandr, so these are the shared builds; libGL needs the C++ runtime and
+# LWJGL's libopenal also libatomic.
+XORG_GL_LIBS := mesa:libGL.so.1 libx11-shared:libX11.so.6 libxcb-shared:libxcb.so.1 \
+	libxau-shared:libXau.so.6 libxdmcp-shared:libXdmcp.so.6 libxext-shared:libXext.so.6 \
+	libxrender-shared:libXrender.so.1 libxrandr:libXrandr.so.2
+XORG_CXX_RUNTIME := libstdc++.so.6 libgcc_s.so.1 libatomic.so.1
+XORG_GL_FILES := $(foreach lib,$(XORG_GL_LIBS),usr/lib/$(lastword $(subst :, ,$(lib)))=$(XORG_BUILD)/gl/$(lastword $(subst :, ,$(lib)))) \
+	$(foreach lib,$(XORG_CXX_RUNTIME),usr/lib/$(lib)=$(XORG_BUILD)/gl/$(lib))
+XORG_GL_DEPS := $(foreach lib,$(XORG_GL_LIBS),$(XORG_BUILD)/gl/$(lastword $(subst :, ,$(lib)))) \
+	$(addprefix $(XORG_BUILD)/gl/,$(XORG_CXX_RUNTIME))
+# LWJGL 3.3.1 for Minecraft 1.20.1 (F3): the natives from the lwjgl* recipes
+# in /usr/lib/lwjgl, Mojang's Java jars in /opt/lwjgl (scripts/fetch-lwjgl.sh)
+# and the `lwjgl-demo` launcher.
+XORG_LWJGL_LIBS := lwjgl:liblwjgl.so lwjgl:liblwjgl_opengl.so lwjgl:liblwjgl_stb.so \
+	lwjgl:liblwjgl_tinyfd.so lwjgl-glfw:libglfw.so lwjgl-openal:libopenal.so \
+	lwjgl-jemalloc:libjemalloc.so
+XORG_LWJGL_JARS := $(abspath ../target/lwjgl-3.3.1)
+XORG_LWJGL_DEPS := $(foreach lib,$(XORG_LWJGL_LIBS),$(XORG_BUILD)/lwjgl/$(lastword $(subst :, ,$(lib)))) \
+	$(XORG_LWJGL_JARS)/.fetched userspace/jdk-tests/java/LwjglDemo.java config/lwjgl-demo
+XORG_LWJGL_FILES := $(foreach lib,$(XORG_LWJGL_LIBS),usr/lib/lwjgl/$(lastword $(subst :, ,$(lib)))=$(XORG_BUILD)/lwjgl/$(lastword $(subst :, ,$(lib)))) \
+	opt/lwjgl=$(XORG_LWJGL_JARS) usr/share/lwjgl-demo/LwjglDemo.java=userspace/jdk-tests/java/LwjglDemo.java \
+	bin/lwjgl-demo=config/lwjgl-demo
+# Minecraft 1.20.1 (F4) in /opt/minecraft (scripts/fetch-minecraft.sh): the
+# client, its libraries and the asset objects, started by `minecraft`.
+XORG_MINECRAFT := $(abspath ../target/minecraft-1.20.1)
+XORG_MINECRAFT_DEPS := $(XORG_MINECRAFT)/.fetched config/minecraft
+XORG_MINECRAFT_FILES := opt/minecraft/client.jar=$(XORG_MINECRAFT)/client.jar \
+	opt/minecraft/libraries=$(XORG_MINECRAFT)/libraries opt/minecraft/assets=$(XORG_MINECRAFT)/assets \
+	bin/minecraft=config/minecraft
 XORG_WALLPAPER := serval_wp.jpg
 XORG_WALLPAPER_CREDIT := serval_wp.jpg.txt
 XORG_WALLPAPER_FILES := $(addprefix usr/share/wallpapers/,$(foreach file,$(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT),$(file)=$(file)))
@@ -220,6 +261,23 @@ busybox: $(XORG_BUILD)/busybox
 $(eval $(call jinx_artifact,$(XORG_BUILD)/nsxiv,nsxiv,usr/bin/nsxiv))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/nano,nano,usr/bin/nano))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/vim,vim,usr/bin/vim))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/lite-xl,lite-xl,usr/bin/lite-xl))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/lite-xl-data,lite-xl,usr/share/lite-xl))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/openjdk,openjdk,usr/lib/jvm/java-21-openjdk))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/libasound.so.2,alsa-lib,usr/lib/libasound.so.2))
+$(foreach lib,$(XORG_GL_LIBS),$(eval $(call jinx_artifact,$(XORG_BUILD)/gl/$(lastword $(subst :, ,$(lib))),$(firstword $(subst :, ,$(lib))),usr/lib/$(lastword $(subst :, ,$(lib))))))
+$(foreach lib,$(XORG_CXX_RUNTIME),$(eval $(call jinx_artifact,$(XORG_BUILD)/gl/$(lib),musl-runtime,lib/$(lib))))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/glxgears,mesa-demos,usr/bin/glxgears))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/glxinfo,mesa-demos,usr/bin/glxinfo))
+$(foreach lib,$(XORG_LWJGL_LIBS),$(eval $(call jinx_artifact,$(XORG_BUILD)/lwjgl/$(lastword $(subst :, ,$(lib))),$(firstword $(subst :, ,$(lib))),usr/lib/lwjgl/$(lastword $(subst :, ,$(lib))))))
+
+$(XORG_LWJGL_JARS)/.fetched: scripts/fetch-lwjgl.sh
+	scripts/fetch-lwjgl.sh $(XORG_LWJGL_JARS)
+	touch $@
+
+$(XORG_MINECRAFT)/.fetched: scripts/fetch-minecraft.sh
+	scripts/fetch-minecraft.sh $(XORG_MINECRAFT)
+	touch $@
 $(eval $(call jinx_artifact,$(XORG_BUILD)/xsetroot,xsetroot,usr/bin/xsetroot))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/xwallpaper,xwallpaper,usr/bin/xwallpaper))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/xdpyinfo,xdpyinfo,usr/bin/xdpyinfo))
@@ -310,10 +368,20 @@ $(XORG_DESKTOP_BUILD)/kernel.elf: kernel-build-force
 
 endif
 
+$(XORG_MUSL_SHARED): scripts/build-musl-shared.sh
+	sh $< "$(XORG_BUILD)/musl-shared"
+
+$(XORG_BUILD)/hello-dynamic: userspace/hello-dynamic.c $(XORG_MUSL_SHARED)
+	clang --target=x86_64-linux-musl -O2 -fPIE -pie -nostdinc -nostdlib -fuse-ld=lld \
+		-isystem "$(XORG_BUILD)/musl-shared/include" -isystem "$$(clang -print-resource-dir)/include" \
+		-Wl,-dynamic-linker,/lib/ld-musl-x86_64.so.1 "$(XORG_BUILD)/musl-shared/lib/Scrt1.o" \
+		"$(XORG_BUILD)/musl-shared/lib/crti.o" $< -L"$(XORG_BUILD)/musl-shared/lib" -lc \
+		"$$(gcc -print-libgcc-file-name)" "$(XORG_BUILD)/musl-shared/lib/crtn.o" -o $@
+
 $(XORG_DISK): scripts/pack-xorg-disk.sh $(XORG_DESKTOP_BUILD)/kernel.elf $(LIMINE_DIR)/BOOTX64.EFI \
-	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_BUILD)/uacpi-tests config/uacpi-run-tests config/bashrc $(XORG_BUILD)/python-lib $(BASH_BUILD)/bash.elf $(XORG_BUILD)/git-upload-pack $(XORG_BUILD)/git-template-description $(XORG_DATA) $(XORG_BUILD)/magic.mgc $(XORG_BUILD)/XCalc.ad $(XORG_BUILD)/clang-resource $(XORG_BUILD)/libc-include $(XORG_BUILD)/musl-runtime config/clang.cfg config/pthread-test.c $(XORG_BUILD)/pci.ids config/picom.conf config/lua-test.lua config/sqlite3-test.sh config/acpi-example.asl config/python-test.py config/python-static-modules.txt $(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) $(addprefix $(XORG_BUILD)/,$(XORG_DEJAVU_FONTS)) catflare.gif Makefile
+	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_BUILD)/uacpi-tests config/uacpi-run-tests config/bashrc $(XORG_BUILD)/python-lib $(XORG_BUILD)/lite-xl-data $(XORG_BUILD)/openjdk $(XORG_BUILD)/libasound.so.2 $(BASH_BUILD)/bash.elf $(XORG_BUILD)/git-upload-pack $(XORG_BUILD)/git-template-description $(XORG_DATA) $(XORG_BUILD)/magic.mgc $(XORG_BUILD)/XCalc.ad $(XORG_BUILD)/clang-resource $(XORG_BUILD)/libc-include $(XORG_BUILD)/musl-runtime config/clang.cfg config/pthread-test.c $(XORG_BUILD)/pci.ids config/picom.conf config/lua-test.lua config/sqlite3-test.sh config/acpi-example.asl config/python-test.py config/python-static-modules.txt $(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) $(addprefix $(XORG_BUILD)/,$(XORG_DEJAVU_FONTS)) $(XORG_MUSL_SHARED) $(XORG_BUILD)/hello-dynamic $(XORG_GL_DEPS) $(XORG_LWJGL_DEPS) $(XORG_MINECRAFT_DEPS) catflare.gif Makefile
 	sh $< "$@" "$(XORG_DESKTOP_BUILD)/kernel.elf" "$(LIMINE_DIR)/BOOTX64.EFI" \
-		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_BASH) $(XORG_DATA) $(XORG_PICOM_CONFIG) $(XORG_CONKY_CONFIG) .bashrc=config/bashrc $(XORG_LUA_TEST) $(XORG_IASL_EXAMPLE) $(XORG_UACPI_TESTS) bin/uacpi-run-tests=config/uacpi-run-tests bin/sqlite3-test=config/sqlite3-test.sh $(XORG_PYTHON_LIB) $(XORG_PYTHON_TEST) $(XORG_PYTHON_MARKER) $(XORG_FILE_MAGIC) $(XORG_XCALC_APPDEFAULTS) $(XORG_CLANG_FILES) $(XORG_PCI_IDS) $(XORG_WALLPAPER_FILES) usr/libexec/git-core/git-upload-pack=$(XORG_BUILD)/git-upload-pack usr/share/git-core/templates/description=$(XORG_BUILD)/git-template-description usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
+		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_BASH) $(XORG_DATA) $(XORG_PICOM_CONFIG) $(XORG_CONKY_CONFIG) .bashrc=config/bashrc $(XORG_LUA_TEST) $(XORG_IASL_EXAMPLE) $(XORG_UACPI_TESTS) bin/uacpi-run-tests=config/uacpi-run-tests bin/sqlite3-test=config/sqlite3-test.sh $(XORG_PYTHON_LIB) $(XORG_PYTHON_TEST) $(XORG_PYTHON_MARKER) $(XORG_FILE_MAGIC) $(XORG_XCALC_APPDEFAULTS) $(XORG_CLANG_FILES) $(XORG_DYNAMIC_FILES) $(XORG_PCI_IDS) $(XORG_LITE_XL_DATA) $(XORG_JDK_FILES) $(XORG_GL_FILES) $(XORG_LWJGL_FILES) $(XORG_MINECRAFT_FILES) $(XORG_WALLPAPER_FILES) usr/libexec/git-core/git-upload-pack=$(XORG_BUILD)/git-upload-pack usr/share/git-core/templates/description=$(XORG_BUILD)/git-template-description usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
 		bin/ls=$(XORG_LS) $(foreach cmd,$(XORG_FS_COMMANDS),bin/$(cmd)=$(XORG_FS_TOOLS)) \
 		fonts/dwm-font.ttf="$(XORG_FONT)" $(XORG_FONT_FILES) catflare.gif=catflare.gif
 

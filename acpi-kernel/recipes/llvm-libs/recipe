@@ -1,0 +1,54 @@
+from_source=clang
+revision=1
+cross_compile=yes
+builddeps="musl-cxx"
+imagedeps="cmake ninja-build python3"
+
+# Position-independent static LLVM libraries and llvm-config for Mesa's
+# llvmpipe, which links them into libGL.so. The clang package is built
+# without PIC for its static executables, so it cannot provide them.
+# Installed under /opt/acpi-llvm; llvm-config is a static musl program that
+# also runs on the build host and reports paths relative to itself.
+llvm_cmake() {
+    local toolchain="$sysroot/opt/acpi-musl-cxx/bin"
+    cmake -S "$source_dir/llvm" -B obj -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/acpi-llvm \
+        -DCMAKE_C_COMPILER="$toolchain/x86_64-linux-gcc" \
+        -DCMAKE_CXX_COMPILER="$toolchain/x86_64-linux-g++" \
+        -DCMAKE_C_FLAGS="$APP_CPU_FLAGS" \
+        -DCMAKE_CXX_FLAGS="$APP_CPU_FLAGS" \
+        -DCMAKE_EXE_LINKER_FLAGS="-static" \
+        -DLLVM_TARGETS_TO_BUILD=X86 \
+        -DLLVM_HOST_TRIPLE=x86_64-linux-musl \
+        -DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-linux-musl \
+        -DLLVM_ENABLE_PIC=ON \
+        -DLLVM_BUILD_TOOLS=OFF \
+        -DLLVM_BUILD_UTILS=OFF \
+        -DLLVM_INCLUDE_UTILS=OFF \
+        -DLLVM_BUILD_LLVM_DYLIB=OFF \
+        -DLLVM_ENABLE_ZLIB=OFF \
+        -DLLVM_ENABLE_ZSTD=OFF \
+        -DLLVM_ENABLE_LIBXML2=OFF \
+        -DLLVM_ENABLE_LIBEDIT=OFF \
+        -DLLVM_ENABLE_LIBPFM=OFF \
+        -DLLVM_ENABLE_TERMINFO=OFF \
+        -DLLVM_INCLUDE_TESTS=OFF \
+        -DLLVM_INCLUDE_EXAMPLES=OFF \
+        -DLLVM_INCLUDE_BENCHMARKS=OFF \
+        -DLLVM_INCLUDE_DOCS=OFF
+}
+
+configure() { llvm_cmake; }
+
+build() {
+    llvm_cmake
+    cmake --build obj -j"$parallelism" --target llvm-config
+    cmake --build obj -j"$parallelism"
+}
+
+package() {
+    DESTDIR="$dest_dir" cmake --install obj
+    install -Dm755 obj/bin/llvm-config "$dest_dir/opt/acpi-llvm/bin/llvm-config"
+    rm -rf "$dest_dir/opt/acpi-llvm/share"
+}

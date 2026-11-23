@@ -479,8 +479,10 @@
         Else
         {
             Local1 = EXDH
-            While (Local1 && XVWD (Local1 + VNDQ, Ones) != Arg0)
+            // LAnd evaluates both operands: test the link only for a node.
+            While (Local1)
             {
+                If (XVWD (Local1 + VNDQ, Ones) == Arg0) { Break }
                 Local1 = XVWD (Local1 + VNDQ, Ones)
             }
             If (Local1) { XSTQ (Local1 + VNDQ, XVWD (Arg0 + VNDQ, Ones)) }

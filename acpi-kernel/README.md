@@ -220,8 +220,22 @@ headers, loads its `PT_LOAD` segments at their declared user addresses,
 zeros memory beyond the file bytes, and reserves a 4 MiB user stack
 with a guard page below it. The loader backs the top page for startup arguments.
 Additional stack pages are zeroed and mapped on first access. The loader accepts static x86-64
-`ET_EXEC` images with disjoint load pages. The static runtime handles any TLS metadata
-in the program headers. It rejects writable executable segments and applies execute
+`ET_EXEC` images with disjoint load pages, and position-independent `ET_DYN` images
+(`-static-pie` or dynamically linked PIEs), which it loads at the fixed base
+`0x5555400000`. When a program names an interpreter in `PT_INTERP`, the loader
+also loads that file, which must be an `ET_DYN` image without its own
+`PT_INTERP`, at `0x7FC0000000`. It starts the interpreter with `AT_BASE` set and
+the program's headers and entry point in `AT_PHDR` and `AT_ENTRY`. A missing or
+invalid interpreter makes `execve` fail with `ENOEXEC`. Loaded segments are
+private copies that `mprotect` may change, which the dynamic linker needs for
+RELRO. The desktop disk carries shared musl as `/lib/ld-musl-x86_64.so.1` (musl's
+`libc.so` is also its dynamic linker) and `/bin/hello-dynamic`. Host-side,
+`scripts/build-musl-shared.sh` builds that `libc.so` from the musl source that
+jinx unpacked, without changing any recipe. The auxiliary vector carries
+`AT_PHDR`, `AT_PHENT`, `AT_PHNUM`, `AT_PAGESZ`, `AT_ENTRY`, `AT_BASE`, `AT_FLAGS`,
+`AT_HWCAP` (CPUID leaf 1 EDX), `AT_HWCAP2`, `AT_CLKTCK`, the user and group IDs (all
+root), `AT_SECURE` and 16 `AT_RANDOM` bytes from RDRAND, or from the TSC when RDRAND
+is missing. The static runtime handles any TLS metadata in the program headers. It rejects writable executable segments and applies execute
 disable where the CPU supports it.
 
 Each user task owns a PML4 and its lower-half mappings. The scheduler
@@ -250,22 +264,55 @@ and `close` (3) and `lseek` (8) for open VFS files. Console seeks return
 `ppoll` (271) for up to 1,024 entries. Console stdin and `/dev/kbd` report
 readability when input is queued. The scheduler wakes waiting callers on
 keyboard input or timer ticks. `ppoll` accepts a null signal mask.
+`epoll_create` (213), `epoll_create1` (291, `EPOLL_CLOEXEC`), `epoll_ctl`
+(233) and `epoll_wait` (232) or `epoll_pwait` (281, null signal mask only)
+watch up to 1,024 pipes, sockets, terminals, console descriptors or input
+devices per instance. Regular files are refused with `EPERM`, as on Linux,
+and nesting epoll instances is not supported. Readiness is level-triggered:
+`EPOLLET` behaves like level-triggered mode, so callers may see extra
+wakeups but never miss one. `EPOLLONESHOT` disarms an entry until
+`EPOLL_CTL_MOD`. Entries whose descriptor is closed stop reporting. Waits
+share the poll wake-up path and fail with `EINTR` on a signal. `poll` on an
+epoll descriptor reports `POLLIN` when an event is ready.
 Other supported calls include `pipe` (22) and `pipe2` (293) for anonymous
-byte streams (`pipe2` accepts `O_CLOEXEC` and `O_NONBLOCK`), `mmap` (9) for private anonymous memory,
-`mprotect` (10) for anonymous pages with no access, read-only access, or
-read/write access, `munmap`
-(11) for a complete mapped range, `ioctl` (16) with `TIOCGWINSZ` on console
+byte streams (`pipe2` accepts `O_CLOEXEC` and `O_NONBLOCK`), `mmap` (9) for private anonymous memory
+(backed lazily on first touch, so large `PROT_NONE` reservations are cheap;
+`MAP_FIXED`, `MAP_FIXED_NOREPLACE` and free address hints are honoured)
+and for private copies of files. A `MAP_SHARED` file mapping without
+`PROT_WRITE` is also a private copy, writable shared file mappings fail with
+`ENODEV`, and `MAP_SHARED` with write access is limited to memfds.
+`mprotect` (10) works on anonymous pages, file copies and loaded ELF segments with any combination of `PROT_READ`,
+`PROT_WRITE` and `PROT_EXEC` (including RWX, for JIT compilers), `munmap`
+(11) for any page-aligned span, splitting or trimming the mappings it
+touches, `ioctl` (16) with `TIOCGWINSZ` on console
 descriptors, `getpid` (39), `clone` (56), `fork` (57), `vfork` (58), `execve` (59), `exit` (60),
 `wait4` (61), `uname` (63), `getcwd` (79), the UID and GID queries (which return zero),
 `getppid` (110), `arch_prctl` (158) with `ARCH_SET_FS`, `gettid` (186),
 `getdents64` (217), `exit_group` (231), `openat` (257), `newfstatat` (262),
 and `faccessat` (269). The interactive
 init process has PID and TID 0. Other boot processes have PID and TID 1.
-Each process can open up to 16 VFS files or directories.
-`getrlimit` and `prlimit64` report the fixed `RLIMIT_NOFILE` for the
-calling process, including its three console descriptors.
-`clock_gettime` (228) supports `CLOCK_REALTIME` from the CMOS RTC and
-`CLOCK_MONOTONIC`/`CLOCK_BOOTTIME` from the PIT-calibrated TSC.
+Each process has a table of 1,024 descriptors (0 to 1023), allocated with
+its process record and shared by its threads; opening past the last free
+slot fails with `EMFILE`. `getrlimit` and `prlimit64` report this fixed
+`RLIMIT_NOFILE`, including the three console descriptors. `fcntl` with
+`F_GETFD`, `F_SETFD` and `F_GETFL` also works on those console descriptors.
+`clock_gettime` (228) supports `CLOCK_MONOTONIC`, `CLOCK_MONOTONIC_RAW`,
+`CLOCK_MONOTONIC_COARSE` and `CLOCK_BOOTTIME` from the PIT-calibrated TSC.
+`CLOCK_REALTIME` and `CLOCK_REALTIME_COARSE` add the CMOS RTC time, read
+once, to that clock, so they have nanosecond resolution and never step.
+`CLOCK_PROCESS_CPUTIME_ID` reports the process's user and syscall time.
+`CLOCK_THREAD_CPUTIME_ID` reports the same whole-process figure, and
+per-thread CPU clocks are `EINVAL`. `clock_getres` (229) reports 1 ns for
+these clocks. `clock_nanosleep` (230) sleeps on `CLOCK_REALTIME`,
+`CLOCK_MONOTONIC` or `CLOCK_BOOTTIME`, relative or with `TIMER_ABSTIME`.
+`sched_yield` (24) puts the caller at the back of the run queue.
+`getcpu` (309) reports the CPU running the caller and NUMA node 0. The
+legacy vsyscall page at `0xffffffffff600000` is not mapped.
+`membarrier` (324) supports `MEMBARRIER_CMD_QUERY`,
+`MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED` and
+`MEMBARRIER_CMD_PRIVATE_EXPEDITED`, which interrupts every other CPU
+running the caller's address space. `mremap` on the main thread's stack
+fails with `ENOMEM`, so musl's `pthread_getattr_np` finds the whole stack.
 `getitimer` (36) and `setitimer` (38) support `ITIMER_REAL` and deliver
 `SIGALRM` when the BSP's timer checks find that the deadline has passed.
 The working directory is the VFS root. Reads with an empty
@@ -295,28 +342,51 @@ fatal signals and faults end the whole group. The process exits with its
 last thread. `execve` from a threaded process first makes the other
 threads exit.
 
-Known gap: there is no TLB shootdown. When a thread changes or removes
-mappings (`munmap`, `mprotect`, `mremap`-style replacement through
-`mmap`), threads of the same process running on other CPUs keep stale
-TLB entries until their next kernel entry (timer tick, interrupt or
-syscall), which reloads CR3. Freed pages can be reused during that window,
-so a program that unmaps memory and immediately hands the same addresses
-to a thread on another CPU could see stale data or write to a page that
-now belongs to someone else. A fix needs per-CPU tracking of the running
-address space and an IPI that waits for the other CPUs to flush before
-the pages are freed. On exit or a handled user fault, the scheduler
+TLB shootdown: each CPU publishes the private root of the user task it is
+running and clears it on every kernel entry. After a thread unmaps, moves
+or reduces the permissions of pages, the kernel sends vector `0x26` to the
+other CPUs still running that address space and waits until each has
+reloaded CR3 or left user mode. Unmapped pages are marked not present first
+and freed only after the shootdown, so no stale entry can reach a reused
+page. On exit or a handled user fault, the scheduler
 releases the task's memory and descriptors. The parent can collect the
-exit status with `wait4`, optionally using `WNOHANG`. Faults report
-`SIGSEGV` in the wait status. Orphans are reaped automatically.
+exit status with `wait4`, optionally using `WNOHANG`. Orphans are reaped
+automatically.
 The signal subset supports `rt_sigaction`, `rt_sigprocmask`, `rt_sigreturn`,
-and `kill` for positive PIDs. Child exit generates `SIGCHLD`. Explicit
+`sigaltstack`, and `kill` for positive PIDs. Child exit generates `SIGCHLD`. Explicit
 `SIG_IGN` or `SA_NOCLDWAIT` for `SIGCHLD` reaps exiting children automatically.
 Writing to a disconnected stream peer generates `SIGPIPE` and returns
-`EPIPE` if the process survives. Signal handlers take a single signal
-number and run one at a time. Pending signals coalesce by number. An
-interruptible blocked syscall can return `EINTR`. Automatic syscall
-restart, job control, alternate stacks, and `SA_SIGINFO` are outside
-this subset.
+`EPIPE` if the process survives.
+
+Signal delivery builds a Linux x86-64 `rt_sigframe` on the user stack:
+the restorer address, a `ucontext_t` with the interrupted registers, mask
+and alternate-stack state, a `siginfo_t`, and the XSAVE (or FXSAVE) image,
+which `uc_mcontext.fpregs` points to. Handlers receive all three arguments
+whether or not `SA_SIGINFO` is set, and start with clean FPU state.
+`rt_sigreturn` loads registers, vector state and the mask back from the
+ucontext, so a handler can change where and how the code resumes. It keeps
+CS, SS and the privileged RFLAGS bits, and drops reserved MXCSR and XSAVE
+header bits. Because frames live on the user stack, handlers nest and
+`siglongjmp` can leave them. The mask during a handler adds `sa_mask` and,
+without `SA_NODEFER`, the signal itself. `SA_RESETHAND` and `SA_ONSTACK`
+(with `SS_AUTODISARM`) work as on Linux. Standard signals coalesce by
+number and keep the first siginfo: `SI_USER` with the sender's PID for
+`kill`, `SI_TKILL` for `tgkill`, `CLD_EXITED` or `CLD_KILLED` for `SIGCHLD`.
+
+User CPU exceptions become forced signals with the faulting context:
+`#PF`, `#GP` and others give `SIGSEGV` (`SEGV_MAPERR` outside a mapping,
+`SEGV_ACCERR` inside one, `SI_KERNEL` for `#GP`), `#UD` gives `SIGILL`,
+`#DE`, `#MF` and `#XM` give `SIGFPE` with the Linux `si_code`, `int3`
+gives `SIGTRAP`, and `#NP`, `#SS` and `#AC` give `SIGBUS`. `si_addr` and
+the `REG_TRAPNO`, `REG_ERR` and `REG_CR2` slots describe the fault. A
+blocked or ignored fault signal reverts to its default action and ends
+the process, and the console logs the vector, RIP and address. Fault
+signals are delivered before other pending signals.
+
+A blocked syscall that a handled signal interrupts returns `EINTR`.
+With `SA_RESTART`, reads, socket waits, futex waits and `wait4` restart
+instead; sleeps and polls still return `EINTR`, as on Linux. Job control
+is outside this subset.
 
 `execve` loads static ELF64 programs directly from the initramfs.
 It preserves the PID and open descriptors except those marked
@@ -334,6 +404,29 @@ nonblocking mode. A full pending connection queue returns `EAGAIN`.
 A disconnected peer produces EOF after queued input has been read and
 `EPIPE` on writes. `dup2` can redirect the console descriptors to
 an open file or stream, including across `fork` and `execve`.
+
+There is no network stack, and no loopback either. `socket` and
+`socketpair` fail with `EAFNOSUPPORT` for every family other than
+`AF_UNIX`, including `AF_INET`, `AF_INET6`, `AF_NETLINK` and `AF_PACKET`,
+and `AF_UNIX` supports only `SOCK_STREAM`. `setsockopt`, `getsockopt`,
+`getsockname`, `getpeername`, `shutdown` and `sendto` are not implemented.
+Programs that probe for IPv4 or IPv6 see them as absent: the JDK, for
+example, picks its IPv4-only address code and treats network-interface
+enumeration as failing. Minecraft's single-player world runs its server in
+the same process over an in-memory channel, so it needs no sockets. LAN
+discovery, multiplayer and online sign-in need a real network and are
+out of scope. The desktop initramfs carries `/etc/hosts`, so `localhost`
+resolves to `127.0.0.1` and `::1` without DNS. Other names fail at once,
+because musl cannot open a UDP socket to a nameserver.
+
+`eventfd` (284) and `eventfd2` (290) create a 64-bit counter descriptor
+with `EFD_CLOEXEC`, `EFD_NONBLOCK` and `EFD_SEMAPHORE`. Writes add to the
+counter, which holds at most 2^64 - 2. Reads return and clear it, or
+decrement it by one in semaphore mode; either blocks while the value cannot
+be read or written. `fcntl(F_SETFL)` toggles `O_NONBLOCK`. Eventfds work
+with `poll` and `epoll`, and a write wakes blocked readers and epoll
+waiters at once rather than at the next timer tick. The JDK's NIO selector
+uses an eventfd this way to wake itself.
 
 When a Limine framebuffer is available in 32-bit mode, the kernel exposes
 `/dev/fb0` as a minimal fbdev-compatible device. Programs can open it for
@@ -366,7 +459,17 @@ The shell's `cat` command is intended for text files.
 The read-only `/proc` tree exposes CPU times, uptime, load averages, memory,
 and mounted filesystems. It lists process directories until the processes
 are reaped. Each open of a generated file captures a snapshot.
-`/proc/self` resolves to the caller's PID. Memory totals count the usable
+`/proc/self` resolves to the caller's PID. `/proc/<pid>/exe` links to the
+file the process last executed (for a script, the script itself), which
+musl's dynamic linker needs to expand `$ORIGIN`. It is missing for the
+boot module. `/proc/<pid>/maps` lists the
+process's mappings by address, with their protection and `p` or `s`, and
+the main stack as `[stack]`. Offsets, devices and file names are not
+recorded. Its text is generated at open into a buffer sized for the
+mappings, so it is not limited to one page. `/proc/<pid>/stat` has all 52
+Linux fields. `startstack` (field 28) is the initial stack pointer, which
+HotSpot uses to find the main thread's stack. `/proc/cpuinfo` uses Linux's
+tab-aligned labels. Memory totals count the usable
 pages managed by the physical allocator. Free and available memory count
 currently unallocated pages.
 
@@ -414,6 +517,110 @@ Set `APP_ARCH=x86-64` for baseline x86-64 guest binaries. The default is
 package. Each input snapshot has an isolated Jinx repository. Snapshots share
 downloaded archives and reuse binary packages when the recipe, its local inputs,
 build dependencies, and CPU configuration match.
+
+### OpenJDK
+
+The `openjdk` recipe cross-builds a headless JDK 21 for x86-64 musl with the
+Buildroot GCC toolchain from `musl-cxx`. It installs the Server VM image under
+`/usr/lib/jvm/java-21-openjdk`, with the Zero interpreter added as
+`lib/zero` (`java -zero`). It needs `musl-runtime` (the toolchain's
+`ld-musl-x86_64.so.1`, `libgcc_s`, `libstdc++` and `libatomic`), `alsa-lib`
+and, at build time, `libffi`. The desktop image carries the JDK (about
+200 MB) with `java`, `javac`, `jar`, `jshell`, `jlink` and `keytool` linked
+into `/bin`, plus `libasound.so.2` for `javax.sound`; run `java -version`
+(Server VM) or `java -zero -version` in a terminal there. The guest tests
+unpack the packages onto a virtio ext4 disk. `java-version` runs
+`java -zero -version`, directly and through the `/usr/bin/java` link.
+`java-server` runs the Server VM with `-Xint`, with C1 only and with full
+tiered compilation, then runs a Hello World from source with
+`java /tmp/Hello.java`, which needs the disk mounted read-write (`// disk-rw`).
+`java-stress` compiles `jdk-tests/java/Stress.java` with `javac` (copied onto
+the disk by a `// disk-file: <path>=<source>` line) and runs it for about five
+minutes under ZGC, Shenandoah, G1, Parallel and Serial with small heaps. The
+program allocates linked lists, maps, sorted arrays and multi-megabyte arrays
+on eight threads, keeps some alive into the old generation and checks every
+structure when it is built and when it is dropped, while other threads use
+blocking queues, monitors, `ReentrantLock`, `wait`/`notify`, thread creation,
+parallel streams and `CompletableFuture`:
+
+```sh
+make -C acpi-kernel userspace   # or build just the openjdk package
+acpi-kernel/scripts/run-guest-test.sh java-version
+acpi-kernel/scripts/run-guest-test.sh java-server
+acpi-kernel/scripts/run-guest-test.sh java-stress
+```
+
+Setting `KPRF` to `One` in `kernel/kernel.asl` makes the kernel print `KPROF`
+lines to serial every ten seconds: page faults, time spent waiting for the
+scheduler lock, and the count and microseconds of each syscall number.
+
+### OpenGL (Mesa llvmpipe)
+
+The `mesa` recipe builds Mesa 26.2 with only the llvmpipe software rasterizer
+and Xlib GLX (`-Dglx=xlib`): `libGL.so.1` implements GLX itself and presents
+frames with `XPutImage` or MIT-SHM, so the static Xvfb needs no GLX extension
+or DRI driver. OpenGL 4.6 core profile is available. A patch drops Mesa's
+DRM/KMS assumption for Linux targets (no DRI3, libdrm or xshmfence).
+LLVM is linked in from `llvm-libs`, a position-independent static build of
+the clang recipe's LLVM source installed under `/opt/acpi-llvm`. GLFW (LWJGL)
+loads X libraries with `dlopen`, so `libx11-shared`, `libxcb-shared`,
+`libxau-shared`, `libxdmcp-shared`, `libxext-shared` and `libxrender-shared`
+add shared builds of the existing static X libraries, and `libxrandr` is new.
+The desktop image carries these libraries and the C++ runtime that libGL needs
+in `/usr/lib`. The `mesa-glx` guest test starts Xvfb and runs a dynamically
+linked client (`jdk-tests/gl/glx-probe.c`, built by a
+`// disk-dynamic: <path>=<source>` line) that loads the libraries as GLFW does,
+checks RANDR, creates a 3.2 core context, draws with a shader, checks the
+pixels and times 120 frames:
+
+```sh
+acpi-kernel/scripts/run-guest-test.sh mesa-glx
+```
+
+The `mesa-demos` recipe builds `glxgears` and `glxinfo`, which the desktop
+image carries in `/bin`. Run `glxgears` from a terminal on the desktop for
+spinning gears and a frame rate every five seconds, or `glxinfo -B` for the
+renderer summary. The `glxgears` guest test runs both on Xvfb:
+
+```sh
+acpi-kernel/scripts/run-guest-test.sh glxgears
+```
+
+LWJGL 3.3.1, the version Minecraft 1.20.1 uses, has musl builds of its
+native libraries in `/usr/lib/lwjgl`:
+
+- `recipes/lwjgl` compiles LWJGL's core, opengl, stb and tinyfd JNI
+  libraries from the generated C sources in the release tarball.
+- `recipes/lwjgl-glfw`, `recipes/lwjgl-openal` and `recipes/lwjgl-jemalloc`
+  build GLFW, OpenAL Soft and jemalloc from the LWJGL-CI forks, at the
+  commits the official natives were built from.
+- OpenAL Soft has only its Null and WaveFile backends, so sound plays
+  silently.
+
+`scripts/fetch-lwjgl.sh` downloads Mojang's LWJGL Java jars and checks their
+SHA-1. The desktop image puts the jars in `/opt/lwjgl`. Run `lwjgl-demo` from
+a terminal: it checks every module, then spins a triangle in a GLFW window
+until you close it. LWJGL needs `-Dos.name=Linux`, because `uname` reports
+"ASL kernel".
+
+```sh
+acpi-kernel/scripts/run-guest-test.sh lwjgl-demo
+```
+
+### Minecraft 1.20.1
+
+`scripts/fetch-minecraft.sh` downloads the Minecraft 1.20.1 client, its
+libraries and assets into `target/minecraft-1.20.1`, checking every SHA-1. The
+desktop image puts them in `/opt/minecraft`. Run `minecraft [name]` from a
+terminal to play offline as `name` (default `Player`). Worlds and options are
+kept in `/minecraft`. Rendering uses llvmpipe and sound uses OpenAL's null
+device. The title screen appears about a minute after launch. The headless
+test reaches the title screen and saves a screenshot to `/tmp/minecraft.ppm`
+on its disk:
+
+```sh
+acpi-kernel/scripts/run-guest-test.sh minecraft
+```
 
 ## Static mlibc userspace
 

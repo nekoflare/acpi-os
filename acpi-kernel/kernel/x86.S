@@ -110,7 +110,10 @@ acpi_trigger_breakpoint:
 .type acpi_breakpoint_entry, @function
 acpi_breakpoint_entry:
     testb $3, 8(%rsp)
-    jnz .Lfault_without_error
+    jz .Lkernel_breakpoint
+    pushq $3
+    jmp .Lfault_without_error
+.Lkernel_breakpoint:
     pushq %rax
     leaq .Lafter_int3(%rip), %rax
     cmpq %rax, 8(%rsp)
@@ -174,6 +177,7 @@ acpi_breakpoint_entry:
 .equ CPU_LAST_FAULT, 64
 .equ CPU_FAULT_ERROR, 72
 .equ CPU_FAULT_RIP, 80
+.equ CPU_USER_CR3, 88
 
 .bss
 .balign 8
@@ -217,6 +221,9 @@ acpi_run_task:
     fxrstor64 (%r8)
 .Luser_vectors_restored:
     xorl %eax, %eax
+    /* Publish the address space before loading it; TLB shootdowns target
+       CPUs by this value. Loading CR3 is serialising. */
+    movq %rcx, %gs:CPU_USER_CR3
     movq %rcx, %cr3
 .Lrestore_task:
     movq %rdi, %rsp
@@ -311,15 +318,20 @@ acpi_run_task:
     pushq %r14
     pushq %r15
     movq %rsp, %rdx
-    cmpb $0x82, %gs:CPU_IRQ_PENDING
-    jne .Lresume_scheduler
+    /* User faults (0x81) and page faults to try (0x82) carry CR2 at frame-8,
+       the error code at frame-16 and the vector at frame-24. */
+    cmpb $0x81, %gs:CPU_IRQ_PENDING
+    jb .Lresume_scheduler
     movq %cr2, %rax
     pushq %rax
+    pushq %gs:CPU_FAULT_ERROR
+    pushq %gs:CPU_LAST_FAULT
 .Lresume_scheduler:
     movq %gs:CPU_KERNEL_CR3, %rax
     testq %rax, %rax
     jz .Lrestore_scheduler
     movq %rax, %cr3
+    movq $0, %gs:CPU_USER_CR3
     movq $0, %gs:CPU_KERNEL_CR3
     movq %gs:CPU_USER_FX_STATE, %rcx
     movl .Lxsave_mask(%rip), %eax
@@ -375,54 +387,112 @@ acpi_syscall_entry:
 .size acpi_syscall_entry, .-acpi_syscall_entry
 
 .Lpage_fault:
-    /* Only ring-3 non-present data reads and writes can grow the stack. */
+    /* Ring-3 non-present reads, writes and instruction fetches may grow the
+       stack or back a lazy anonymous page. */
     testb $3, 16(%rsp)
     jz .Lkernel_page_fault
     swapgs
     cmpq $0, %gs:CPU_SCHEDULER_STACK
     je .Lkernel_page_fault
-    cmpq $4, (%rsp)
-    je .Lstack_fault
-    cmpq $6, (%rsp)
-    jne .Luser_page_fault
-.Lstack_fault:
-    addq $8, %rsp
     movb $0x82, %gs:CPU_IRQ_PENDING
+    cmpq $4, (%rsp)
+    je .Luser_fault_error
+    cmpq $0x14, (%rsp)
+    je .Luser_fault_error
+    movb $0x81, %gs:CPU_IRQ_PENDING
+    cmpq $6, (%rsp)
+    jne .Luser_fault_error
+.Lstack_fault:
+    movb $0x82, %gs:CPU_IRQ_PENDING
+.Luser_fault_error:
+    /* Record the fault and save the whole user frame, so a signal handler
+       can inspect and resume it. The scheduler finds CR2, the error code and
+       the vector just below the saved frame. */
+    movq $14, %gs:CPU_LAST_FAULT
+    pushq %rax
+    movq 8(%rsp), %rax
+    movq %rax, %gs:CPU_FAULT_ERROR
+    movq 16(%rsp), %rax
+    movq %rax, %gs:CPU_FAULT_RIP
+    popq %rax
+    addq $8, %rsp
     jmp .Lsave_task
-.Luser_page_fault:
-    movl $14, %eax
-    jmp .Lfault_error_kernel_gs
 .Lkernel_page_fault:
     movl $14, %eax
     jmp .Lfatal_with_error
 
+/* User exceptions: the stub pushed its vector above the error code, if any. */
 .Lfault_with_error:
-    testb $3, 16(%rsp)
-    jz .Lfatal_with_error
+    testb $3, 24(%rsp)
+    jz .Lfault_fatal_with_error
     swapgs
-.Lfault_error_kernel_gs:
     cmpq $0, %gs:CPU_SCHEDULER_STACK
-    je .Lfatal_with_error
-    movq %rax, %gs:CPU_LAST_FAULT
-    movq (%rsp), %rax
-    movq %rax, %gs:CPU_FAULT_ERROR
+    je .Lfault_fatal_with_error
+    pushq %rax
     movq 8(%rsp), %rax
+    movq %rax, %gs:CPU_LAST_FAULT
+    movq 16(%rsp), %rax
+    movq %rax, %gs:CPU_FAULT_ERROR
+    movq 24(%rsp), %rax
     movq %rax, %gs:CPU_FAULT_RIP
-    jmp .Lresume_fault
+    popq %rax
+    addq $16, %rsp
+    movb $0x81, %gs:CPU_IRQ_PENDING
+    jmp .Lsave_task
+.Lfault_fatal_with_error:
+    popq %rax
+    jmp .Lfatal_with_error
 .Lfault_without_error:
-    testb $3, 8(%rsp)
-    jz .Lfatal_without_error
+    testb $3, 16(%rsp)
+    jz .Lfault_fatal_without_error
     swapgs
     cmpq $0, %gs:CPU_SCHEDULER_STACK
-    je .Lfatal_without_error
+    je .Lfault_fatal_without_error
+    pushq %rax
+    movq 8(%rsp), %rax
     movq %rax, %gs:CPU_LAST_FAULT
     movq $0, %gs:CPU_FAULT_ERROR
-    movq (%rsp), %rax
+    movq 16(%rsp), %rax
     movq %rax, %gs:CPU_FAULT_RIP
-.Lresume_fault:
+    popq %rax
+    addq $8, %rsp
     movb $0x81, %gs:CPU_IRQ_PENDING
-    xorl %edx, %edx
-    jmp .Lresume_scheduler
+    jmp .Lsave_task
+.Lfault_fatal_without_error:
+    popq %rax
+    jmp .Lfatal_without_error
+
+/* TLB shootdown IPI: flush, acknowledge and return to whatever was running,
+   user or kernel, without entering the scheduler. */
+.Ltlb_shootdown:
+    testb $3, 8(%rsp)
+    jz .Ltlb_kernel_gs
+    swapgs
+.Ltlb_kernel_gs:
+    pushq %rax
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    call acpi_tlb_shootdown_interrupt
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
+    popq %rdi
+    popq %rsi
+    popq %rdx
+    popq %rcx
+    popq %rax
+    testb $3, 8(%rsp)
+    jz .Ltlb_return
+    swapgs
+.Ltlb_return:
+    iretq
 
 .Lexit_interrupt:
     cmpq $0, %gs:CPU_SCHEDULER_STACK
@@ -476,16 +546,18 @@ acpi_vector_entries:
         jmp .Ldevice_interrupt
     .elseif vector == 0x22
         jmp .Lexit_interrupt
+    .elseif vector == 0x26
+        jmp .Ltlb_shootdown
     .elseif vector == 14
         jmp .Lpage_fault
     .elseif vector == 8
         movl $vector, %eax
         jmp .Lfatal_with_error
     .elseif vector == 10 || vector == 11 || vector == 12 || vector == 13 || vector == 17 || vector == 21 || vector == 29 || vector == 30
-        movl $vector, %eax
+        pushq $vector
         jmp .Lfault_with_error
     .elseif vector < 32 && vector != 2 && vector != 8 && vector != 18
-        movl $vector, %eax
+        pushq $vector
         jmp .Lfault_without_error
     .elseif vector == 0xff
         /* Spurious LAPIC interrupts have no in-service bit to acknowledge. */

@@ -1,0 +1,20 @@
+version=1.2.14
+revision=1
+cross_compile=yes
+tarball_url=https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.14.tar.bz2
+tarball_sha256=be9c88a0b3604367dd74167a2b754a35e142f670292ae47a2fdef27a2ee97a32
+builddeps=musl-cxx
+
+# Shared libasound for OpenJDK's libjsound. The guest has no sound card, so
+# opening a device fails at run time; the library only has to load.
+configure() {
+    PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH" "$source_dir/configure" \
+        --host=x86_64-buildroot-linux-musl --prefix=/usr --libdir=/usr/lib \
+        --enable-shared --disable-static --disable-python --disable-topology \
+        --disable-ucm --disable-alisp --disable-old-symbols --with-debug=no
+}
+build() { PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH" make -j"$parallelism"; }
+package() {
+    PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH" make DESTDIR="$dest_dir" install
+    rm -rf "$dest_dir/usr/bin" "$dest_dir/usr/share/aclocal" "$dest_dir/usr/lib/libasound.la"
+}

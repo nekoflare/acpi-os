@@ -19,16 +19,24 @@ work=$(mktemp -d "$(cd "$(dirname "$output")" && pwd)/.xorg-disk.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 mkdir "$work/apps"
 
+# Each argument is name=source, a bare source file, or name->target for a
+# symbolic link. Directories keep the symbolic links inside them.
 for spec do
     case "$spec" in
+        *'->'*)
+            name=${spec%%->*}
+            mkdir -p "$work/apps/$(dirname "$name")"
+            ln -sfn -- "${spec#*->}" "$work/apps/$name"
+            continue
+            ;;
         *=*) name=${spec%%=*}; source=${spec#*=} ;;
         *) name=${spec##*/}; source=$spec ;;
     esac
     if [ -d "$source" ]; then
-        find "$source" -type f -print | while IFS= read -r file; do
+        find "$source" \( -type f -o -type l \) -print | while IFS= read -r file; do
             relative=${file#"$source"/}
             mkdir -p "$work/apps/$name/$(dirname "$relative")"
-            cp -p -- "$file" "$work/apps/$name/$relative"
+            cp -P -p -- "$file" "$work/apps/$name/$relative"
         done
     else
         mkdir -p "$work/apps/$(dirname "$name")"

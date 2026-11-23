@@ -1,0 +1,20 @@
+version=3.5.2
+revision=1
+cross_compile=yes
+tarball_url=https://github.com/libffi/libffi/releases/download/v3.5.2/libffi-3.5.2.tar.gz
+tarball_sha256=f3a3082a23b37c293a4fcd1053147b371f2ff91fa7ea1b2a52e335676bac82dc
+builddeps=musl-cxx
+
+# Static, position-independent libffi for the OpenJDK Zero VM, built with the
+# shared-library musl toolchain because it ends up inside libjvm.so.
+configure() {
+    PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH" "$source_dir/configure" \
+        --host=x86_64-buildroot-linux-musl --prefix=/usr --libdir=/usr/lib \
+        --disable-shared --enable-static --with-pic --disable-docs \
+        --disable-multi-os-directory --disable-exec-static-tramp
+}
+build() { PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH" make -j"$parallelism"; }
+package() {
+    PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH" make DESTDIR="$dest_dir" install
+    rm -rf "$dest_dir/usr/share" "$dest_dir/usr/lib/libffi.la"
+}

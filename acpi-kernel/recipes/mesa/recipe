@@ -1,0 +1,61 @@
+version=26.2.7
+revision=1
+cross_compile=yes
+tarball_url="https://archive.mesa3d.org/mesa-26.2.7.tar.xz"
+tarball_sha256=04294f75d22e9f61cd1e050206bc48b3d39366e788f1803a3368e3d5a872ce18
+builddeps="musl-cxx llvm-libs xorgproto libx11 libxext libxcb libx11-shared libxext-shared libxcb-shared libxau-shared libxdmcp-shared"
+imagedeps="meson ninja-build python3-mako python3-yaml python3-packaging bison flex"
+
+# OpenGL for X clients: llvmpipe behind Mesa's xlib GLX. libGL.so.1 does GLX
+# itself and presents frames with XPutImage or MIT-SHM, so the X server needs
+# no GLX extension or DRI driver (Xvfb is static and could not load one).
+# Server-side GLX would only offer indirect GL 1.4. LLVM is linked in from
+# the PIC llvm-libs package.
+configure() {
+    local toolchain="$sysroot/opt/acpi-musl-cxx/bin"
+    rm -rf shlib
+    mkdir shlib
+    ln -s "$sysroot"/usr/lib/*.so* shlib/
+    local cpu_flags
+    cpu_flags=$(printf "'%s', " $APP_CPU_FLAGS)
+    cat > cross.ini <<EOF
+[binaries]
+c = '$toolchain/x86_64-linux-gcc'
+cpp = '$toolchain/x86_64-linux-g++'
+ar = '$toolchain/x86_64-linux-ar'
+strip = '$toolchain/x86_64-linux-strip'
+pkg-config = 'pkg-config'
+llvm-config = '$sysroot/opt/acpi-llvm/bin/llvm-config'
+
+[built-in options]
+c_args = [$cpu_flags]
+cpp_args = [$cpu_flags]
+c_link_args = ['-L$PWD/shlib', '-Wl,-rpath-link,$PWD/shlib']
+cpp_link_args = ['-L$PWD/shlib', '-Wl,-rpath-link,$PWD/shlib']
+
+[properties]
+pkg_config_libdir = ['$sysroot/usr/lib/pkgconfig', '$sysroot/usr/share/pkgconfig']
+sys_root = '$sysroot'
+
+[host_machine]
+system = 'linux'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+EOF
+    meson setup obj "$source_dir" --cross-file cross.ini --prefix=/usr --libdir=lib \
+        --buildtype=release -Db_ndebug=true -Dcpp_rtti=false \
+        -Dplatforms=x11 -Dglx=xlib -Dgallium-drivers=llvmpipe -Dvulkan-drivers= \
+        -Dopengl=true -Degl=disabled -Dgbm=disabled -Dgles1=disabled -Dgles2=disabled \
+        -Dglvnd=disabled -Dllvm=enabled -Dshared-llvm=disabled -Ddraw-use-llvm=true \
+        -Dgallium-va=disabled -Dgallium-rusticl=false -Dvideo-codecs= -Dtools= \
+        -Dshader-cache=disabled -Dzstd=disabled -Dzlib=disabled -Dexpat=disabled -Dxmlconfig=disabled \
+        -Dlibunwind=disabled -Dvalgrind=disabled -Dlmsensors=disabled \
+        -Dspirv-tools=disabled -Dselinux=false -Dperfetto=false -Dbuild-tests=false
+}
+build() { meson compile -C obj -j"$parallelism"; }
+package() {
+    DESTDIR="$dest_dir" meson install -C obj
+    "$sysroot/opt/acpi-musl-cxx/bin/x86_64-linux-strip" --strip-unneeded "$dest_dir"/usr/lib/libGL.so.*.*
+    rm -rf "$dest_dir/usr/share"
+}

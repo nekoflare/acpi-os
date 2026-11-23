@@ -1455,6 +1455,7 @@ error:
             "XSTP" => Some(("acpi_schedule_step", 0)),
             "XSUL" => Some(("acpi_scheduler_unlock", 0)),
             "XSLK" => Some(("acpi_scheduler_lock", 0)),
+            "XLKP" => Some(("acpi_lock_profile", 1)),
             "XMSR" => Some(("acpi_apic_msr", 2)),
             "XWAI" => Some(("acpi_wait_irq", 1)),
             "XRUN" => Some(("acpi_run_task", 5)),
@@ -1468,6 +1469,7 @@ error:
             "XTRG" => Some(("acpi_load_tr", 1)),
             "XCLR" => Some(("acpi_clear_page", 1)),
             "XINV" => Some(("acpi_invalidate_page", 1)),
+            "XTLB" => Some(("acpi_tlb_shootdown", 1)),
             _ => None,
         };
         if !self.bindings.freestanding

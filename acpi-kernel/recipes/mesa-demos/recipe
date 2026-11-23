@@ -1,0 +1,24 @@
+version=9.0.0
+revision=1
+cross_compile=yes
+tarball_url="https://archive.mesa3d.org/demos/mesa-demos-9.0.0.tar.xz"
+tarball_sha256=3046a3d26a7b051af7ebdd257a5f23bfeb160cad6ed952329cdff1e9f1ed496b
+builddeps="musl-cxx mesa xorgproto libx11 libx11-shared libxext-shared libxcb-shared libxau-shared libxdmcp-shared"
+
+# glxgears and glxinfo, dynamically linked against Mesa's libGL. Only these two
+# are built: the meson build wants GLU, GLUT and EGL for the other demos.
+build() {
+    local cc="$sysroot/opt/acpi-musl-cxx/bin/x86_64-linux-gcc"
+    local src="$source_dir/src"
+    rm -rf shlib
+    mkdir shlib
+    ln -s "$sysroot"/usr/lib/*.so* shlib/
+    local flags="-O2 $APP_CPU_FLAGS -I$sysroot/usr/include -L$PWD/shlib -Wl,-rpath-link,$PWD/shlib"
+    "$cc" $flags "$src/xdemos/glxgears.c" -lGL -lX11 -lm -o glxgears
+    "$cc" $flags -I"$src/glad/include" -I"$src/util" "$src/xdemos/glxinfo.c" \
+        "$src/util/glinfo_common.c" "$src/glad/src/glad.c" -lGL -lX11 -o glxinfo
+}
+package() {
+    mkdir -p "$dest_dir/usr/bin"
+    install -m755 glxgears glxinfo "$dest_dir/usr/bin/"
+}

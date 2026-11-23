@@ -1,0 +1,6 @@
+#!/bin/sh
+# F3 demo: LWJGL 3.3.1 (as in Minecraft 1.20.1) checks jemalloc, stb and
+# OpenAL, then spins a triangle in a GLFW window until it is closed.
+# uname says "ASL kernel", which LWJGL does not know, hence os.name.
+exec java -Dos.name=Linux -Dorg.lwjgl.librarypath=/usr/lib/lwjgl -cp '/opt/lwjgl/*' \
+    /usr/share/lwjgl-demo/LwjglDemo.java "${1:-1000000000}"

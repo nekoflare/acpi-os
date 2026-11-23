@@ -1,0 +1,77 @@
+version=21.0.13
+revision=1
+cross_compile=yes
+tarball_url="https://codeload.github.com/openjdk/jdk21u/tar.gz/refs/tags/jdk-21.0.13+9"
+tarball_sha256=f6c60bec46d006f9d7aa5e004108e364cec56469a81e3c619a2cac42ed2ca1a5
+builddeps="musl-cxx libffi alsa-lib"
+deps="musl-runtime alsa-lib"
+imagedeps="openjdk-21-jdk-headless autoconf zip unzip file cpio libx11-dev libxext-dev libxrender-dev libxtst-dev libxt-dev libxrandr-dev libxi-dev libcups2-dev libfontconfig-dev"
+
+# A headless JDK 21 cross-built for x86_64 musl. The Server VM and the Zero
+# interpreter need separate configurations (Zero replaces the CPU
+# architecture for the whole build). The package is the Server VM image with
+# Zero's libjvm.so added as lib/zero, selected with `java -zero`.
+# Debian's JDK 21 is the boot JDK; each configuration also builds a host JDK
+# of this version to run jlink on the target modules.
+jdk_path() {
+    export PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH"
+}
+
+# jdk_configure <output directory> <JVM variant>
+jdk_configure() (
+    # configure writes into the current directory, which must start empty.
+    rm -rf "$1"
+    mkdir "$1"
+    cd "$1"
+    bash "$source_dir/configure" \
+        --openjdk-target=x86_64-buildroot-linux-musl \
+        --with-boot-jdk=/usr/lib/jvm/java-21-openjdk-amd64 \
+        --with-jvm-variants="$2" \
+        --enable-headless-only \
+        --disable-warnings-as-errors \
+        --with-native-debug-symbols=none \
+        --with-debug-level=release \
+        --with-version-pre= --with-version-build=9 --with-version-opt=acpi \
+        --with-vendor-name=acpi-os \
+        --x-includes="$OLDPWD/headers" --x-libraries="$OLDPWD/headers/lib" \
+        --with-cups-include="$OLDPWD/headers" \
+        --with-fontconfig-include="$OLDPWD/headers" \
+        --with-alsa-include="$sysroot/usr/include" --with-alsa-lib="$sysroot/usr/lib" \
+        --with-libffi-include="$sysroot/usr/include" --with-libffi-lib="$sysroot/usr/lib" \
+        --with-freetype=bundled --with-zlib=bundled --with-libjpeg=bundled \
+        --with-giflib=bundled --with-libpng=bundled --with-lcms=bundled \
+        --with-harfbuzz=bundled \
+        --with-stdc++lib=static \
+        --with-jobs="$parallelism"
+)
+
+configure() {
+    jdk_path
+    # Headless libawt still compiles against the X11, CUPS and fontconfig
+    # headers. Copy them so the target build does not see glibc's /usr/include.
+    rm -rf headers out
+    mkdir -p headers/lib
+    cp -a /usr/include/X11 /usr/include/cups /usr/include/fontconfig headers/
+    jdk_configure out-server server
+    jdk_configure out-zero zero
+}
+
+build() {
+    jdk_path
+    make -C out-server images JOBS="$parallelism" LOG=warn
+    # Zero only needs its libjvm.so.
+    make -C out-zero hotspot JOBS="$parallelism" LOG=warn
+}
+
+package() {
+    local jdk="$dest_dir/usr/lib/jvm/java-21-openjdk"
+    mkdir -p "$jdk" "$dest_dir/usr/bin"
+    cp -a out-server/images/jdk/. "$jdk/"
+    rm -rf "$jdk/jmods" "$jdk/demo" "$jdk/man" "$jdk/lib/src.zip"
+    install -Dm755 out-zero/support/modules_libs/java.base/zero/libjvm.so "$jdk/lib/zero/libjvm.so"
+    printf -- '-zero KNOWN\n' >> "$jdk/lib/jvm.cfg"
+    local tool
+    for tool in java javac jar jshell jlink keytool; do
+        ln -s "../lib/jvm/java-21-openjdk/bin/$tool" "$dest_dir/usr/bin/$tool"
+    done
+}

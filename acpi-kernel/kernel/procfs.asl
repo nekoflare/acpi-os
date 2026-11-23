@@ -16,6 +16,7 @@
     Name (PRCL, 104)
     Name (PRNM, 112) // 16-byte comm field
     Name (PRCM, 128) // NUL-separated argv
+    Name (PRXV, 4088) // Executable vnode; argv stops 48 bytes short of the page end
 
     Method (PCAT, 2, NotSerialized)
     {
@@ -155,12 +156,22 @@
             !PCPF (Local2, Arg0, "cmdline", 7) ||
             !PCNO (Local2, "mounts", Zero, 8) ||
             !PCPF (Local2, Arg0, "statm", 10) ||
-            !PCPF (Local2, Arg0, "comm", 12))
+            !PCPF (Local2, Arg0, "comm", 12) ||
+            !PCPF (Local2, Arg0, "maps", 13) ||
+            !PCPL (Local2, Arg0, "exe", 14))
         {
             PCDE (Arg0)
             Return (Zero)
         }
         Return (One)
+    }
+
+    // A per-process symlink whose target is computed on readlink.
+    Method (PCPL, 4, NotSerialized)
+    {
+        Local0 = PCNO (Arg0, Arg2, 10, Arg3)
+        If (Local0) { XSTQ (Local0 + VNPD, Arg1) }
+        Return (Local0)
     }
 
     Method (PCPF, 4, NotSerialized)
@@ -306,8 +317,8 @@
         Return (Local3 + One - Arg0)
     }
 
-    // All range-list mappings are backed eagerly. The stack has its own
-    // reservation and gets backing pages on demand.
+    // Virtual size counts whole ranges, including lazy anonymous pages that
+    // have not been touched yet. The stack has its own reservation.
     Method (PCVM, 1, NotSerialized)
     {
         If (!Arg0) { Return (Zero) }
@@ -377,7 +388,11 @@
         }
         Local1 = PCVL (Local1, Local2 + Local3)
         Local1 = PCVL (Local1, Local2 / PGSZ + Local4)
-        Local1 = PCAT (Local1, " 18446744073709551615")
+        Local1 = PCAT (Local1, " 18446744073709551615 0 0")
+        Local2 = Zero
+        If (Local0) { Local2 = XVWD (TGRL (Local0) + TSSS, Ones) }
+        Local1 = PCVL (Local1, Local2) // startstack, which HotSpot reads
+        Local1 = PCAT (Local1, " 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0")
         XSTB (Local1, 10)
         Return (Local1 + One - Arg0)
     }
@@ -401,6 +416,108 @@
         }
         XSTB (Local0, 10)
         Return (Local0 + One - Arg0)
+    }
+
+    // Hexadecimal with at least eight digits, as in /proc/<pid>/maps.
+    Method (PCHX, 2, NotSerialized)
+    {
+        Local0 = 8
+        While (Local0 < 16)
+        {
+            If (!(Arg1 >> (Local0 * 4))) { Break }
+            Increment (Local0)
+        }
+        Return (PCXH (Arg0, Arg1, Local0))
+    }
+
+    // One maps line: range, leaf protection Arg3, shared when Arg4 is set,
+    // and the [stack] name when Arg5 is set.
+    Method (PCMQ, 6, NotSerialized)
+    {
+        Local0 = PCHX (Arg0, Arg1)
+        XSTB (Local0, 0x2D)
+        Local0 = PCHX (Local0 + One, Arg2)
+        XSTB (Local0, 0x20)
+        Local1 = 0x2D
+        If (Arg3 & USER) { Local1 = 0x72 }
+        XSTB (Local0 + One, Local1)
+        Local1 = 0x2D
+        If (Arg3 & USER)
+        {
+            If (Arg3 & WRIT) { Local1 = 0x77 }
+        }
+        XSTB (Local0 + 2, Local1)
+        Local1 = 0x2D
+        If (Arg3 & USER)
+        {
+            If (!(Arg3 & NOEX)) { Local1 = 0x78 }
+        }
+        XSTB (Local0 + 3, Local1)
+        Local1 = 0x70
+        If (Arg4) { Local1 = 0x73 }
+        XSTB (Local0 + 4, Local1)
+        Local0 = PCAT (Local0 + 5, " 00000000 00:00 0")
+        // Arg5 names the region: 1 [stack], 2 [vvar], 3 [vdso].
+        If (Arg5)
+        {
+            While (Local0 - Arg0 < 73)
+            {
+                XSTB (Local0, 0x20)
+                Increment (Local0)
+            }
+            If (Arg5 == One) { Local0 = PCAT (Local0, "[stack]") }
+            ElseIf (Arg5 == 2) { Local0 = PCAT (Local0, "[vvar]") }
+            Else { Local0 = PCAT (Local0, "[vdso]") }
+        }
+        XSTB (Local0, 10)
+        Return (Local0 + One)
+    }
+
+    // Generate /proc/<pid>/maps for open description Arg0 into a buffer of
+    // its own: data pointer at +32, allocation size at +48. Ranges are listed
+    // in list order, which is by address, then the main thread's stack.
+    // Returns the text length.
+    Method (PCMP, 2, NotSerialized)
+    {
+        Local0 = XVWD (Arg1 + PRTK, Ones)
+        If (!Local0) { Return (Zero) }
+        Local0 = TGRL (Local0)
+        Local1 = XVWD (Local0 + TSUL, Ones)
+        Local2 = 2
+        While (Local1)
+        {
+            Increment (Local2)
+            Local1 = XVWD (HHDO + Local1, Ones)
+        }
+        Local2 *= 128 // Longer than any line
+        Local3 = VALL (Local2, WRIT)
+        If (!Local3) { Return (Zero) }
+        XSTQ (Arg0 + 32, Local3)
+        XSTQ (Arg0 + 48, Local2)
+        Local4 = Local3 // Write cursor
+        Local1 = XVWD (Local0 + TSUL, Ones) // The list is sorted by start.
+        While (Local1)
+        {
+            Local6 = HHDO + Local1
+            Local1 = XVWD (Local6, Ones)
+            If (XVWD (Local6 + 16, Ones) <= XVWD (Local6 + 8, Ones)) { Continue } // The sentinel
+            // Lazy ranges and mprotected ones keep their protection at +56.
+            // Other ranges were mapped with the +24 leaf flags plus USER.
+            Local7 = XVWD (Local6 + 56, Ones)
+            If (!XVWD (Local6 + 48, Ones) && !Local7) { Local7 = XVWD (Local6 + 24, Ones) | USER }
+            Local5 = Zero
+            If (XVWD (Local6 + 32, Ones) && XVWD (Local6 + 32, Ones) == VDMF)
+            {
+                Local5 = 3
+                If (!XVWD (Local6 + 40, Ones)) { Local5 = 2 }
+            }
+            Local4 = PCMQ (Local4, XVWD (Local6 + 8, Ones), XVWD (Local6 + 16, Ones), Local7,
+                XVWD (Local6 + 32, Ones), Local5)
+        }
+        Local7 = USER | WRIT
+        If (XNXE ()) { Local7 |= NOEX }
+        Local4 = PCMQ (Local4, USTP - USSZ, USTP, Local7, Zero, One)
+        Return (Local4 - Local3)
     }
 
     Method (PCMM, 2, NotSerialized)
@@ -618,6 +735,17 @@
             Return (Local2)
         }
         If (XVWD (Local0 + VNTY, Ones) != 10) { Return (Zero - 22) }
+        If (XVWD (Local0 + VNPR, Ones) == 14) // /proc/<pid>/exe
+        {
+            Local1 = XVWD (XVWD (Local0 + VNPD, Ones) + PRXV, Ones)
+            If (!Local1) { Return (Zero - 2) }
+            Local1 = VPTH (Local1)
+            If (Local1 >= Zero - 4095) { Return (Local1) }
+            Local2 = XADR (UPTH) + SizeOf (UPTH) - One - Local1
+            If (Local2 > Arg4) { Local2 = Arg4 }
+            If (!UCOP (Arg0, Arg3, Local1, Local2)) { Return (Zero - 14) }
+            Return (Local2)
+        }
         If (!XVWD (Local0 + VNDA, Ones) && XVWD (Local0 + VNFO, Ones))
         {
             If (!EXSL (Local0, XVWD (Local0 + VNFO, Ones))) { Return (Zero - 5) }
@@ -839,7 +967,7 @@
 
     Method (CIDE, 1, NotSerialized)
     {
-        Local0 = PCAT (Arg0, "vendor_id : ")
+        Local0 = PCAT (Arg0, "vendor_id\t: ")
         CWRD (Local0, XCPD (Zero, One))
         CWRD (Local0 + 4, XCPD (Zero, 3))
         CWRD (Local0 + 8, XCPD (Zero, 2))
@@ -850,12 +978,12 @@
         Local3 = (Local1 >> 4) & 0xF
         If (Local2 == 6 || Local2 == 15) { Local3 |= (Local1 >> 12) & 0xF0 }
         If (Local2 == 15) { Local2 += (Local1 >> 20) & 0xFF }
-        Local0 = CNUM (Local0, "cpu family : ", Local2)
-        Local0 = CNUM (Local0, "model : ", Local3)
-        Local0 = CNUM (Local0, "stepping : ", Local1 & 0xF)
+        Local0 = CNUM (Local0, "cpu family\t: ", Local2)
+        Local0 = CNUM (Local0, "model\t\t: ", Local3)
+        Local0 = CNUM (Local0, "stepping\t: ", Local1 & 0xF)
         If (XCPD (0x80000000, Zero) >= 0x80000004)
         {
-            Local1 = PCAT (Local0, "model name : ")
+            Local1 = PCAT (Local0, "model name\t: ")
             Local2 = Zero
             While (Local2 < 12)
             {
@@ -870,7 +998,7 @@
                 Increment (Local0)
             }
         }
-        Local0 = PCAT (Local0, "flags : ")
+        Local0 = PCAT (Local0, "flags\t\t: ")
         Local0 += XCFL (Local0)
         XSTB (Local0, 10)
         Increment (Local0)
@@ -882,7 +1010,7 @@
         If (XCPD (0x80000000, Zero) >= 0x80000008)
         {
             Local1 = XCPD (0x80000008, Zero)
-            Local0 = CDEC (PCAT (Local0, "address sizes : "), Local1 & 0xFF)
+            Local0 = CDEC (PCAT (Local0, "address sizes\t: "), Local1 & 0xFF)
             Local0 = CDEC (PCAT (Local0, " bits physical, "), (Local1 >> 8) & 0xFF)
             Local0 = PCAT (Local0, " bits virtual")
             XSTB (Local0, 10)

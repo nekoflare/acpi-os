@@ -1,0 +1,30 @@
+version=3.3.1
+revision=1
+cross_compile=yes
+tarball_url="https://github.com/LWJGL-CI/jemalloc/archive/ea6b3e973b477b8061e0076bb257dbd7f3faa756.tar.gz"
+tarball_sha256=42b25ec16d2c6c696fe66dc3ffb0fe9de2f89faede8d5223bfc487ea62998f46
+builddeps=musl-cxx
+deps=musl-runtime
+imagedeps=autoconf
+
+# libjemalloc.so for LWJGL 3.3.1, from the LWJGL-CI jemalloc fork (5.2.1
+# based) at the commit LWJGL's natives-linux jar was built from. Symbols carry
+# the je_ prefix LWJGL binds. musl cannot give a dlopen'ed library static
+# (initial-exec) TLS, so jemalloc uses the general dynamic model.
+configure() {
+    copy_source
+    cd src
+    echo "5.2.1-0-gea6b3e973b477b8061e0076bb257dbd7f3faa756" > VERSION
+    autoconf
+    PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH" CFLAGS="-O2 $APP_CPU_FLAGS" ./configure \
+        --host=x86_64-buildroot-linux-musl --prefix=/usr --with-jemalloc-prefix=je_ \
+        --disable-initial-exec-tls --disable-cxx --disable-doc --with-lg-page=12 \
+        --enable-shared --disable-static
+}
+build() {
+    PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH" make -C src -j"$parallelism" lib/libjemalloc.so
+}
+package() {
+    install -Dm755 src/lib/libjemalloc.so.2 "$dest_dir/usr/lib/lwjgl/libjemalloc.so"
+    strip --strip-unneeded "$dest_dir/usr/lib/lwjgl/libjemalloc.so"
+}

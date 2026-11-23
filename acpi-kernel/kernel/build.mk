@@ -4,8 +4,21 @@ BOOT_FLAGS := $(KERNEL_FLAGS) -std=c17 -ffreestanding -fno-stack-protector -Wall
 $(BUILD):
 	mkdir -p $@
 
-$(BUILD)/kernel.aml: kernel/kernel.asl $(filter-out kernel/kernel.asl,$(wildcard kernel/*.asl)) | $(BUILD)
-	$(IASL) -I kernel -p $(basename $@) $<
+# The vDSO, linked as a shared object and embedded in the AML as a buffer.
+VDSO_FLAGS := -O2 -fPIC -fasynchronous-unwind-tables -ffreestanding -fno-builtin -fno-stack-protector -fcf-protection=none -Wall -Wextra -Werror
+
+$(BUILD)/vdso.o: kernel/vdso.c kernel/build.mk | $(BUILD)
+	$(CLANG) $(VDSO_FLAGS) -c $< -o $@
+
+$(BUILD)/vdso.so: $(BUILD)/vdso.o kernel/vdso.lds kernel/vdso.map
+	$(LLD) -shared -T kernel/vdso.lds --version-script=kernel/vdso.map --hash-style=both \
+		--eh-frame-hdr -soname=linux-vdso.so.1 -z max-page-size=4096 -z norelro -s $< -o $@
+
+$(BUILD)/vdso.asl: $(BUILD)/vdso.so scripts/bin2asl.py
+	$(PYTHON) scripts/bin2asl.py VDSO $< $@
+
+$(BUILD)/kernel.aml: kernel/kernel.asl $(filter-out kernel/kernel.asl,$(wildcard kernel/*.asl)) $(BUILD)/vdso.asl | $(BUILD)
+	$(IASL) -I kernel -I $(BUILD) -p $(basename $@) $<
 
 copy-aml: $(BUILD)/kernel.aml
 	cp -- "$<" ./kernel.aml
@@ -31,8 +44,8 @@ $(BUILD)/x86.o: kernel/x86.S kernel/build.mk | $(BUILD)
 
 INITRAMFS_FILES := $(if $(INITRAMFS_FSTAB),,$(wildcard initramfs/*) $(call guest_bins,$(BUILD)/ls $(BOOT_ELF))) $(INITRAMFS_EXTRA)
 
-$(BUILD)/initramfs.img: scripts/pack-initramfs.py initramfs $(foreach spec,$(INITRAMFS_FILES),$(lastword $(subst =, ,$(spec)))) $(INITRAMFS_FSTAB) $(INITRAMFS_FONT) $(BUILD)/initramfs.inputs kernel/build.mk | $(BUILD)
-	$(PYTHON) $< $@ $(INITRAMFS_FILES) $(if $(INITRAMFS_FSTAB),etc/fstab=$(INITRAMFS_FSTAB)) $(if $(INITRAMFS_FONT),fonts/dwm-font.ttf=$(INITRAMFS_FONT))
+$(BUILD)/initramfs.img: scripts/pack-initramfs.py initramfs $(foreach spec,$(INITRAMFS_FILES),$(lastword $(subst =, ,$(spec)))) $(INITRAMFS_FSTAB) $(if $(INITRAMFS_FSTAB),config/hosts) $(INITRAMFS_FONT) $(BUILD)/initramfs.inputs kernel/build.mk | $(BUILD)
+	$(PYTHON) $< $@ $(INITRAMFS_FILES) $(if $(INITRAMFS_FSTAB),etc/fstab=$(INITRAMFS_FSTAB) etc/hosts=config/hosts) $(if $(INITRAMFS_FONT),fonts/dwm-font.ttf=$(INITRAMFS_FONT))
 
 $(BUILD)/initramfs.o: kernel/embed-initramfs.S $(BUILD)/initramfs.img kernel/build.mk
 	$(CLANG) $(KERNEL_FLAGS) -DINITRAMFS_IMAGE='"$(BUILD)/initramfs.img"' -c $< -o $@

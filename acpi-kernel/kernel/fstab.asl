@@ -33,7 +33,8 @@
         Local3 = FSTK (Local2, Arg1)
         If (Local2 == Local3 || XBYT (Local2) != 0x2F) { Return (Zero) }
         Local4 = VWAL (VROT, Local2, Local3 - Local2)
-        If (Local4 >= Zero - 4095 || XVWD (Local4 + VNTY, Ones) != 4) { Return (Zero) }
+        If (Local4 >= Zero - 4095) { Return (Zero) } // LOr evaluates both operands
+        If (XVWD (Local4 + VNTY, Ones) != 4) { Return (Zero) }
 
         Local6 = Local2
         Local7 = Local3

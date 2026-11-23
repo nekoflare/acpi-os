@@ -31,7 +31,9 @@
 
     Method (VREF, 1, NotSerialized)
     {
-        If (Arg0 && (XVWD (Arg0 + VNMD, Ones) || XVWD (Arg0 + VNPR, Ones)))
+        // LAnd evaluates both operands, so a null node returns first.
+        If (!Arg0) { Return (Zero) }
+        If (XVWD (Arg0 + VNMD, Ones) || XVWD (Arg0 + VNPR, Ones))
         {
             XSTQ (Arg0 + VNRF, XVWD (Arg0 + VNRF, Ones) + One)
         }
@@ -55,7 +57,8 @@
 
     Method (VREL, 1, NotSerialized)
     {
-        If (Arg0 && (XVWD (Arg0 + VNMD, Ones) || XVWD (Arg0 + VNPR, Ones)))
+        If (!Arg0) { Return (Zero) }
+        If (XVWD (Arg0 + VNMD, Ones) || XVWD (Arg0 + VNPR, Ones))
         {
             XSTQ (Arg0 + VNRF, XVWD (Arg0 + VNRF, Ones) - One)
             VREC (Arg0)
@@ -243,9 +246,11 @@
         Return (Zero)
     }
 
-    Method (VGCD, 3, NotSerialized)
+    // Build the absolute path of a vnode at the end of UPTH, NUL-terminated.
+    // Return its first byte, or a negative errno.
+    Method (VPTH, 1, NotSerialized)
     {
-        Local0 = VCWD (Arg0)
+        Local0 = Arg0
         Local1 = XADR (UPTH)
         Local2 = Local1 + SizeOf (UPTH) - One
         Local3 = Local2
@@ -266,6 +271,14 @@
             Decrement (Local2)
             XSTB (Local2, 0x2F)
         }
+        Return (Local2)
+    }
+
+    Method (VGCD, 3, NotSerialized)
+    {
+        Local2 = VPTH (VCWD (Arg0))
+        If (Local2 >= Zero - 4095) { Return (Local2) }
+        Local3 = XADR (UPTH) + SizeOf (UPTH) - One
         Local4 = Local3 - Local2 + One
         If (Arg2 < Local4) { Return (Zero - 34) }
         If (!UCOP (Arg0, Arg1, Local2, Local4)) { Return (Zero - 14) }

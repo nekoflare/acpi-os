@@ -94,6 +94,10 @@ struct acpi_cpu_local {
     uint64_t last_fault_vector;
     uint64_t last_fault_error;
     uint64_t last_fault_rip;
+    /* Private root of the user task running on this CPU, or zero. */
+    volatile uint64_t user_cr3;
+    /* TLB shootdown IPIs this CPU has handled. */
+    volatile uint64_t tlb_flushes;
     uint32_t lapic_id;
     uint32_t index;
     struct limine_mp_info *info;
@@ -112,6 +116,7 @@ _Static_assert(offsetof(struct acpi_cpu_local, user_fx_state) == 32, "GS ABI");
 _Static_assert(offsetof(struct acpi_cpu_local, tss) == 40, "GS ABI");
 _Static_assert(offsetof(struct acpi_cpu_local, self) == 48, "GS ABI");
 _Static_assert(offsetof(struct acpi_cpu_local, irq_pending) == 56, "GS ABI");
+_Static_assert(offsetof(struct acpi_cpu_local, user_cr3) == 88, "GS ABI");
 
 static struct acpi_cpu_local cpu_locals[ACPI_MAX_CPUS];
 static uint64_t cpu_count = 1;
@@ -139,20 +144,61 @@ static struct acpi_cpu_local *current_cpu(void)
     return local;
 }
 
+// TEMP lock profile: held cycles, acquisitions, spin cycles, longest hold,
+// CR3 reload cycles. Updated only while the lock is held, except spin.
+static uint64_t lock_profile[5];
+static uint64_t lock_held_since;
+static uint64_t lock_spin_total;
+
+static inline uint64_t profile_tsc(void)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
 static void scheduler_acquire(void)
 {
+    uint64_t start = profile_tsc();
     while (__atomic_test_and_set(&scheduler_lock, __ATOMIC_ACQUIRE))
         __asm__ volatile("pause" ::: "memory");
+    uint64_t got = profile_tsc();
+    __atomic_fetch_add(&lock_spin_total, got - start, __ATOMIC_RELAXED);
 
     // Other CPUs can recycle kernel mappings while this CPU is unlocked.
     // Task stacks and native task arguments remain mapped while in use.
     uint64_t root;
     __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=&r"(root) : : "memory");
+    lock_profile[4] += profile_tsc() - got;
+    lock_profile[1]++;
+    lock_held_since = got;
 }
 
 static void scheduler_release(void)
 {
+    uint64_t held = profile_tsc() - lock_held_since;
+    lock_profile[0] += held;
+    if (held > lock_profile[3])
+        lock_profile[3] = held;
     __atomic_clear(&scheduler_lock, __ATOMIC_RELEASE);
+}
+
+// Read (and, with bit 8, clear) a lock profile counter. Call with the lock held.
+uint64_t acpi_lock_profile(uint64_t which)
+{
+    uint64_t index = which & 0xff, value;
+    if (index == 2) {
+        value = __atomic_load_n(&lock_spin_total, __ATOMIC_RELAXED);
+        if (which & 0x100)
+            __atomic_fetch_sub(&lock_spin_total, value, __ATOMIC_RELAXED);
+        return value;
+    }
+    if (index > 4)
+        return 0;
+    value = lock_profile[index];
+    if (which & 0x100)
+        lock_profile[index] = 0;
+    return value;
 }
 
 uint64_t acpi_scheduler_unlock(void)
@@ -805,6 +851,63 @@ uint64_t acpi_copy_memory(uint64_t destination, uint64_t source, uint64_t length
 {
     __asm__ volatile("rep movsb" : "+D"(destination), "+S"(source), "+c"(length) : : "memory");
     return 0;
+}
+
+#define ACPI_TLB_VECTOR 0x26
+
+/* Vector 0x26 lands here from x86.S on a CPU that may be running user code. */
+void acpi_tlb_shootdown_interrupt(void)
+{
+    uint64_t root;
+    __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=&r"(root) : : "memory");
+    struct acpi_cpu_local *local = current_cpu();
+    __atomic_fetch_add(&local->tlb_flushes, 1, __ATOMIC_RELEASE);
+    write_local_apic(0xB0, 0);
+}
+
+static void send_ipi(uint32_t lapic_id, uint32_t vector)
+{
+    if (scheduler_x2apic) {
+        set_msr(0x830, ((uint64_t)lapic_id << 32) | vector);
+        return;
+    }
+    volatile uint32_t *low = (volatile uint32_t *)(scheduler_lapic_virtual + 0x300);
+    volatile uint32_t *high = (volatile uint32_t *)(scheduler_lapic_virtual + 0x310);
+    while (*low & (1u << 12))
+        __asm__ volatile("pause");
+    *high = lapic_id << 24;
+    *low = vector;
+}
+
+/* Called with the scheduler lock held after user page-table entries for Root
+   were changed. Interrupt every other CPU still running that address space,
+   and wait until each has flushed its TLB or left user mode. CPUs that enter
+   the address space later load CR3 and so see the new entries. */
+uint64_t acpi_tlb_shootdown(uint64_t root)
+{
+    uint64_t seen[ACPI_MAX_CPUS];
+    uint64_t targets = 0;
+    struct acpi_cpu_local *self = current_cpu();
+    if (!root || (!scheduler_lapic_virtual && !scheduler_x2apic))
+        return 0;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    for (uint64_t i = 0; i < cpu_count; i++) {
+        struct acpi_cpu_local *cpu = &cpu_locals[i];
+        if (cpu == self || cpu->user_cr3 != root)
+            continue;
+        seen[i] = __atomic_load_n(&cpu->tlb_flushes, __ATOMIC_ACQUIRE);
+        targets |= UINT64_C(1) << i;
+        send_ipi(cpu->lapic_id, ACPI_TLB_VECTOR);
+    }
+    for (uint64_t i = 0; i < cpu_count; i++) {
+        if (!(targets & (UINT64_C(1) << i)))
+            continue;
+        struct acpi_cpu_local *cpu = &cpu_locals[i];
+        while (cpu->user_cr3 == root &&
+               __atomic_load_n(&cpu->tlb_flushes, __ATOMIC_ACQUIRE) == seen[i])
+            __asm__ volatile("pause" ::: "memory");
+    }
+    return targets;
 }
 
 uint64_t acpi_invalidate_page(uint64_t address)

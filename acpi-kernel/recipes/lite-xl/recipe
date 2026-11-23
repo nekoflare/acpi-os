@@ -1,0 +1,36 @@
+version=2.1.8
+revision=1
+cross_compile=yes
+tarball_url=https://github.com/lite-xl/lite-xl/archive/refs/tags/v2.1.8.tar.gz
+tarball_sha256=fcaffb946bc60583369cb040d533a4ac18075a6d474d49a2a5ff4bf87e2e9a10
+builddeps="musl lua pcre2 freetype sdl3 libx11 libxext xcursor libxi libxfixes libxrender"
+imagedeps="meson ninja-build"
+
+# The guest has no /proc/self/exe, and apps live in /bin with their data
+# under /usr/share, so point both lookups at the installed layout.
+configure() {
+    copy_source
+    sed -i 's|  ssize_t len = readlink(path, buf, sz - 1);|&\n  if (len <= 0) { strncpy(buf, "/bin/lite-xl", sz - 1); buf[sz - 1] = 0; return; }|' \
+        src/src/main.c
+    sed -i "/  local prefix = match(exedir, /a\\    \"  if exedir == '/bin' then prefix = '/usr' end\\\\n\"" src/src/main.c
+    sed -i 's|local prefix = EXEDIR:match("^(.+)\[/\\\\\]bin\$")|local prefix = EXEDIR == "/bin" and "/usr" or EXEDIR:match("^(.+)[/\\\\]bin$")|' \
+        src/data/core/start.lua
+    grep -q 'EXEDIR == "/bin"' src/data/core/start.lua
+    grep -q '"/bin/lite-xl"' src/src/main.c
+    grep -q "if exedir == '/bin' then prefix = '/usr' end" src/src/main.c
+    musl_env
+    # The lua recipe installs no pkg-config file.
+    mkdir -p pc
+    printf '%s\n' 'prefix=/usr' 'Name: lua5.4' 'Description: Lua' 'Version: 5.4.8' \
+        'Cflags: -I${prefix}/include' 'Libs: -L${prefix}/lib -llua -lm' > pc/lua5.4.pc
+    export PKG_CONFIG_LIBDIR="$PWD/pc:$PKG_CONFIG_LIBDIR"
+    meson setup obj src --prefix=/usr --buildtype=release \
+        --wrap-mode=nodownload -Duse_system_lua=true \
+        -Ddirmonitor_backend=dummy -Dprefer_static=true \
+        -Dc_link_args="-static -no-pie -L$sysroot/usr/lib"
+}
+build() { meson compile -C obj -j"$parallelism"; }
+package() {
+    DESTDIR="$dest_dir" meson install -C obj --no-rebuild
+    strip --strip-unneeded "$dest_dir/usr/bin/lite-xl"
+}

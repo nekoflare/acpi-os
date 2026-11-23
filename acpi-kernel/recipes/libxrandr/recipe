@@ -1,0 +1,34 @@
+version=1.5.5
+revision=1
+cross_compile=yes
+tarball_url="https://www.x.org/releases/individual/lib/libXrandr-1.5.5.tar.xz"
+tarball_sha256=72b922c2e765434e9e9f0960148070bd4504b288263e2868a4ccce1b7cf2767a
+builddeps="musl-cxx libxext libxrender libx11-shared libxext-shared libxrender-shared libxcb-shared libxau-shared libxdmcp-shared"
+
+# Shared libXrandr for dynamically linked X clients: GLFW loads it to list
+# monitors and video modes. Xvfb has RANDR built in.
+x11_shared() {
+    export PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH"
+    export PKG_CONFIG_LIBDIR="$sysroot/usr/lib/pkgconfig:$sysroot/usr/share/pkgconfig"
+    export PKG_CONFIG_SYSROOT_DIR="$sysroot"
+    # Link against the shared X libraries only: libtool would take the
+    # static packages' .la files and pull non-PIC archives in.
+    rm -rf shlib
+    mkdir shlib
+    ln -s "$sysroot"/usr/lib/*.so* shlib/ 2>/dev/null || true
+}
+configure() {
+    x11_shared
+    "$source_dir/configure" --host=x86_64-buildroot-linux-musl --prefix=/usr --libdir=/usr/lib \
+        --enable-shared --disable-static --disable-malloc0returnsnull CFLAGS="-O2 $APP_CPU_FLAGS" \
+        LDFLAGS="-L$PWD/shlib -Wl,-rpath-link,$PWD/shlib"
+}
+build() { x11_shared; make -j"$parallelism"; }
+package() {
+    # No "make install" for the library: libtool's install-time relink with
+    # DESTDIR adds -L/usr/lib, which the cross compiler rejects as unsafe.
+    make -C src DESTDIR="$dest_dir" install-libXrandrincludeHEADERS
+    make DESTDIR="$dest_dir" install-pkgconfigDATA
+    mkdir -p "$dest_dir/usr/lib"
+    cp -P src/.libs/libXrandr.so* "$dest_dir/usr/lib/"
+}
