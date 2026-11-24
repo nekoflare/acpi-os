@@ -1,0 +1,13 @@
+version=0.4.2
+revision=1
+cross_compile=yes
+tarball_url=https://www.x.org/releases/individual/lib/xcb-util-wm-0.4.2.tar.xz
+tarball_sha256=62c34e21d06264687faea7edbf63632c9f04d55e72114aa4a57bb95e4f888a0b
+builddeps=musl
+deps="libxcb xorgproto"
+imagedeps="m4"
+
+# xcb-icccm and xcb-ewmh, for NetSurf's X11 framebuffer surface.
+configure() { static_configure; }
+build() { static_build; }
+package() { autoconf_package; }

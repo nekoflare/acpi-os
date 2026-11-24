@@ -1,0 +1,56 @@
+diff --color -ru a/libnsfb/src/surface/x.c b/libnsfb/src/surface/x.c
+--- a/libnsfb/src/surface/x.c	2026-11-24 22:31:36.083850654 +0100
++++ b/libnsfb/src/surface/x.c	2026-11-24 22:31:36.093816422 +0100
+@@ -390,7 +390,16 @@
+             break;
+ 
+         case 0xFF: /* Keyboard */
+-            nsfb_key = XCSKeyboardMap[chrcode];
++            /* The table leaves F1, Control and Alt unmapped: without them
++             * NetSurf never sees Ctrl held (Ctrl+A arrives as "a"). */
++            switch (chrcode) {
++            case 0xBE: nsfb_key = NSFB_KEY_F1; break;
++            case 0xE3: nsfb_key = NSFB_KEY_LCTRL; break;
++            case 0xE4: nsfb_key = NSFB_KEY_RCTRL; break;
++            case 0xE9: nsfb_key = NSFB_KEY_LALT; break;
++            case 0xEA: nsfb_key = NSFB_KEY_RALT; break;
++            default: nsfb_key = XCSKeyboardMap[chrcode]; break;
++            }
+             break;
+         }
+     }
+diff --color -ru a/netsurf/frontends/framebuffer/fbtk/text.c b/netsurf/frontends/framebuffer/fbtk/text.c
+--- a/netsurf/frontends/framebuffer/fbtk/text.c	2026-11-24 22:31:36.084487627 +0100
++++ b/netsurf/frontends/framebuffer/fbtk/text.c	2026-11-24 22:31:36.093921676 +0100
+@@ -301,7 +301,7 @@
+ static int
+ text_input(fbtk_widget_t *widget, fbtk_callback_info *cbi)
+ {
+-	int value;
++	int value, ucs4;
+ 	static fbtk_modifier_type modifier = FBTK_MOD_CLEAR;
+ 	char *temp;
+ 	plot_font_style_t font_style;
+@@ -442,6 +442,12 @@
+ 			break;
+ 		}
+ 
++		/* Keys without a character (function keys, Alt, keys
++		 * the keymap does not know) insert nothing. */
++		ucs4 = fbtk_keycode_to_ucs4(value, modifier);
++		if (ucs4 < 0x20 || ucs4 > 0x7e)
++			break;
++
+ 		/* allow for new character and null */
+ 		temp = realloc(widget->u.text.text, widget->u.text.len + 2);
+ 		if (temp == NULL) {
+@@ -452,8 +458,7 @@
+ 		memmove(widget->u.text.text + widget->u.text.idx + 1,
+ 				widget->u.text.text + widget->u.text.idx,
+ 				widget->u.text.len - widget->u.text.idx);
+-		widget->u.text.text[widget->u.text.idx] =
+-				fbtk_keycode_to_ucs4(value, modifier);
++		widget->u.text.text[widget->u.text.idx] = ucs4;
+ 		widget->u.text.idx++;
+ 		widget->u.text.len++;
+ 		widget->u.text.text[widget->u.text.len] = '\0';

@@ -1,0 +1,12 @@
+version=0.4.1
+revision=1
+cross_compile=yes
+tarball_url=https://www.x.org/releases/individual/lib/xcb-util-keysyms-0.4.1.tar.xz
+tarball_sha256=7c260a5294412aed429df1da2f8afd3bd07b7cba3fec772fba15a613a6d5c638
+builddeps=musl
+deps="libxcb xorgproto"
+
+# xcb-keysyms, for NetSurf's X11 framebuffer surface.
+configure() { static_configure; }
+build() { static_build; }
+package() { autoconf_package; }

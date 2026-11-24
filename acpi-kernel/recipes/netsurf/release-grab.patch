@@ -1,0 +1,16 @@
+diff --color -ru a/netsurf/frontends/framebuffer/fbtk/event.c b/netsurf/frontends/framebuffer/fbtk/event.c
+--- a/netsurf/frontends/framebuffer/fbtk/event.c	2026-11-24 22:39:01.174274133 +0100
++++ b/netsurf/frontends/framebuffer/fbtk/event.c	2026-11-24 22:39:01.183275813 +0100
+@@ -74,6 +74,12 @@
+ 
+ 	clicked = fbtk_get_widget_at(root, cloc.x0, cloc.y0);
+ 
++	/* A scroll bar drag grabs the pointer. Its button release must reach
++	 * the grabbing widget even when the pointer has left it, or the drag
++	 * never ends. */
++	if (root->u.root.grabbed != NULL && event->type == NSFB_EVENT_KEY_UP)
++		clicked = root->u.root.grabbed;
++
+ 	if (clicked == NULL)
+ 		return;
+ 

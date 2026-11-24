@@ -1,0 +1,64 @@
+version=3.11
+revision=3
+cross_compile=yes
+tarball_url=https://download.netsurf-browser.org/netsurf/releases/source-full/netsurf-all-3.11.tar.gz
+tarball_sha256=4dea880ff3c2f698bfd62c982b259340f9abcd7f67e6c8eb2b32c61f71644b7b
+builddeps="musl-cxx curl openssl zlib-shared libxcb-shared libxau-shared libxdmcp-shared"
+deps="libxcb xcb-util xcb-util-image xcb-util-wm xcb-util-keysyms libpng libjpeg-turbo freetype expat zlib dejavu-fonts"
+imagedeps="gperf flex bison perl pkgconf zlib1g-dev libpng-dev"
+
+# NetSurf's framebuffer frontend drawing to an X11 window through libnsfb's
+# xcb surface. It is a dynamic executable: curl and OpenSSL are shared
+# only. The NetSurf libraries and the image, font and xcb-util archives are
+# linked in statically (non-PIC, so the executable is not PIE).
+ns_libs="buildsystem libnslog libwapcaplet libparserutils libhubbub libcss libdom libnsbmp libnsgif libnsutils libutf8proc libnspsl libsvgtiny libnsfb"
+ns_cross=x86_64-buildroot-linux-musl
+
+ns_env() {
+    export PATH="$sysroot/opt/acpi-musl-cxx/bin:$PWD/inst/bin:$PWD/wrap:$PATH"
+    export CFLAGS="-O2 $APP_CPU_FLAGS -fno-pie -I$sysroot/usr/include"
+    export LDFLAGS="-no-pie -Wl,-rpath-link,$sysroot/usr/lib"
+    # pkg-config sees the sysroot and the NetSurf libraries staged in inst/;
+    # the sysroot prefix must not be applied to inst/ paths.
+    mkdir -p wrap
+    cat > wrap/pkg-config <<WRAP
+#!/bin/bash
+set -o pipefail
+PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR="$PWD/inst/lib/pkgconfig:$sysroot/usr/lib/pkgconfig:$sysroot/usr/share/pkgconfig" \
+PKG_CONFIG_SYSROOT_DIR="$sysroot" /usr/bin/pkg-config "\$@" | sed "s|$sysroot$PWD/inst|$PWD/inst|g"
+WRAP
+    chmod +x wrap/pkg-config
+}
+
+build() {
+    copy_source
+    # Ctrl, Alt and F1 reach NetSurf; non-character keys type nothing.
+    patch -d src -p1 < "$recipe_dir/keys.patch" || return
+    # Scroll bar drags end when the button is released anywhere.
+    patch -d src -p1 < "$recipe_dir/release-grab.patch" || return
+    ns_env
+    local lib
+    # nsgenbind is a build tool: host compiler.
+    env -u CFLAGS -u LDFLAGS make -C src/nsgenbind install PREFIX="$PWD/inst" \
+        NSSHARED="$PWD/src/buildsystem" Q= DESTDIR= || return
+    for lib in $ns_libs; do
+        make -C src/$lib install HOST=$ns_cross CC=$ns_cross-gcc AR=$ns_cross-ar PREFIX="$PWD/inst" \
+            NSSHARED="$PWD/src/buildsystem" Q= DESTDIR= WARNFLAGS='-Wall -W -Wno-error' || return
+    done
+    make -C src/netsurf -j"$parallelism" TARGET=framebuffer CC=$ns_cross-gcc AR=$ns_cross-ar PREFIX=/usr \
+        NSSHARED="$PWD/src/buildsystem" Q= WARNFLAGS='-Wall -W -Wno-error' \
+        NETSURF_FB_FRONTEND=x NETSURF_FB_FONTLIB=freetype \
+        NETSURF_FB_FONTPATH=/fonts \
+        NETSURF_USE_WEBP=NO NETSURF_USE_JPEGXL=NO NETSURF_USE_ROSPRITE=NO \
+        NETSURF_USE_LIBICONV_PLUG=YES NETSURF_USE_HARU_PDF=NO
+}
+package() {
+    ns_env
+    make -C src/netsurf install TARGET=framebuffer CC=$ns_cross-gcc AR=$ns_cross-ar PREFIX=/usr DESTDIR="$dest_dir" \
+        NSSHARED="$PWD/src/buildsystem" Q= \
+        NETSURF_FB_FRONTEND=x NETSURF_FB_FONTLIB=freetype \
+        NETSURF_FB_FONTPATH=/fonts \
+        NETSURF_USE_WEBP=NO NETSURF_USE_JPEGXL=NO NETSURF_USE_ROSPRITE=NO \
+        NETSURF_USE_LIBICONV_PLUG=YES NETSURF_USE_HARU_PDF=NO
+    $ns_cross-strip "$dest_dir"/usr/bin/netsurf-fb
+}

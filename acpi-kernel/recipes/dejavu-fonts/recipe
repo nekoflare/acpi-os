@@ -1,12 +1,12 @@
 version=2.37
-revision=1
+revision=2
 cross_compile=yes
 tarball_url=https://downloads.sourceforge.net/project/dejavu/dejavu/2.37/dejavu-fonts-ttf-2.37.tar.bz2
 tarball_sha256=fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7
 
 package() {
     local font
-    for font in DejaVuSans.ttf DejaVuSansMono{,-Bold,-Oblique,-BoldOblique}.ttf; do
+    for font in DejaVuSans{,-Bold,-Oblique,-BoldOblique}.ttf DejaVuSansMono{,-Bold,-Oblique,-BoldOblique}.ttf DejaVuSerif{,-Bold}.ttf; do
         install -Dm644 "$source_dir/ttf/$font" \
             "$dest_dir/usr/share/fonts/truetype/dejavu/$font"
     done

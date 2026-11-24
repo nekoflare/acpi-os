@@ -200,7 +200,9 @@ XORG_PYTHON_LIB := usr/lib/python3.15=$(XORG_BUILD)/python-lib
 XORG_PYTHON_TEST := usr/share/python/test.py=config/python-test.py
 XORG_PYTHON_MARKER := usr/lib/python3.15/lib-dynload/.static-modules=config/python-static-modules.txt
 XORG_DEJAVU_FONTS := DejaVuSans.ttf DejaVuSansMono.ttf DejaVuSansMono-Bold.ttf \
-    DejaVuSansMono-Oblique.ttf DejaVuSansMono-BoldOblique.ttf
+    DejaVuSansMono-Oblique.ttf DejaVuSansMono-BoldOblique.ttf \
+    DejaVuSans-Bold.ttf DejaVuSans-Oblique.ttf DejaVuSans-BoldOblique.ttf \
+    DejaVuSerif.ttf DejaVuSerif-Bold.ttf
 XORG_FONT_FILES := $(foreach font,$(XORG_DEJAVU_FONTS),fonts/$(font)=$(XORG_BUILD)/$(font))
 XORG_FILE_MAGIC := usr/share/misc/magic.mgc=$(XORG_BUILD)/magic.mgc
 XORG_XCALC_APPDEFAULTS := usr/share/X11/app-defaults/XCalc=$(XORG_BUILD)/XCalc.ad
@@ -223,7 +225,7 @@ XORG_JDK_FILES := $(XORG_JDK_HOME)=$(XORG_BUILD)/openjdk usr/lib/libasound.so.2=
 # Xlib, so Xvfb needs no GLX extension. GLFW (LWJGL) dlopens libX11,
 # libXrandr, libXcursor (for its hidden cursor) and libXi (raw mouse motion), so these are the shared
 # builds; libGL needs the C++ runtime and LWJGL's libopenal also libatomic.
-XORG_GL_LIBS := mesa:libGL.so.1 libx11-shared:libX11.so.6 libxcb-shared:libxcb.so.1 \
+XORG_GL_LIBS := mesa:libGL.so.1 libx11-shared:libX11.so.6 libxcb-shared:libxcb.so.1 libxcb-shared:libxcb-shm.so.0 \
 	libxau-shared:libXau.so.6 libxdmcp-shared:libXdmcp.so.6 libxext-shared:libXext.so.6 \
 	libxrender-shared:libXrender.so.1 libxrandr:libXrandr.so.2 \
 	libxfixes-shared:libXfixes.so.3 libxcursor-shared:libXcursor.so.1 \
@@ -265,6 +267,9 @@ XORG_TLS_FILES := $(foreach lib,$(XORG_TLS_LIBS),usr/lib/$(lastword $(subst :, ,
 	etc/ssl/openssl.cnf=$(XORG_BUILD)/tls/openssl.cnf \
 	etc/ssl/certs/ca-certificates.crt=$(XORG_BUILD)/tls/ca-certificates.crt \
 	'etc/ssl/cert.pem->certs/ca-certificates.crt'
+# Web browser: NetSurf's framebuffer frontend in an X11 window (recipes/netsurf).
+XORG_NETSURF_DEPS := $(XORG_BUILD)/netsurf $(XORG_BUILD)/netsurf-res
+XORG_NETSURF_FILES := bin/netsurf=$(XORG_BUILD)/netsurf usr/share/netsurf=$(XORG_BUILD)/netsurf-res
 XORG_WALLPAPER := serval_wp.jpg
 XORG_WALLPAPER_CREDIT := serval_wp.jpg.txt
 XORG_WALLPAPER_FILES := $(addprefix usr/share/wallpapers/,$(foreach file,$(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT),$(file)=$(file)))
@@ -280,6 +285,8 @@ $(eval $(call jinx_artifact,$(XORG_BUILD)/tls/ca-certificates.crt,ca-certificate
 busybox: $(XORG_BUILD)/busybox
 
 $(eval $(call jinx_artifact,$(XORG_BUILD)/nsxiv,nsxiv,usr/bin/nsxiv))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/netsurf,netsurf,usr/bin/netsurf-fb))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/netsurf-res,netsurf,usr/share/netsurf))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/nano,nano,usr/bin/nano))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/vim,vim,usr/bin/vim))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/lite-xl,lite-xl,usr/bin/lite-xl))
@@ -408,9 +415,9 @@ $(XORG_BUILD)/hello-dynamic: userspace/hello-dynamic.c $(XORG_MUSL_SHARED)
 		"$$(gcc -print-libgcc-file-name)" "$(XORG_BUILD)/musl-shared/lib/crtn.o" -o $@
 
 $(XORG_DISK): scripts/pack-xorg-disk.sh $(XORG_DESKTOP_BUILD)/kernel.elf $(LIMINE_DIR)/BOOTX64.EFI \
-	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_BUILD)/uacpi-tests config/uacpi-run-tests config/bashrc $(XORG_BUILD)/python-lib $(XORG_BUILD)/lite-xl-data $(XORG_BUILD)/openjdk $(XORG_BUILD)/libasound.so.2 $(BASH_BUILD)/bash.elf $(XORG_BUILD)/git-upload-pack $(XORG_BUILD)/git-template-description $(XORG_DATA) $(XORG_BUILD)/magic.mgc $(XORG_BUILD)/XCalc.ad $(XORG_BUILD)/clang-resource $(XORG_BUILD)/libc-include $(XORG_BUILD)/musl-runtime config/clang.cfg config/pthread-test.c $(XORG_BUILD)/pci.ids config/picom.conf config/lua-test.lua config/sqlite3-test.sh config/acpi-example.asl config/python-test.py config/python-static-modules.txt $(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) $(addprefix $(XORG_BUILD)/,$(XORG_DEJAVU_FONTS)) $(XORG_MUSL_SHARED) $(XORG_BUILD)/hello-dynamic $(XORG_GL_DEPS) $(XORG_LWJGL_DEPS) $(XORG_MINECRAFT_DEPS) $(XORG_TLS_DEPS) catflare.gif Makefile
+	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_BUILD)/uacpi-tests config/uacpi-run-tests config/bashrc $(XORG_BUILD)/python-lib $(XORG_BUILD)/lite-xl-data $(XORG_BUILD)/openjdk $(XORG_BUILD)/libasound.so.2 $(BASH_BUILD)/bash.elf $(XORG_BUILD)/git-upload-pack $(XORG_BUILD)/git-template-description $(XORG_DATA) $(XORG_BUILD)/magic.mgc $(XORG_BUILD)/XCalc.ad $(XORG_BUILD)/clang-resource $(XORG_BUILD)/libc-include $(XORG_BUILD)/musl-runtime config/clang.cfg config/pthread-test.c $(XORG_BUILD)/pci.ids config/picom.conf config/lua-test.lua config/sqlite3-test.sh config/acpi-example.asl config/python-test.py config/python-static-modules.txt $(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) $(addprefix $(XORG_BUILD)/,$(XORG_DEJAVU_FONTS)) $(XORG_MUSL_SHARED) $(XORG_BUILD)/hello-dynamic $(XORG_GL_DEPS) $(XORG_LWJGL_DEPS) $(XORG_MINECRAFT_DEPS) $(XORG_TLS_DEPS) $(XORG_NETSURF_DEPS) catflare.gif Makefile
 	sh $< "$@" "$(XORG_DESKTOP_BUILD)/kernel.elf" "$(LIMINE_DIR)/BOOTX64.EFI" \
-		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_BASH) $(XORG_DATA) $(XORG_PICOM_CONFIG) $(XORG_CONKY_CONFIG) .bashrc=config/bashrc $(XORG_LUA_TEST) $(XORG_IASL_EXAMPLE) $(XORG_UACPI_TESTS) bin/uacpi-run-tests=config/uacpi-run-tests bin/sqlite3-test=config/sqlite3-test.sh $(XORG_PYTHON_LIB) $(XORG_PYTHON_TEST) $(XORG_PYTHON_MARKER) $(XORG_FILE_MAGIC) $(XORG_XCALC_APPDEFAULTS) $(XORG_CLANG_FILES) $(XORG_DYNAMIC_FILES) $(XORG_PCI_IDS) $(XORG_LITE_XL_DATA) $(XORG_JDK_FILES) $(XORG_GL_FILES) $(XORG_LWJGL_FILES) $(XORG_MINECRAFT_FILES) $(XORG_TLS_FILES) $(XORG_WALLPAPER_FILES) usr/libexec/git-core/git-upload-pack=$(XORG_BUILD)/git-upload-pack usr/share/git-core/templates/description=$(XORG_BUILD)/git-template-description usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
+		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_BASH) $(XORG_DATA) $(XORG_PICOM_CONFIG) $(XORG_CONKY_CONFIG) .bashrc=config/bashrc $(XORG_LUA_TEST) $(XORG_IASL_EXAMPLE) $(XORG_UACPI_TESTS) bin/uacpi-run-tests=config/uacpi-run-tests bin/sqlite3-test=config/sqlite3-test.sh $(XORG_PYTHON_LIB) $(XORG_PYTHON_TEST) $(XORG_PYTHON_MARKER) $(XORG_FILE_MAGIC) $(XORG_XCALC_APPDEFAULTS) $(XORG_CLANG_FILES) $(XORG_DYNAMIC_FILES) $(XORG_PCI_IDS) $(XORG_LITE_XL_DATA) $(XORG_JDK_FILES) $(XORG_GL_FILES) $(XORG_LWJGL_FILES) $(XORG_MINECRAFT_FILES) $(XORG_TLS_FILES) $(XORG_NETSURF_FILES) $(XORG_WALLPAPER_FILES) usr/libexec/git-core/git-upload-pack=$(XORG_BUILD)/git-upload-pack usr/share/git-core/templates/description=$(XORG_BUILD)/git-template-description usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
 		bin/ls=$(XORG_LS) $(foreach cmd,$(XORG_FS_COMMANDS),bin/$(cmd)=$(XORG_FS_TOOLS)) \
 		fonts/dwm-font.ttf="$(XORG_FONT)" $(XORG_FONT_FILES) catflare.gif=catflare.gif
 
