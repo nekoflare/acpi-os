@@ -32,15 +32,14 @@ for spec do
         *=*) name=${spec%%=*}; source=${spec#*=} ;;
         *) name=${spec##*/}; source=$spec ;;
     esac
+    # Reflink copies (btrfs, XFS) are nearly free; cp falls back to a real
+    # copy elsewhere. -p keeps the mtimes the manifest compares.
     if [ -d "$source" ]; then
-        find "$source" \( -type f -o -type l \) -print | while IFS= read -r file; do
-            relative=${file#"$source"/}
-            mkdir -p "$work/apps/$name/$(dirname "$relative")"
-            cp -P -p -- "$file" "$work/apps/$name/$relative"
-        done
+        mkdir -p "$work/apps/$name"
+        cp -a --reflink=auto -- "$source/." "$work/apps/$name/"
     else
         mkdir -p "$work/apps/$(dirname "$name")"
-        cp -p -- "$source" "$work/apps/$name"
+        cp -p --reflink=auto -- "$source" "$work/apps/$name"
     fi
 done
 
@@ -53,6 +52,16 @@ if [ -f "$work/apps/bin/busybox" ]; then
         fi
     done
 fi
+
+# Compare the staged tree with the manifest of the last pack (written beside
+# the image). XORG_RESTAGE=1 rewrites every file.
+manifest="$output.manifest"
+[ -f "$output" ] || rm -f "$manifest"
+# Without a manifest (or on a restage) also run the one-time migrations below.
+full=${XORG_RESTAGE:+1}
+[ -f "$manifest" ] || full=1
+python3 -I "$(dirname "$0")/disk-manifest.py" "$work/apps" "$manifest" "$work/manifest" \
+    "$work/changed" "$work/removed" ${XORG_RESTAGE:+all}
 
 # Preserve the existing ext4 volume when refreshing the boot image.
 # qemu-img refuses to copy the disk while a running VM holds its write lock.
@@ -89,92 +98,107 @@ if [ -f "$output" ]; then
 
     (
         cd "$work/apps"
-        find . -type f -print | while IFS= read -r path; do
-            name=${path#./}
-            ensure_directory "$(dirname "$name")"
-            entry=$(debugfs -R "stat \"/$name\"" "$work/apps.img" 2>/dev/null)
-            case "$entry" in
-                *"Type: regular"*)
-                    : > "$work/current"
-                    debugfs -R "dump \"/$name\" \"$work/current\"" "$work/apps.img"
-                    if cmp -s "$name" "$work/current"; then
-                        continue
-                    fi
-                    debugfs -w -R "rm \"/$name\"" "$work/apps.img"
-                    ;;
-                *"Type: symlink"*)
-                    # A real binary replaces a former applet link.
-                    debugfs -w -R "rm \"/$name\"" "$work/apps.img"
-                    ;;
-                '') ;;
-                *) echo "Packaged file conflicts with /$name" >&2; exit 1 ;;
-            esac
-            debugfs -w -R "write \"$name\" \"/$name\"" "$work/apps.img"
-            : > "$work/current"
-            debugfs -R "dump \"/$name\" \"$work/current\"" "$work/apps.img"
-            cmp "$name" "$work/current"
-        done
-
-        # Remove the prior picom config location from the ext4 image. The
-        # bootstrap initramfs owns /etc/fstab, so a disk-root /etc directory
-        # collides when ext4 is mounted over the bootstrap root.
-        entry=$(debugfs -R 'stat /etc/picom.conf' "$work/apps.img" 2>/dev/null)
-        case "$entry" in
-            *"Type: regular"*) debugfs -w -R 'rm /etc/picom.conf' "$work/apps.img" ;;
-        esac
-        entry=$(debugfs -R 'stat /etc' "$work/apps.img" 2>/dev/null)
-        case "$entry" in
-            *"Type: directory"*)
-                contents=$(debugfs -R 'ls -l /etc' "$work/apps.img" 2>/dev/null |
-                    awk '$NF != "." && $NF != ".." { print $NF }')
-                if [ -n "$contents" ]; then
-                    echo "Cannot retire /etc from the desktop ext4 image; it still contains: $contents" >&2
-                    exit 1
-                fi
-                debugfs -w -R 'rmdir /etc' "$work/apps.img"
-                ;;
-        esac
-
-        # Retire the old root-level copies after their /bin replacements
-        # are in place. Leave unrelated files at those paths alone.
-        printf '\177ELF' > "$work/elf-magic"
-        for spec do
-            case "$spec" in
-                bin/*=*) legacy=${spec%%=*}; legacy=${legacy#bin/} ;;
-                *) continue ;;
-            esac
-            case "$legacy" in */*) continue ;; esac
-            entry=$(debugfs -R "stat \"/$legacy\"" "$work/apps.img" 2>/dev/null)
-            case "$entry" in *"Type: regular"*) ;; *) continue ;; esac
-            : > "$work/current"
-            debugfs -R "dump \"/$legacy\" \"$work/current\"" "$work/apps.img"
-            if head -c 4 "$work/current" | cmp -s "$work/elf-magic" -; then
-                debugfs -w -R "rm \"/$legacy\"" "$work/apps.img"
-                entry=$(debugfs -R "stat \"/$legacy\"" "$work/apps.img" 2>/dev/null)
-                [ -z "$entry" ]
+        # Write only what changed since the last pack: create the missing
+        # parent directories, remove former files (older copies, applet
+        # links, files no longer packaged), then write; one debugfs session
+        # each. debugfs mkdir on an existing directory leaks an inode whose
+        # block stays free in the bitmap (a later write then shares it), so
+        # one stat batch finds the directories that are really missing.
+        sed 's|/[^/]*$||; t; d' "$work/changed" | sort -u | while IFS= read -r dir; do
+            while [ "$dir" != . ]; do printf '%s\n' "$dir"; dir=$(dirname "$dir"); done
+        done | sort -u > "$work/dirs"
+        awk '{ printf "stat \"/%s\"\n", $0 }' "$work/dirs" > "$work/stat.cmds"
+        : > "$work/mkdir.cmds"
+        if [ -s "$work/stat.cmds" ]; then
+            stdbuf -o0 -e0 debugfs -f "$work/stat.cmds" "$work/apps.img" 2>&1 | awk '
+                /^debugfs: stat "/ { finish(); path = substr($0, 16, length($0) - 16); next }
+                path != "" && /Type: directory/ { state = "dir" }
+                path != "" && /Type: / && !/Type: directory/ { state = "other" }
+                path != "" && /File not found by ext2_lookup/ { state = "missing" }
+                function finish() {
+                    if (path == "") return
+                    if (state == "missing") printf "mkdir \"/%s\"\n", path
+                    else if (state != "dir") { print "Packaged directory conflicts with /" path > "/dev/stderr"; bad = 1 }
+                    path = ""; state = ""
+                }
+                END { finish(); exit bad }' > "$work/mkdir.cmds"
+        fi
+        cat "$work/removed" "$work/changed" | awk '{ printf "rm \"/%s\"\n", $0 }' > "$work/rm.cmds"
+        awk '{ printf "write \"%s\" \"/%s\"\n", $0, $0 }' "$work/changed" > "$work/write.cmds"
+        for step in mkdir rm write; do
+            [ -s "$work/$step.cmds" ] || continue
+            debugfs -w -f "$work/$step.cmds" "$work/apps.img" >/dev/null 2>"$work/$step.err"
+            # Anything else, such as rm meeting a directory, is a conflict
+            # between a packaged file and the volume.
+            if grep -v -e '^debugfs [0-9]' -e '^rm: File not found by ext2_lookup' \
+                "$work/$step.err"; then
+                echo "debugfs $step failed" >&2
+                exit 1
             fi
         done
 
-        # Bash is now installed under its normal command name.
-        entry=$(debugfs -R 'stat /bin/bash.elf' "$work/apps.img" 2>/dev/null)
-        case "$entry" in
-            *"Type: regular"*)
+        if [ -n "$full" ]; then
+            # Remove the prior picom config location from the ext4 image. A disk
+            # /etc is fine now: the kernel merges it with the bootstrap /etc.
+            entry=$(debugfs -R 'stat /etc/picom.conf' "$work/apps.img" 2>/dev/null)
+            case "$entry" in
+                *"Type: regular"*) debugfs -w -R 'rm /etc/picom.conf' "$work/apps.img" ;;
+            esac
+
+            # Java class path directories (loaded as dir/*) must hold only the
+            # current jars: drop files the staged tree no longer has, such as
+            # the previous Minecraft or LWJGL version's.
+            for dir in opt/lwjgl opt/minecraft/libraries; do
+                [ -d "$dir" ] || continue
+                debugfs -R "ls -p \"/$dir\"" "$work/apps.img" 2>/dev/null |
+                    awk -F/ '$6 != "" && $6 != "." && $6 != ".." { print $6 }' |
+                    while IFS= read -r file; do
+                        [ -e "$dir/$file" ] || debugfs -w -R "rm \"/$dir/$file\"" "$work/apps.img"
+                    done
+            done
+
+            # Retire the old root-level copies after their /bin replacements
+            # are in place. Leave unrelated files at those paths alone.
+            printf '\177ELF' > "$work/elf-magic"
+            for spec do
+                case "$spec" in
+                    bin/*=*) legacy=${spec%%=*}; legacy=${legacy#bin/} ;;
+                    *) continue ;;
+                esac
+                case "$legacy" in */*) continue ;; esac
+                entry=$(debugfs -R "stat \"/$legacy\"" "$work/apps.img" 2>/dev/null)
+                case "$entry" in *"Type: regular"*) ;; *) continue ;; esac
                 : > "$work/current"
-                debugfs -R "dump /bin/bash.elf \"$work/current\"" "$work/apps.img"
+                debugfs -R "dump \"/$legacy\" \"$work/current\"" "$work/apps.img"
                 if head -c 4 "$work/current" | cmp -s "$work/elf-magic" -; then
-                    debugfs -w -R 'rm /bin/bash.elf' "$work/apps.img"
-                    entry=$(debugfs -R 'stat /bin/bash.elf' "$work/apps.img" 2>/dev/null)
+                    debugfs -w -R "rm \"/$legacy\"" "$work/apps.img"
+                    entry=$(debugfs -R "stat \"/$legacy\"" "$work/apps.img" 2>/dev/null)
                     [ -z "$entry" ]
                 fi
-                ;;
-        esac
+            done
+
+            # Bash is now installed under its normal command name.
+            entry=$(debugfs -R 'stat /bin/bash.elf' "$work/apps.img" 2>/dev/null)
+            case "$entry" in
+                *"Type: regular"*)
+                    : > "$work/current"
+                    debugfs -R "dump /bin/bash.elf \"$work/current\"" "$work/apps.img"
+                    if head -c 4 "$work/current" | cmp -s "$work/elf-magic" -; then
+                        debugfs -w -R 'rm /bin/bash.elf' "$work/apps.img"
+                        entry=$(debugfs -R 'stat /bin/bash.elf' "$work/apps.img" 2>/dev/null)
+                        [ -z "$entry" ]
+                    fi
+                    ;;
+            esac
+        fi
 
         # Refresh symlinks (busybox applets) in one debugfs batch. rm
         # tolerates missing names so stale links are replaced cleanly.
+        find . -type l -print | sed 's|^\./||; s|/[^/]*$||; t; d' | sort -u |
+            while IFS= read -r dir; do ensure_directory "$dir"; done
         {
             find . -type l -print | while IFS= read -r path; do
                 name=${path#./}
-                ensure_directory "$(dirname "$name")"
                 printf 'rm "/%s"\n' "$name"
                 printf 'symlink "/%s" "%s"\n' "$name" "$(readlink "$path")"
             done
@@ -209,3 +233,4 @@ mcopy -i "$work/esp.img" "$kernel" ::/boot/kernel.elf
 dd if="$work/esp.img" of="$work/disk.img" bs=1M seek=1 conv=notrunc status=none
 dd if="$work/apps.img" of="$work/disk.img" bs=1M seek=65 conv=notrunc,sparse status=none
 mv -- "$work/disk.img" "$output"
+mv -- "$work/manifest" "$manifest"

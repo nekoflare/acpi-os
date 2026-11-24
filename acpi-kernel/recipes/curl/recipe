@@ -1,0 +1,31 @@
+version=8.23.0
+revision=1
+cross_compile=yes
+tarball_url=https://curl.se/download/curl-8.23.0.tar.xz
+tarball_sha256=8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5
+builddeps="musl-cxx zlib zlib-shared openssl ca-certificates"
+
+# curl with a shared libcurl, linked against the shared OpenSSL and zlib. The
+# CA bundle comes from the ca-certificates recipe.
+curl_env() {
+    export PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH"
+    export PKG_CONFIG_LIBDIR="$sysroot/usr/lib/pkgconfig:$sysroot/usr/share/pkgconfig"
+    export PKG_CONFIG_SYSROOT_DIR="$sysroot"
+}
+configure() {
+    curl_env
+    "$source_dir/configure" --host=x86_64-buildroot-linux-musl --prefix=/usr --libdir=/usr/lib \
+        --enable-shared --disable-static --with-openssl="$sysroot/usr" --with-zlib="$sysroot/usr" \
+        --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt --without-ca-path \
+        --without-libpsl --without-brotli --without-zstd --without-nghttp2 --without-libidn2 \
+        --without-libssh2 --disable-ldap --disable-manual --disable-docs \
+        CFLAGS="-O2 $APP_CPU_FLAGS"
+}
+build() { curl_env; make -j"$parallelism"; }
+package() {
+    curl_env
+    make DESTDIR="$dest_dir" install
+    rm -rf "$dest_dir/usr/share" "$dest_dir"/usr/lib/*.la
+    x86_64-buildroot-linux-musl-strip --strip-unneeded "$dest_dir"/usr/lib/libcurl.so.* \
+        "$dest_dir/usr/bin/curl"
+}

@@ -233,30 +233,49 @@ XORG_GL_FILES := $(foreach lib,$(XORG_GL_LIBS),usr/lib/$(lastword $(subst :, ,$(
 	$(foreach lib,$(XORG_CXX_RUNTIME),usr/lib/$(lib)=$(XORG_BUILD)/gl/$(lib))
 XORG_GL_DEPS := $(foreach lib,$(XORG_GL_LIBS),$(XORG_BUILD)/gl/$(lastword $(subst :, ,$(lib)))) \
 	$(addprefix $(XORG_BUILD)/gl/,$(XORG_CXX_RUNTIME))
-# LWJGL 3.3.1 for Minecraft 1.20.1 (F3): the natives from the lwjgl* recipes
+# LWJGL 3.3.3 for Minecraft 1.21.11 (F3): the natives from the lwjgl* recipes
 # in /usr/lib/lwjgl, Mojang's Java jars in /opt/lwjgl (scripts/fetch-lwjgl.sh)
 # and the `lwjgl-demo` launcher.
 XORG_LWJGL_LIBS := lwjgl:liblwjgl.so lwjgl:liblwjgl_opengl.so lwjgl:liblwjgl_stb.so \
 	lwjgl:liblwjgl_tinyfd.so lwjgl-glfw:libglfw.so lwjgl-openal:libopenal.so \
-	lwjgl-jemalloc:libjemalloc.so
-XORG_LWJGL_JARS := $(abspath ../target/lwjgl-3.3.1)
+	lwjgl-jemalloc:libjemalloc.so lwjgl-freetype:libfreetype.so
+XORG_LWJGL_JARS := $(abspath ../target/lwjgl-3.3.3)
 XORG_LWJGL_DEPS := $(foreach lib,$(XORG_LWJGL_LIBS),$(XORG_BUILD)/lwjgl/$(lastword $(subst :, ,$(lib)))) \
 	$(XORG_LWJGL_JARS)/.fetched userspace/jdk-tests/java/LwjglDemo.java config/lwjgl-demo
 XORG_LWJGL_FILES := $(foreach lib,$(XORG_LWJGL_LIBS),usr/lib/lwjgl/$(lastword $(subst :, ,$(lib)))=$(XORG_BUILD)/lwjgl/$(lastword $(subst :, ,$(lib)))) \
 	opt/lwjgl=$(XORG_LWJGL_JARS) usr/share/lwjgl-demo/LwjglDemo.java=userspace/jdk-tests/java/LwjglDemo.java \
 	bin/lwjgl-demo=config/lwjgl-demo
-# Minecraft 1.20.1 (F4) in /opt/minecraft (scripts/fetch-minecraft.sh): the
-# client, its libraries and the asset objects, started by `minecraft`.
-XORG_MINECRAFT := $(abspath ../target/minecraft-1.20.1)
-XORG_MINECRAFT_DEPS := $(XORG_MINECRAFT)/.fetched config/minecraft
+# Minecraft 1.21.11 (F4) in /opt/minecraft (scripts/fetch-minecraft.sh): the
+# client, its libraries and the asset objects, started by `minecraft`;
+# `minecraft-login` fetches an account token from scripts/minecraft-token.sh.
+XORG_MINECRAFT := $(abspath ../target/minecraft-1.21.11)
+XORG_MINECRAFT_DEPS := $(XORG_MINECRAFT)/.fetched config/minecraft config/minecraft-login
 XORG_MINECRAFT_FILES := opt/minecraft/client.jar=$(XORG_MINECRAFT)/client.jar \
 	opt/minecraft/libraries=$(XORG_MINECRAFT)/libraries opt/minecraft/assets=$(XORG_MINECRAFT)/assets \
-	bin/minecraft=config/minecraft
+	bin/minecraft=config/minecraft bin/minecraft-login=config/minecraft-login
+# TLS (NETPLAN C1, C2): shared OpenSSL, zlib and libcurl, openssl, curl and Mozilla's
+# CA bundle in /etc/ssl, which the kernel merges with the bootstrap /etc.
+XORG_TLS_LIBS := openssl:libssl.so.3 openssl:libcrypto.so.3 zlib-shared:libz.so.1 curl:libcurl.so.4
+XORG_TLS_DEPS := $(foreach lib,$(XORG_TLS_LIBS),$(XORG_BUILD)/tls/$(lastword $(subst :, ,$(lib)))) \
+	$(XORG_BUILD)/tls/openssl $(XORG_BUILD)/tls/ossl-modules $(XORG_BUILD)/tls/openssl.cnf \
+	$(XORG_BUILD)/tls/ca-certificates.crt \
+	$(XORG_BUILD)/tls/curl
+XORG_TLS_FILES := $(foreach lib,$(XORG_TLS_LIBS),usr/lib/$(lastword $(subst :, ,$(lib)))=$(XORG_BUILD)/tls/$(lastword $(subst :, ,$(lib)))) \
+	bin/openssl=$(XORG_BUILD)/tls/openssl bin/curl=$(XORG_BUILD)/tls/curl usr/lib/ossl-modules=$(XORG_BUILD)/tls/ossl-modules \
+	etc/ssl/openssl.cnf=$(XORG_BUILD)/tls/openssl.cnf \
+	etc/ssl/certs/ca-certificates.crt=$(XORG_BUILD)/tls/ca-certificates.crt \
+	'etc/ssl/cert.pem->certs/ca-certificates.crt'
 XORG_WALLPAPER := serval_wp.jpg
 XORG_WALLPAPER_CREDIT := serval_wp.jpg.txt
 XORG_WALLPAPER_FILES := $(addprefix usr/share/wallpapers/,$(foreach file,$(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT),$(file)=$(file)))
 
 $(eval $(call jinx_artifact,$(XORG_BUILD)/busybox,busybox,usr/bin/busybox))
+$(foreach lib,$(XORG_TLS_LIBS),$(eval $(call jinx_artifact,$(XORG_BUILD)/tls/$(lastword $(subst :, ,$(lib))),$(firstword $(subst :, ,$(lib))),usr/lib/$(lastword $(subst :, ,$(lib))))))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/tls/openssl,openssl,usr/bin/openssl))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/tls/curl,curl,usr/bin/curl))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/tls/ossl-modules,openssl,usr/lib/ossl-modules))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/tls/openssl.cnf,openssl,etc/ssl/openssl.cnf))
+$(eval $(call jinx_artifact,$(XORG_BUILD)/tls/ca-certificates.crt,ca-certificates,etc/ssl/certs/ca-certificates.crt))
 
 busybox: $(XORG_BUILD)/busybox
 
@@ -389,13 +408,19 @@ $(XORG_BUILD)/hello-dynamic: userspace/hello-dynamic.c $(XORG_MUSL_SHARED)
 		"$$(gcc -print-libgcc-file-name)" "$(XORG_BUILD)/musl-shared/lib/crtn.o" -o $@
 
 $(XORG_DISK): scripts/pack-xorg-disk.sh $(XORG_DESKTOP_BUILD)/kernel.elf $(LIMINE_DIR)/BOOTX64.EFI \
-	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_BUILD)/uacpi-tests config/uacpi-run-tests config/bashrc $(XORG_BUILD)/python-lib $(XORG_BUILD)/lite-xl-data $(XORG_BUILD)/openjdk $(XORG_BUILD)/libasound.so.2 $(BASH_BUILD)/bash.elf $(XORG_BUILD)/git-upload-pack $(XORG_BUILD)/git-template-description $(XORG_DATA) $(XORG_BUILD)/magic.mgc $(XORG_BUILD)/XCalc.ad $(XORG_BUILD)/clang-resource $(XORG_BUILD)/libc-include $(XORG_BUILD)/musl-runtime config/clang.cfg config/pthread-test.c $(XORG_BUILD)/pci.ids config/picom.conf config/lua-test.lua config/sqlite3-test.sh config/acpi-example.asl config/python-test.py config/python-static-modules.txt $(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) $(addprefix $(XORG_BUILD)/,$(XORG_DEJAVU_FONTS)) $(XORG_MUSL_SHARED) $(XORG_BUILD)/hello-dynamic $(XORG_GL_DEPS) $(XORG_LWJGL_DEPS) $(XORG_MINECRAFT_DEPS) catflare.gif Makefile
+	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_BUILD)/uacpi-tests config/uacpi-run-tests config/bashrc $(XORG_BUILD)/python-lib $(XORG_BUILD)/lite-xl-data $(XORG_BUILD)/openjdk $(XORG_BUILD)/libasound.so.2 $(BASH_BUILD)/bash.elf $(XORG_BUILD)/git-upload-pack $(XORG_BUILD)/git-template-description $(XORG_DATA) $(XORG_BUILD)/magic.mgc $(XORG_BUILD)/XCalc.ad $(XORG_BUILD)/clang-resource $(XORG_BUILD)/libc-include $(XORG_BUILD)/musl-runtime config/clang.cfg config/pthread-test.c $(XORG_BUILD)/pci.ids config/picom.conf config/lua-test.lua config/sqlite3-test.sh config/acpi-example.asl config/python-test.py config/python-static-modules.txt $(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) $(addprefix $(XORG_BUILD)/,$(XORG_DEJAVU_FONTS)) $(XORG_MUSL_SHARED) $(XORG_BUILD)/hello-dynamic $(XORG_GL_DEPS) $(XORG_LWJGL_DEPS) $(XORG_MINECRAFT_DEPS) $(XORG_TLS_DEPS) catflare.gif Makefile
 	sh $< "$@" "$(XORG_DESKTOP_BUILD)/kernel.elf" "$(LIMINE_DIR)/BOOTX64.EFI" \
-		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_BASH) $(XORG_DATA) $(XORG_PICOM_CONFIG) $(XORG_CONKY_CONFIG) .bashrc=config/bashrc $(XORG_LUA_TEST) $(XORG_IASL_EXAMPLE) $(XORG_UACPI_TESTS) bin/uacpi-run-tests=config/uacpi-run-tests bin/sqlite3-test=config/sqlite3-test.sh $(XORG_PYTHON_LIB) $(XORG_PYTHON_TEST) $(XORG_PYTHON_MARKER) $(XORG_FILE_MAGIC) $(XORG_XCALC_APPDEFAULTS) $(XORG_CLANG_FILES) $(XORG_DYNAMIC_FILES) $(XORG_PCI_IDS) $(XORG_LITE_XL_DATA) $(XORG_JDK_FILES) $(XORG_GL_FILES) $(XORG_LWJGL_FILES) $(XORG_MINECRAFT_FILES) $(XORG_WALLPAPER_FILES) usr/libexec/git-core/git-upload-pack=$(XORG_BUILD)/git-upload-pack usr/share/git-core/templates/description=$(XORG_BUILD)/git-template-description usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
+		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_BASH) $(XORG_DATA) $(XORG_PICOM_CONFIG) $(XORG_CONKY_CONFIG) .bashrc=config/bashrc $(XORG_LUA_TEST) $(XORG_IASL_EXAMPLE) $(XORG_UACPI_TESTS) bin/uacpi-run-tests=config/uacpi-run-tests bin/sqlite3-test=config/sqlite3-test.sh $(XORG_PYTHON_LIB) $(XORG_PYTHON_TEST) $(XORG_PYTHON_MARKER) $(XORG_FILE_MAGIC) $(XORG_XCALC_APPDEFAULTS) $(XORG_CLANG_FILES) $(XORG_DYNAMIC_FILES) $(XORG_PCI_IDS) $(XORG_LITE_XL_DATA) $(XORG_JDK_FILES) $(XORG_GL_FILES) $(XORG_LWJGL_FILES) $(XORG_MINECRAFT_FILES) $(XORG_TLS_FILES) $(XORG_WALLPAPER_FILES) usr/libexec/git-core/git-upload-pack=$(XORG_BUILD)/git-upload-pack usr/share/git-core/templates/description=$(XORG_BUILD)/git-template-description usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
 		bin/ls=$(XORG_LS) $(foreach cmd,$(XORG_FS_COMMANDS),bin/$(cmd)=$(XORG_FS_TOOLS)) \
 		fonts/dwm-font.ttf="$(XORG_FONT)" $(XORG_FONT_FILES) catflare.gif=catflare.gif
 
 xorg-desktop-image: $(XORG_DISK)
+
+# The desktop image writes only the files that changed since the last pack
+# (see scripts/disk-manifest.py). This rewrites every file.
+.PHONY: xorg-restage
+xorg-restage:
+	XORG_RESTAGE=1 $(MAKE) -W scripts/pack-xorg-disk.sh $(XORG_DISK)
 
 run-xorg-uefi: private SMP_CPUS = 6
 run-xorg-uefi: xorg-desktop-image
@@ -407,7 +432,8 @@ run-xorg-uefi: xorg-desktop-image
 		-chardev stdio,id=serial,logfile="$(XORG_DESKTOP_BUILD)/serial.log",logappend=off -serial chardev:serial \
 		-drive if=pflash,format=raw,readonly=on,file="$(OVMF)" \
 		-drive if=none,id=system,format=raw,file="$(XORG_DISK)" \
-		-device virtio-blk-pci,drive=system,disable-modern=on,queue-size=16
+		-device virtio-blk-pci,drive=system,disable-modern=on,queue-size=16 \
+		-netdev user,id=n0 -device virtio-net-pci,netdev=n0,disable-modern=on,romfile=
 
 .PHONY: dwm
 dwm: $(DWM_BUILD)/dwm

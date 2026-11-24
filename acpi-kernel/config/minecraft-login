@@ -1,0 +1,24 @@
+#!/bin/sh
+# Fetches a Minecraft account token that the host offers with
+# scripts/minecraft-token.sh (the guest reaches the host at 10.0.2.2) and saves
+# it for `minecraft`, which then plays online. Tokens last about 24 hours.
+#   minecraft-login [port]    default port 25599
+port="${1:-25599}"
+game="${MINECRAFT_DIR:-/minecraft}"
+mkdir -p "$game"
+umask 077
+if ! curl -fsS --max-time 15 -o "$game/.token.new" "http://10.0.2.2:$port/token"; then
+    rm -f "$game/.token.new"
+    echo "No token from the host: run scripts/minecraft-token.sh there first." >&2
+    exit 1
+fi
+profile=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$game/.token.new")" |
+    curl -sS --max-time 15 -K - https://api.minecraftservices.com/minecraft/profile)
+name=$(printf '%s' "$profile" | sed -n 's/.*"name" *: *"\([^"]*\)".*/\1/p')
+if [ -z "$name" ]; then
+    rm -f "$game/.token.new"
+    echo "Minecraft rejected the token: $profile" >&2
+    exit 1
+fi
+mv "$game/.token.new" "$game/token" || exit 1
+echo "Logged in as $name. Start the game with: minecraft"

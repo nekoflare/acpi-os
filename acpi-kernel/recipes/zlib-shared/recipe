@@ -1,0 +1,20 @@
+from_source=zlib
+revision=1
+cross_compile=yes
+builddeps="musl-cxx zlib"
+
+# Shared libz for dynamically linked programs (curl). The static zlib package
+# supplies the headers and the pkg-config file; this one adds only libz.so.
+configure() {
+    copy_source
+    cd src
+    PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH" CC=x86_64-buildroot-linux-musl-gcc \
+        CFLAGS="-O2 $APP_CPU_FLAGS -fPIC" ./configure --prefix=/usr --shared
+}
+build() { PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH" make -C src -j"$parallelism" shared; }
+package() {
+    mkdir -p "$dest_dir/usr/lib"
+    cp -P src/libz.so* "$dest_dir/usr/lib/"
+    "$sysroot/opt/acpi-musl-cxx/bin/x86_64-buildroot-linux-musl-strip" --strip-unneeded \
+        "$dest_dir"/usr/lib/libz.so.*.*
+}

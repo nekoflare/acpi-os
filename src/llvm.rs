@@ -1464,6 +1464,7 @@ error:
             "XIMG" => Some(("acpi_image_word", 2)),
             "XCPY" => Some(("acpi_image_copy", 3)),
             "XMOV" => Some(("acpi_copy_memory", 3)),
+            "XCSM" => Some(("acpi_checksum", 3)),
             "XBYT" => Some(("acpi_virtual_byte", 1)),
             "XSTB" => Some(("acpi_store_byte", 2)),
             "XLDQ" => Some(("acpi_load_qword", 1)),

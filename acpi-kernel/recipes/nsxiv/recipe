@@ -2,7 +2,7 @@ version=32
 tarball_url=https://github.com/nsxiv/nsxiv/archive/refs/tags/v32.tar.gz
 tarball_sha256=37a1740db00363c3dd083bcbcd35f467c807960aa47d5811bbd1f652af19b203
 builddeps="musl libx11 imlib2"
-revision=3
+revision=4
 cross_compile=yes
 
 build() {
@@ -12,6 +12,6 @@ build() {
     musl_env
     sed -i 's/^OPT_DEP_DEFAULT = 1$/OPT_DEP_DEFAULT = 0/' src/config.mk
     make -C src -j"$parallelism" CC="$CC" CFLAGS="$CFLAGS $CPPFLAGS" \
-        LDFLAGS="$LDFLAGS" LDLIBS="$(pkg-config --static --libs imlib2 x11 xext freetype2) -lgif -lm"
+        LDFLAGS="$LDFLAGS" LDLIBS="$(pkg-config --static --libs imlib2 x11 xext freetype2) -lgif -lpng16 -ljpeg -lz -lm"
 }
 package() { package_app src/nsxiv nsxiv; }

@@ -1,20 +1,21 @@
-version=3.3.1
+version=3.3.3
 revision=1
 cross_compile=yes
-tarball_url="https://github.com/LWJGL-CI/jemalloc/archive/ea6b3e973b477b8061e0076bb257dbd7f3faa756.tar.gz"
-tarball_sha256=42b25ec16d2c6c696fe66dc3ffb0fe9de2f89faede8d5223bfc487ea62998f46
+tarball_url="https://github.com/LWJGL-CI/jemalloc/archive/72cfdce71806443f4ccdbfe10aa5d50346a3d07e.tar.gz"
+tarball_sha256=caa8040a8c5aeb4009748817d874ade178ced01d08b077610eda72d4898b5812
 builddeps=musl-cxx
 deps=musl-runtime
 imagedeps=autoconf
 
-# libjemalloc.so for LWJGL 3.3.1, from the LWJGL-CI jemalloc fork (5.2.1
-# based) at the commit LWJGL's natives-linux jar was built from. Symbols carry
+# libjemalloc.so for LWJGL 3.3.3, from the LWJGL-CI jemalloc mirror at the
+# dev commit current at the 3.3.3 release (5.3.0 based; LWJGL 3.3.3 binds
+# je_free_sized and je_free_aligned_sized, which 5.2.1 lacks). Symbols carry
 # the je_ prefix LWJGL binds. musl cannot give a dlopen'ed library static
 # (initial-exec) TLS, so jemalloc uses the general dynamic model.
 configure() {
     copy_source
     cd src
-    echo "5.2.1-0-gea6b3e973b477b8061e0076bb257dbd7f3faa756" > VERSION
+    echo "5.3.0-0-g72cfdce71806443f4ccdbfe10aa5d50346a3d07e" > VERSION
     autoconf
     PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH" CFLAGS="-O2 $APP_CPU_FLAGS" ./configure \
         --host=x86_64-buildroot-linux-musl --prefix=/usr --with-jemalloc-prefix=je_ \

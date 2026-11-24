@@ -1,4 +1,5 @@
-// D4: AF_INET and AF_INET6 fail cleanly, localhost resolves from /etc/hosts
+// D4: AF_INET6 and other unsupported families fail cleanly (AF_INET works
+// since NETPLAN S1), localhost resolves from /etc/hosts
 // without DNS, and eventfd works the way the JDK's NIO Selector uses it.
 #define _GNU_SOURCE
 #include <errno.h>
@@ -43,8 +44,8 @@ static void *late_write(void *arg)
 
 int main(void)
 {
-    // Internet sockets are not supported.
-    int families[] = {AF_INET, AF_INET6, AF_NETLINK, AF_PACKET};
+    // Families without support.
+    int families[] = {AF_INET6, AF_NETLINK, AF_PACKET};
     int types[] = {SOCK_STREAM, SOCK_DGRAM, SOCK_RAW};
     for (unsigned f = 0; f < sizeof families / sizeof *families; f++) {
         for (unsigned t = 0; t < sizeof types / sizeof *types; t++) {
@@ -61,7 +62,8 @@ int main(void)
     close(unix_socket);
     printf("socket errors ok\n");
 
-    // localhost resolves from /etc/hosts; other names fail without hanging.
+    // localhost resolves from /etc/hosts; with no NIC other names fail after
+    // musl's DNS timeout.
     struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM}, *result;
     int rc = getaddrinfo("localhost", "25565", &hints, &result);
     if (rc) { printf("getaddrinfo: %s\n", gai_strerror(rc)); return fail("localhost"); }

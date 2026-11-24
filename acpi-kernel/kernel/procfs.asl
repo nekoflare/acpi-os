@@ -113,6 +113,12 @@
         XSTB (Local1, 10)
         PCML = Local1 + One - Local0
         If (!SCIN ()) { Return (Zero) }
+        Local0 = PCNO (PCRT, "net", 4, One)
+        If (!Local0 || !PCNO (Local0, "dev", Zero, 15) || !PCNO (Local0, "route", Zero, 16) ||
+            !PCNO (Local0, "snmp", Zero, 17) || !PCNO (Local0, "tcp", Zero, 18))
+        {
+            Return (Zero)
+        }
         Local0 = PCNO (PCRT, "cpuinfo", 8, One)
         If (!Local0) { Return (Zero) }
         Local2 = VALL (XCPU () * PGSZ, WRIT)
@@ -575,6 +581,10 @@
             XSTB (Arg1 + Local2, 10)
             Return (Local2 + One)
         }
+        If (Local0 == 15) { Return (NPDV (Arg1)) }
+        If (Local0 == 16) { Return (NPRO (Arg1)) }
+        If (Local0 == 17) { Return (TPSM (Arg1)) }
+        If (Local0 == 18) { Return (TPNT (Arg1)) }
         If (Local0 == 14)
         {
             Local2 = Zero

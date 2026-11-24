@@ -914,6 +914,33 @@ uint64_t acpi_copy_memory(uint64_t destination, uint64_t source, uint64_t length
     return 0;
 }
 
+/* One's-complement sum of the big-endian 16-bit words of length bytes at
+ * address (an odd final byte is the high half of a word), added to initial
+ * and folded to 16 bits. The Internet checksum is its complement. */
+uint64_t acpi_checksum(uint64_t address, uint64_t length, uint64_t initial)
+{
+    const uint8_t *bytes = (const uint8_t *)address;
+    uint64_t sum = (initial & 0xFFFFFFFF) + (initial >> 32);
+    while (length >= 8) {
+        uint64_t word;
+        __builtin_memcpy(&word, bytes, 8);
+        word = __builtin_bswap64(word);
+        sum += (word >> 48) + ((word >> 32) & 0xFFFF) + ((word >> 16) & 0xFFFF) + (word & 0xFFFF);
+        bytes += 8;
+        length -= 8;
+    }
+    while (length >= 2) {
+        sum += ((uint64_t)bytes[0] << 8) | bytes[1];
+        bytes += 2;
+        length -= 2;
+    }
+    if (length)
+        sum += (uint64_t)bytes[0] << 8;
+    while (sum >> 16)
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    return sum;
+}
+
 #define ACPI_TLB_VECTOR 0x26
 
 /* Vector 0x26 lands here from x86.S on a CPU that may be running user code. */

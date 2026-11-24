@@ -44,8 +44,8 @@ $(BUILD)/x86.o: kernel/x86.S kernel/build.mk | $(BUILD)
 
 INITRAMFS_FILES := $(if $(INITRAMFS_FSTAB),,$(wildcard initramfs/*) $(call guest_bins,$(BUILD)/ls $(BOOT_ELF))) $(INITRAMFS_EXTRA)
 
-$(BUILD)/initramfs.img: scripts/pack-initramfs.py initramfs $(foreach spec,$(INITRAMFS_FILES),$(lastword $(subst =, ,$(spec)))) $(INITRAMFS_FSTAB) $(if $(INITRAMFS_FSTAB),config/hosts) $(INITRAMFS_FONT) $(BUILD)/initramfs.inputs kernel/build.mk | $(BUILD)
-	$(PYTHON) $< $@ $(INITRAMFS_FILES) $(if $(INITRAMFS_FSTAB),etc/fstab=$(INITRAMFS_FSTAB) etc/hosts=config/hosts) $(if $(INITRAMFS_FONT),fonts/dwm-font.ttf=$(INITRAMFS_FONT))
+$(BUILD)/initramfs.img: scripts/pack-initramfs.py initramfs $(foreach spec,$(INITRAMFS_FILES),$(lastword $(subst =, ,$(spec)))) $(INITRAMFS_FSTAB) $(if $(INITRAMFS_FSTAB),config/hosts config/resolv.conf) $(INITRAMFS_FONT) $(BUILD)/initramfs.inputs kernel/build.mk | $(BUILD)
+	$(PYTHON) $< $@ $(INITRAMFS_FILES) $(if $(INITRAMFS_FSTAB),etc/fstab=$(INITRAMFS_FSTAB) etc/hosts=config/hosts etc/resolv.conf=config/resolv.conf) $(if $(INITRAMFS_FONT),fonts/dwm-font.ttf=$(INITRAMFS_FONT))
 
 $(BUILD)/initramfs.o: kernel/embed-initramfs.S $(BUILD)/initramfs.img kernel/build.mk
 	$(CLANG) $(KERNEL_FLAGS) -DINITRAMFS_IMAGE='"$(BUILD)/initramfs.img"' -c $< -o $@

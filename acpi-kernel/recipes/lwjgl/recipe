@@ -1,12 +1,12 @@
-version=3.3.1
+version=3.3.3
 revision=1
 cross_compile=yes
-tarball_url="https://github.com/LWJGL/lwjgl3/archive/refs/tags/3.3.1.tar.gz"
-tarball_sha256=bcb4da2014cee86b3cb24fde3fcf3fcc600957bac62ed0d12ba997050e0e34b9
+tarball_url="https://github.com/LWJGL/lwjgl3/archive/refs/tags/3.3.3.tar.gz"
+tarball_sha256=381a386688a5f5109a0edf2395adfee3cc62031929bf0ddbbd39fd356f647447
 builddeps="musl-cxx openjdk libffi"
-deps="musl-runtime lwjgl-glfw lwjgl-openal lwjgl-jemalloc"
+deps="musl-runtime lwjgl-glfw lwjgl-openal lwjgl-jemalloc lwjgl-freetype"
 
-# LWJGL 3.3.1 JNI libraries for Minecraft 1.20.1: core, opengl, stb and
+# LWJGL 3.3.3 JNI libraries for Minecraft 1.21.11: core, opengl, stb and
 # tinyfd, in /usr/lib/lwjgl (pass -Dorg.lwjgl.librarypath=/usr/lib/lwjgl).
 # The generated C sources are in the tarball, so the Ant/Kotlin generator is
 # not needed; the flags follow config/linux/build.xml. Core links the static

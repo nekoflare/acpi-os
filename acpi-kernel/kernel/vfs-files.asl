@@ -433,7 +433,7 @@
         XMOV (Local1, XADR (EXZR), SizeOf (SFST))
         Local2 = 0x01021994 // RAM filesystem
         Local3 = 0x21 // ST_VALID | ST_RDONLY
-        If (Local0 != XADR (SKND) && Local0 != XADR (MFND))
+        If (!SKLK (Local0) && Local0 != XADR (MFND))
         {
             If (XVWD (Local0 + VNPR, Ones)) { Local2 = 0x9FA0 }
             Local4 = XVWD (Local0 + VNFS, Ones)
@@ -689,7 +689,7 @@
     Method (FTRN, 2, NotSerialized)
     {
         Local0 = XVWD (Arg0, Ones)
-        If (Local0 == XADR (SKND)) { Return (Zero - 22) }
+        If (SKLK (Local0)) { Return (Zero - 22) }
         If (!(XVWD (Arg0 + 40, Ones) & 3)) { Return (Zero - 22) }
         If (Arg1 >> 63) { Return (Zero - 22) }
         If (Arg1 > VFMX) { Return (Zero - 27) } // EFBIG

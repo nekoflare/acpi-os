@@ -405,19 +405,27 @@ A disconnected peer produces EOF after queued input has been read and
 `EPIPE` on writes. `dup2` can redirect the console descriptors to
 an open file or stream, including across `fork` and `execve`.
 
-There is no network stack, and no loopback either. `socket` and
-`socketpair` fail with `EAFNOSUPPORT` for every family other than
-`AF_UNIX`, including `AF_INET`, `AF_INET6`, `AF_NETLINK` and `AF_PACKET`,
-and `AF_UNIX` supports only `SOCK_STREAM`. `setsockopt`, `getsockopt`,
-`getsockname`, `getpeername`, `shutdown` and `sendto` are not implemented.
-Programs that probe for IPv4 or IPv6 see them as absent: the JDK, for
-example, picks its IPv4-only address code and treats network-interface
-enumeration as failing. Minecraft's single-player world runs its server in
+The IPv4 stack is being built (see `NETPLAN.md`): `AF_INET` UDP and TCP
+work. TCP clients and servers (`connect`, `listen`, `accept4`) run over
+`lo` and the NIC with retransmission, fast retransmit, an out-of-order
+queue, window scaling, keepalive and TIME_WAIT; `/proc/net/tcp` and the
+`Tcp` lines of `/proc/net/snmp` show the connections and counters.
+Datagrams to `127.0.0.0/8` (and to `0.0.0.0`) go
+through the software `lo` interface, with or without a NIC, and port
+unreachables (and TCP resets) come back over it as `ECONNREFUSED`.
+With a virtio-net NIC (`10.0.2.15` on QEMU user networking), the guest's
+own address is local too, and everything else goes out through the
+gateway `10.0.2.2`. Datagrams carry up to 65507 bytes: `lo` takes
+them whole, and eth0 sends and reassembles IP fragments. `socket` fails with `EAFNOSUPPORT` for `AF_INET6`,
+`AF_NETLINK` and `AF_PACKET`, and `AF_UNIX` supports only `SOCK_STREAM`.
+Programs that probe for IPv6 see it as absent: the JDK, for example, picks
+its IPv4-only address code. Minecraft's single-player world runs its server in
 the same process over an in-memory channel, so it needs no sockets. LAN
 discovery, multiplayer and online sign-in need a real network and are
 out of scope. The desktop initramfs carries `/etc/hosts`, so `localhost`
-resolves to `127.0.0.1` and `::1` without DNS. Other names fail at once,
-because musl cannot open a UDP socket to a nameserver.
+resolves to `127.0.0.1` and `::1` without DNS, and `/etc/resolv.conf`
+names QEMU's DNS forwarder at `10.0.2.3`. With a virtio-net NIC other names
+resolve over UDP. Without one they fail after musl's 5 s timeout.
 
 `eventfd` (284) and `eventfd2` (290) create a 64-bit counter descriptor
 with `EFD_CLOEXEC`, `EFD_NONBLOCK` and `EFD_SEMAPHORE`. Writes add to the

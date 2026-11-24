@@ -1,16 +1,16 @@
 #!/bin/sh
-# Download the Minecraft 1.20.1 client into a directory (default
-# ../target/minecraft-1.20.1), checking every file's SHA-1:
+# Download the Minecraft 1.21.11 client into a directory (default
+# ../target/minecraft-1.21.11), checking every file's SHA-1:
 #   client.jar          the game
 #   libraries/*.jar     its Java libraries, without LWJGL (scripts/fetch-lwjgl.sh)
 #                       and the glibc netty epoll natives (netty falls back to NIO)
-#   assets/indexes/5.json, assets/objects/xx/<sha1>   sounds, languages, icons
+#   assets/indexes/29.json, assets/objects/xx/<sha1>   sounds, languages, icons
 # Only the version manifest is trusted by URL; everything else is pinned by it.
 set -eu
 cd "$(dirname "$0")/.."
-dest="${1:-../target/minecraft-1.20.1}"
-version_url=https://piston-meta.mojang.com/v1/packages/fb730d2829f057fe26a41e5ecdc9e3307333bef5/1.20.1.json
-version_sha1=fb730d2829f057fe26a41e5ecdc9e3307333bef5
+dest="${1:-../target/minecraft-1.21.11}"
+version_url=https://piston-meta.mojang.com/v1/packages/58e8e30eb3ed5127cb9949cf38908a0984ee182a/1.21.11.json
+version_sha1=58e8e30eb3ed5127cb9949cf38908a0984ee182a
 mkdir -p "$dest/libraries" "$dest/assets/indexes" "$dest/assets/objects"
 
 # fetch <url> <sha1> <file>: download unless the file already matches.
@@ -24,8 +24,8 @@ fetch()
     mv "$3.part" "$3"
 }
 
-fetch "$version_url" "$version_sha1" "$dest/1.20.1.json"
-json="$dest/1.20.1.json"
+fetch "$version_url" "$version_sha1" "$dest/1.21.11.json"
+json="$dest/1.21.11.json"
 fetch "$(jq -r .downloads.client.url "$json")" "$(jq -r .downloads.client.sha1 "$json")" "$dest/client.jar"
 
 jq -r '.libraries[] | select(.rules == null) | select(.name | startswith("org.lwjgl:") | not)

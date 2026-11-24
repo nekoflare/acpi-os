@@ -1,20 +1,38 @@
 #!/bin/sh
-# F4: Minecraft 1.20.1 in offline mode. The files come from
+# F4: Minecraft 1.21.11, online with a copied account token or offline. The files come from
 # scripts/fetch-minecraft.sh (/opt/minecraft) and scripts/fetch-lwjgl.sh
 # (/opt/lwjgl); the natives from the lwjgl* recipes. uname says "ASL kernel",
 # which LWJGL and Minecraft do not know, hence os.name.
-#   minecraft [name]      plays as <name> (default Player); worlds go to /minecraft
+#   minecraft             plays online with the account from minecraft-login,
+#                         offline as Player without one
+#   minecraft [name]      plays offline as <name>; worlds go to /minecraft
 # It starts fullscreen; F11 switches to a window and back.
-name="${1:-Player}"
 game="${MINECRAFT_DIR:-/minecraft}"
 mkdir -p "$game"
-# Offline UUID, as the vanilla server derives it: UUID v3 of "OfflinePlayer:<name>".
-uuid=$(printf 'OfflinePlayer:%s' "$name" | md5sum |
-    sed -E 's/^(.{8})(.{4}).(.{3})(.)(.{3})(.{12}).*/\1-\2-3\3-\4\5-\6/' |
-    awk -F- '{ v = index("0123456789abcdef", substr($4, 1, 1)) - 1;
-        printf "%s-%s-%s-%x%s-%s\n", $1, $2, $3, 8 + v % 4, substr($4, 2), $5 }')
+token=0 user_type=legacy
+if [ $# -eq 0 ] && [ -s "$game/token" ]; then
+    profile=$(printf 'header = "Authorization: Bearer %s"\n' "$(cat "$game/token")" |
+        curl -sS --max-time 15 -K - https://api.minecraftservices.com/minecraft/profile)
+    id=$(printf '%s' "$profile" | sed -n 's/.*"id" *: *"\([0-9a-f]\{32\}\)".*/\1/p')
+    name=$(printf '%s' "$profile" | sed -n 's/.*"name" *: *"\([^"]*\)".*/\1/p')
+    if [ -n "$id" ] && [ -n "$name" ]; then
+        token=$(cat "$game/token") user_type=msa uuid=$id
+        echo "Playing online as $name"
+    else
+        echo "The saved token no longer works (they last about 24 hours); run" >&2
+        echo "minecraft-login again. Starting offline." >&2
+    fi
+fi
+if [ "$user_type" = legacy ]; then
+    name="${1:-Player}"
+    # Offline UUID, as the vanilla server derives it: UUID v3 of "OfflinePlayer:<name>".
+    uuid=$(printf 'OfflinePlayer:%s' "$name" | md5sum |
+        sed -E 's/^(.{8})(.{4}).(.{3})(.)(.{3})(.{12}).*/\1-\2-3\3-\4\5-\6/' |
+        awk -F- '{ v = index("0123456789abcdef", substr($4, 1, 1)) - 1;
+            printf "%s-%s-%s-%x%s-%s\n", $1, $2, $3, 8 + v % 4, substr($4, 2), $5 }')
+fi
 exec java -Xmx2G -Dos.name=Linux -Dorg.lwjgl.librarypath=/usr/lib/lwjgl \
     -cp '/opt/minecraft/client.jar:/opt/minecraft/libraries/*:/opt/lwjgl/*' \
     net.minecraft.client.main.Main --username "$name" --uuid "$uuid" \
-    --accessToken 0 --userType legacy --version 1.20.1 --versionType release \
-    --gameDir "$game" --assetsDir /opt/minecraft/assets --assetIndex 5 --fullscreen
+    --accessToken "$token" --userType "$user_type" --version 1.21.11 --versionType release \
+    --gameDir "$game" --assetsDir /opt/minecraft/assets --assetIndex 29 --fullscreen

@@ -319,8 +319,43 @@
         Return (Local7)
     }
 
+    // Move the entries of bootstrap directory Arg1 into disk directory Arg0.
+    // Directories on both sides merge; otherwise the bootstrap entry wins and
+    // the disk's entry of that name is dropped from the tree.
+    Method (EXMG, 3, NotSerialized)
+    {
+        Local0 = XVWD (Arg1 + VNCH, Ones)
+        While (Local0)
+        {
+            Local1 = XVWD (Local0 + VNXT, Ones)
+            Local2 = VFIN (Arg0, XVWD (Local0 + VNNA, Ones), XVWD (Local0 + VNNL, Ones))
+            Local3 = Zero
+            If (Local2 && Arg2 < 16) // LAnd evaluates both operands
+            {
+                Local3 = XVWD (Local2 + VNTY, Ones) == 4 && XVWD (Local0 + VNTY, Ones) == 4
+            }
+            If (Local3) { EXMG (Local2, Local0, Arg2 + One) }
+            Else
+            {
+                If (Local2)
+                {
+                    VDET (Arg0, Local2)
+                    EXFR (Local2)
+                }
+                VDET (Arg1, Local0)
+                Local4 = Arg0 + VNCH
+                While (XVWD (Local4, Ones)) { Local4 = XVWD (Local4, Ones) + VNXT }
+                XSTQ (Local4, Local0)
+                XSTQ (Local0 + VNXT, Zero)
+                XSTQ (Local0 + VNPA, Arg0)
+            }
+            Local0 = Local1
+        }
+    }
+
     // Stage a tree before publishing it. Existing synthetic nodes and fstab
-    // are kept when mounting over the bootstrap root.
+    // are kept when mounting over the bootstrap root; a directory on both
+    // sides, such as /etc, becomes the disk's with the bootstrap entries in it.
     Method (EXMT, 3, NotSerialized)
     {
         Local0 = PALC ()
@@ -343,14 +378,34 @@
             PDEL (Local0)
             Return (Zero)
         }
+        // A name on both sides is allowed only for two directories that no
+        // one holds open; check them all before changing anything.
         Local2 = XVWD (Local1 + VNCH, Ones)
         While (Local2)
         {
-            If (VFIN (Arg1, XVWD (Local2 + VNNA, Ones), XVWD (Local2 + VNNL, Ones)))
+            Local3 = VFIN (Arg1, XVWD (Local2 + VNNA, Ones), XVWD (Local2 + VNNL, Ones))
+            If (Local3)
             {
-                EXFR (Local1)
-                PDEL (Local0)
-                Return (Zero)
+                If (XVWD (Local2 + VNTY, Ones) != 4 || XVWD (Local3 + VNTY, Ones) != 4 ||
+                    XVWD (Local3 + VNRF, Ones))
+                {
+                    EXFR (Local1)
+                    PDEL (Local0)
+                    Return (Zero)
+                }
+            }
+            Local2 = XVWD (Local2 + VNXT, Ones)
+        }
+        // The bootstrap entries of such a directory (/etc/fstab, hosts,
+        // resolv.conf) move into the disk's directory.
+        Local2 = XVWD (Local1 + VNCH, Ones)
+        While (Local2)
+        {
+            Local3 = VFIN (Arg1, XVWD (Local2 + VNNA, Ones), XVWD (Local2 + VNNL, Ones))
+            If (Local3)
+            {
+                EXMG (Local2, Local3, One)
+                VDET (Arg1, Local3)
             }
             Local2 = XVWD (Local2 + VNXT, Ones)
         }

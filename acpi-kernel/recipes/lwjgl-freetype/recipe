@@ -1,0 +1,26 @@
+from_source=freetype
+revision=1
+cross_compile=yes
+builddeps=musl-cxx
+deps=musl-runtime
+imagedeps="cmake ninja-build"
+
+# libfreetype.so for LWJGL 3.3.3 (Minecraft 1.21.11 renders fonts with it).
+# LWJGL's freetype module binds plain FreeType through dlopen, so this is a
+# shared build of the freetype recipe's source in /usr/lib/lwjgl.
+configure() {
+    local tool="$sysroot/opt/acpi-musl-cxx/bin/x86_64-linux"
+    cmake -S "$source_dir" -B obj -G Ninja \
+        -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=x86_64 \
+        -DCMAKE_C_COMPILER="$tool-gcc" -DCMAKE_C_FLAGS="$APP_CPU_FLAGS" \
+        -DCMAKE_FIND_ROOT_PATH="$sysroot" -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+        -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+        -DFT_DISABLE_HARFBUZZ=ON -DFT_DISABLE_PNG=ON \
+        -DFT_DISABLE_BROTLI=ON -DFT_DISABLE_BZIP2=ON -DFT_DISABLE_ZLIB=ON
+}
+build() { cmake --build obj -j"$parallelism"; }
+package() {
+    install -Dm755 "$(readlink -f obj/libfreetype.so)" "$dest_dir/usr/lib/lwjgl/libfreetype.so"
+    strip --strip-unneeded "$dest_dir/usr/lib/lwjgl/libfreetype.so"
+}

@@ -1,0 +1,13 @@
+version=2026.11.20
+revision=1
+cross_compile=yes
+tarball_url=https://files.pythonhosted.org/packages/51/33/4cd27639502f010084bcef7a2036391dd637439901341ce1a530f36f6e51/certifi-2026.11.20.tar.gz
+tarball_sha256=af1cb240a8133f105aa52684a3a3258339d7f2fd0bd4e2812698ff5cf5588c4e
+
+# Mozilla's CA bundle, taken from the certifi source tarball (the same file
+# curl.se publishes as cacert.pem). OpenSSL's default file /etc/ssl/cert.pem
+# points at it as well.
+package() {
+    install -Dm644 "$source_dir/certifi/cacert.pem" "$dest_dir/etc/ssl/certs/ca-certificates.crt"
+    ln -s certs/ca-certificates.crt "$dest_dir/etc/ssl/cert.pem"
+}

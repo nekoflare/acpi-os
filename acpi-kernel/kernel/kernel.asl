@@ -35,6 +35,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     External (XIMG, MethodObj)
     External (XCPY, MethodObj)
     External (XMOV, MethodObj)
+    External (XCSM, MethodObj)
     External (XBYT, MethodObj)
     External (XSTB, MethodObj)
     External (XLDQ, MethodObj)
@@ -95,7 +96,14 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Field (PCIO, DWordAcc, NoLock, Preserve) { PCIX, 32, PCDT, 32 }
 
     Include ("font8x8.asl")
+    Include ("virtio.asl")
     Include ("virtio-blk.asl")
+    Include ("net-virtio.asl")
+    Include ("net-ip.asl")
+    Include ("net-inet.asl")
+    Include ("net-sock.asl")
+    Include ("net-tcp.asl")
+    Include ("net-if.asl")
     Include ("ext4.asl")
     Include ("ext4-write.asl")
     Include ("fstab.asl")
@@ -1264,11 +1272,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 ITWK ()
                 SWAK ()
                 FXTO ()
+                NTIK () // network timers only; frames arrive on NIVC
             }
         }
         Local0 = Zero
         Local1 = MSTL
         If (Arg0 == KBVC || Arg0 == MSVC) { Local0 = KIRQ () }
+        If (Arg0 == NIVC) { NRXP () }
         If (Arg0) { LREG (0xB0, Zero) }
         If (Local0) { KWAK () }
         // A partial PS/2 mouse packet cannot make a descriptor readable.
@@ -2806,7 +2816,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 Local3 = UFDL (Arg0, Arg2 & 0xFFFFFFFF)
                 If (!Local3) { Return (Zero - 9) }
                 Local2 = XVWD (Local3, Ones)
-                If (Local2 == XADR (SKND)) { Return (Zero - 20) }
+                If (SKLK (Local2)) { Return (Zero - 20) }
             }
         }
         If (XVWD (Local2 + VNTY, Ones) != 4) { Return (Zero - 20) }
@@ -2909,6 +2919,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (XVWD (Local0, Ones) == XADR (SKND))
             {
                 SKCL (Local0)
+                Return (Zero)
+            }
+            If (XVWD (Local0, Ones) == XADR (INND))
+            {
+                INCL (Local0)
                 Return (Zero)
             }
             If (XVWD (Local0, Ones) == XADR (MFND))
@@ -3063,7 +3078,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Return (Zero)
         }
         Local3 = XVWD (Local0, Ones)
-        If (Local3 == XADR (SKND)) { Return (SKFC (Local0, Arg2, Arg3)) }
+        If (SKLK (Local3)) { Return (SKFC (Local0, Arg2, Arg3)) }
         If (Local3 == XADR (EFND) || Local3 == XADR (EPND))
         {
             If (Arg2 == 3) { Return (XVWD (Local0 + 40, Ones)) } // F_GETFL
@@ -3194,7 +3209,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local0 = UFDL (Arg0, Arg1)
         If (!Local0) { Return (Zero - 9) }
         Local1 = XVWD (Local0, Ones)
-        If (Arg4 != Ones && (Local1 == XADR (SKND) || Local1 == XADR (EFND) ||
+        If (Arg4 != Ones && (SKLK (Local1) || Local1 == XADR (EFND) ||
             Local1 == KSND || Local1 == MSND))
         {
             Return (Zero - 29) // ESPIPE
@@ -3203,6 +3218,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (Local1 == XADR (EPND)) { Return (Zero - 22) }
         If (Local1 == XADR (EFND)) { Return (EFIO (Arg0, Local0, Arg2, Arg3, Zero)) }
         If (Local1 == XADR (SKND)) { Return (SKRW (Arg0, Local0, Arg2, Arg3, Zero)) }
+        If (Local1 == XADR (INND)) { Return (INRW (Arg0, Local0, Arg2, Arg3, Zero)) }
         If (Local1 == NULD)
         {
             If ((XVWD (Local0 + 40, Ones) & 3) == One) { Return (Zero - 9) }
@@ -3275,7 +3291,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (SSTD (Arg0, Arg1)) { Return (Zero - 29) } // ESPIPE
         Local0 = UFDL (Arg0, Arg1)
         If (!Local0) { Return (Zero - 9) }
-        If (Local0 == KSOP || Local0 == MSOP || XVWD (Local0, Ones) == XADR (SKND)) { Return (Zero - 29) }
+        If (Local0 == KSOP || Local0 == MSOP || SKLK (XVWD (Local0, Ones))) { Return (Zero - 29) }
         If (XVWD (XVWD (Local0, Ones) + VNTY, Ones) == 4)
         {
             If (Arg3 || (Arg2 >> 63)) { Return (Zero - 22) }
@@ -3446,12 +3462,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 }
                 If (Local0 == KSND || Local0 == MSND) { Local1 = 0x2124 } // keyboard, 0444
                 If (Local0 == PCSL) { Local1 = 0xA1FF }
-                If (Local0 == XADR (SKND)) { Local1 = 0xC1FF } // socket, 0777
+                If (SKLK (Local0)) { Local1 = 0xC1FF } // socket, 0777
             }
         }
         // LAnd evaluates both operands, so the node fields are read only
         // under a separate If: a console descriptor has no node (Local0 zero).
-        Local6 = Local0 && Local0 != XADR (SKND)
+        Local6 = Local0 && !SKLK (Local0)
         If (Local6)
         {
             If (XVWD (Local0 + VNMD, Ones)) { Local1 = XVWD (Local0 + VNMD, Ones) }
@@ -3498,6 +3514,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 Return (Arg3)
             }
             If (Local1 == XADR (SKND)) { Return (SKRW (Arg0, Local0, Arg2, Arg3, One)) }
+            If (Local1 == XADR (INND)) { Return (INRW (Arg0, Local0, Arg2, Arg3, One)) }
             If (Local1 == XADR (MFND)) { Return (MFIO (Arg0, Local0, Arg2, Arg3, One)) }
             If (Local1 == XADR (EPND)) { Return (Zero - 22) }
             If (Local1 == XADR (EFND)) { Return (EFIO (Arg0, Local0, Arg2, Arg3, One)) }
@@ -3906,7 +3923,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (!Local2) { Return (Zero - 9) }
             If ((XVWD (Local2 + 40, Ones) & 3) == One) { Return (Zero - 9) }
             Local3 = XVWD (Local2, Ones)
-            If (Local3 == XADR (SKND) || Local3 == XADR (MFND) ||
+            If (SKLK (Local3) || Local3 == XADR (MFND) ||
                 Local3 == KSND || Local3 == MSND ||
                 XVWD (Local3 + VNTY, Ones) == 12) { Return (Zero - 19) }
             If (XVWD (Local3 + VNTY, Ones) == 4) { Return (Zero - 19) }
@@ -4602,8 +4619,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         If (Local0)
         {
+            If (XVWD (Local0, Ones) == XADR (INND)) { Return (INIC (Arg0, Local0, Arg2, Arg3)) }
             If (XVWD (Local0, Ones) == XADR (SKND))
             {
+                // Interface ioctls work on any socket, as on Linux.
+                If ((Arg2 >> 8) == 0x89) { Return (NIFI (Arg0, Arg2, Arg3)) }
                 If (Arg2 == 0x54F0 || XVWD (Local0 + STTY, Ones))
                 {
                     Return (STIO (Arg0, Local0, Arg2, Arg3))
@@ -6041,6 +6061,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local0 = UFDL (Arg0, Arg1)
         If (!Local0) { Return (0x20) } // POLLNVAL
         If (XVWD (Local0, Ones) == XADR (SKND)) { Return (SKRD (Local0)) }
+        If (XVWD (Local0, Ones) == XADR (INND)) { Return (INRD (Local0)) }
         If (XVWD (Local0, Ones) == NULD) { Return (0x145) }
         If (XVWD (Local0, Ones) == XADR (EPND))
         {
@@ -6211,7 +6232,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             // Only descriptors with real readiness: sockets, pipes, terminals
             // and the input devices. Regular files are EPERM, as on Linux.
-            If (XVWD (Local1, Ones) != XADR (SKND) && XVWD (Local1, Ones) != XADR (EFND))
+            If (!SKLK (XVWD (Local1, Ones)) && XVWD (Local1, Ones) != XADR (EFND))
             {
                 If (Local1 != KSOP)
                 {
@@ -6679,6 +6700,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Method (SKSO, 4, NotSerialized)
     {
+        If (Arg1 == 2) { Return (INSO (Arg0, Arg2, Arg3)) } // AF_INET
         If (Arg1 != One) { Return (Zero - 97) } // AF_UNIX
         If ((Arg2 & ~0x80800) != One) { Return (Zero - 94) } // SOCK_STREAM
         If (Arg3) { Return (Zero - 93) }
@@ -7222,6 +7244,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Local1 = XVWD (Arg1 + 8 * 8, Ones)
         Local2 = XVWD (Arg1 + 9 * 8, Ones)
         Local3 = XVWD (Arg1 + 12 * 8, Ones)
+        If (INFD (Arg0, Local1)) { Return (INIO (Arg0, Arg1)) }
         If (Local0 == 43 || Local0 == 288)
         {
             Local4 = Zero
@@ -7237,6 +7260,15 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Return (SYWV (Arg0, Local1 & 0xFFFFFFFF, Local2, Local3 & 0xFFFFFFFF))
         }
         If (Local0 == 46) { Return (SKSM (Arg0, Arg1)) }
+        If (Local0 == 44) // sendto on a connected stream
+        {
+            Local4 = SKFD (Arg0, Local1)
+            If (Local4 >= Zero - 4095) { Return (Local4) }
+            Local5 = XVWD (Arg1 + 5 * 8, Ones) & 0xFFFFFFFF
+            If (Local5 & ~0x4040) { Return (Zero - 95) } // DONTWAIT, NOSIGNAL
+            If (XVWD (Arg1 + 7 * 8, Ones)) { Return (Zero - 106) } // EISCONN
+            Return (SKRW (Arg0, Local4, Local2, Local3, One | Local5))
+        }
         If (Local0 == 45 || Local0 == 47) { Return (SKRC (Arg0, Arg1)) }
         Return (SKRW (Arg0, UFDL (Arg0, Local1 & 0xFFFFFFFF), Local2, Local3, Local0))
     }
@@ -7434,6 +7466,15 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Else { Return () }
         Local3 = XVWD (Arg0 + TSFR, Ones)
         XSTQ (Arg0 + TSOR, Zero)
+        Local4 = XVWD (Arg0 + TSNP, Ones)
+        If (Local4)
+        {
+            // A stream send or MSG_WAITALL receive returns what it moved.
+            XSTQ (Arg0 + TSNP, Zero)
+            XSTQ (Local3 + 14 * 8, Local4)
+            SQAP (Arg0)
+            Return ()
+        }
         If (Local2) { XSTQ (Arg0 + TSOR, XVWD (Local3 + 14 * 8, Ones) + One) }
         XSTQ (Local3 + 14 * 8, Zero - 4)
         SQAP (Arg0)
@@ -8268,7 +8309,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Else
             {
                 Local6 = XVWD (Local5, Ones)
-                If (Local6 == XADR (SKND) || Local6 == KSND || Local6 == MSND)
+                If (SKLK (Local6) || Local6 == KSND || Local6 == MSND)
                 {
                     Local3 = Zero - 29 // ESPIPE
                 }
@@ -8284,8 +8325,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         ElseIf (Local1 == 19) // readv on open descriptions
         {
-            Local3 = SKRV (Arg0, Local2 & 0xFFFFFFFF, XVWD (Local0 + 9 * 8, Ones),
-                XVWD (Local0 + 12 * 8, Ones) & 0xFFFFFFFF, 0x100)
+            If (INFD (Arg0, Local2)) { Local3 = INIO (Arg0, Local0) }
+            Else
+            {
+                Local3 = SKRV (Arg0, Local2 & 0xFFFFFFFF, XVWD (Local0 + 9 * 8, Ones),
+                    XVWD (Local0 + 12 * 8, Ones) & 0xFFFFFFFF, 0x100)
+            }
             If (Local3 == Ones)
             {
                 SKBK (Arg0)
@@ -8294,8 +8339,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         ElseIf (Local1 == 20) // writev
         {
-            Local3 = SYWV (Arg0, Local2 & 0xFFFFFFFF, XVWD (Local0 + 9 * 8, Ones),
-                XVWD (Local0 + 12 * 8, Ones) & 0xFFFFFFFF)
+            If (INFD (Arg0, Local2)) { Local3 = INIO (Arg0, Local0) }
+            Else
+            {
+                Local3 = SYWV (Arg0, Local2 & 0xFFFFFFFF, XVWD (Local0 + 9 * 8, Ones),
+                    XVWD (Local0 + 12 * 8, Ones) & 0xFFFFFFFF)
+            }
             If (Local3 == Ones)
             {
                 SKBK (Arg0)
@@ -8471,8 +8520,26 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Local4 = XVWD (Local0 + 9 * 8, Ones)
             Local5 = XVWD (Local0 + 12 * 8, Ones) & 0xFFFFFFFF
-            If (Local1 == 42) { Local3 = SKCO (Arg0, Local2, Local4, Local5) }
+            If (INFD (Arg0, Local2))
+            {
+                If (Local1 == 49) { Local3 = INBD (Arg0, Local2, Local4, Local5) }
+                Else
+                {
+                    Local3 = INCN (Arg0, Local2, Local4, Local5)
+                    If (Local3 == Ones)
+                    {
+                        SKBK (Arg0)
+                        Return (Zero)
+                    }
+                }
+            }
+            ElseIf (Local1 == 42) { Local3 = SKCO (Arg0, Local2, Local4, Local5) }
             Else { Local3 = SKBD (Arg0, Local2, Local4, Local5) }
+        }
+        ElseIf (Local1 == 51 || Local1 == 52) // getsockname, getpeername
+        {
+            Local3 = INGN (Arg0, Local2, XVWD (Local0 + 9 * 8, Ones),
+                XVWD (Local0 + 12 * 8, Ones), Local1 == 52)
         }
         ElseIf (Local1 == 43 || Local1 == 288) // accept or accept4
         {
@@ -8483,7 +8550,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 Return (Zero)
             }
         }
-        ElseIf (Local1 == 45 || Local1 == 46 || Local1 == 47) // recvfrom, sendmsg, recvmsg
+        ElseIf (Local1 >= 44 && Local1 <= 47) // sendto, recvfrom, sendmsg, recvmsg
         {
             Local3 = SKIO (Arg0, Local0)
             If (Local3 == Ones)
@@ -8492,9 +8559,15 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 Return (Zero)
             }
         }
+        ElseIf (Local1 == 48 || Local1 == 54 || Local1 == 55) // shutdown, setsockopt, getsockopt
+        {
+            Local3 = INSY (Arg0, Local0)
+        }
         ElseIf (Local1 == 50) // listen
         {
-            Local3 = SKLS (Arg0, Local2, XVWD (Local0 + 9 * 8, Ones))
+            Local4 = INFD (Arg0, Local2)
+            If (Local4) { Local3 = TPLS (Local4, XVWD (Local0 + 9 * 8, Ones)) }
+            Else { Local3 = SKLS (Arg0, Local2, XVWD (Local0 + 9 * 8, Ones)) }
         }
         ElseIf (Local1 == 57 || Local1 == 56 || Local1 == 58) // fork, clone, vfork
         {
@@ -8568,7 +8641,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 Local3 = Zero - 22
                 Local5 = XVWD (Local4, Ones)
-                If (Local5 != XADR (SKND) && XVWD (Local5 + VNFS, Ones))
+                If (!SKLK (Local5) && XVWD (Local5 + VNFS, Ones))
                 {
                     Local3 = EXWB (Local5)
                     If (!Local3)
@@ -8651,7 +8724,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 Local5 = XVWD (Local4, Ones)
                 Local3 = Zero - 95 // EOPNOTSUPP
-                If (Local5 != XADR (SKND) && Local5 != XADR (MFND))
+                If (!SKLK (Local5) && Local5 != XADR (MFND))
                 {
                     Local3 = VCHM (Local5, XVWD (Local0 + 9 * 8, Ones))
                 }
@@ -9027,7 +9100,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 PNUM (" RIP=0x", XFRP ())
                 PUTS ("")
             }
-            If (Local1 == PIVC || Local1 == KBVC || Local1 == MSVC || Local1 == RSVC)
+            If (Local1 == PIVC || Local1 == KBVC || Local1 == MSVC || Local1 == RSVC ||
+                Local1 == NIVC)
             {
                 TACK (Local1)
                 Continue
@@ -9579,6 +9653,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 MSND = VNOD (Local0, XADR (MSNM), SizeOf (MSNM), 2)
             }
             If (!PCIN ()) { Return (Zero) }
+            NVIN ()
             Local2 = Zero
             If (FSIN () && !XBYT (Arg3))
             {

@@ -6,7 +6,6 @@
     Name (VCAP, Zero)
     Name (VFEA, Zero)
 
-    External (XPIO, MethodObj)
     Method (VBIO, 3, NotSerialized)
     {
         Return (XPIO (VBAR + Arg0, Arg1, Arg2))
@@ -14,20 +13,10 @@
 
     Method (VBIN, 0, NotSerialized)
     {
-        Local0 = 0x80000000
-        While (Local0 < 0x80010000)
-        {
-            PCIX = Local0
-            If (PCDT == 0x10011AF4) { Break }
-            Local0 += 0x800
-        }
-        If (Local0 == 0x80010000) { Return (Zero) }
-        PCIX = Local0 + 0x10
-        Local1 = PCDT
-        If (!(Local1 & One) || Local1 >= 0x10000) { Return (Zero) }
-        VBAR = Local1 & 0xFFFC
-        PCIX = Local0 + 4
-        PCDT = (PCDT & 0xFFFF) | 0x405 // I/O, bus mastering, INTx disabled
+        Local0 = PCFD (0x10011AF4)
+        If (!Local0) { Return (Zero) }
+        VBAR = VIOB (Local0)
+        If (!VBAR) { Return (Zero) }
         VBIO (18, One, Zero)
         VBIO (18, One, 3)
         VFEA = VBIO (Zero, 4, Ones)
@@ -36,30 +25,13 @@
         Local1 = VBIO (12, 2, Ones)
         If (Local1 < 3 || Local1 > 128) { Return (Zero) }
 
-        // Reserve consecutive physical pages for the descriptor and used rings.
-        Local3 = Zero
-        While (PEND - PNXT < 2 * PGSZ)
-        {
-            Local2 = PALC ()
-            If (!Local2) { Return (Zero) }
-            // Hold any tail pages until the next usable range has been found.
-            XSTQ (HHDO + Local2, Local3)
-            Local3 = Local2
-        }
-        VQUE = PNXT + HHDO
-        PNXT += 2 * PGSZ
-        PUSE += 2
-        While (Local3)
-        {
-            Local2 = XVWD (HHDO + Local3, Ones)
-            PDEL (Local3)
-            Local3 = Local2
-        }
+        // Descriptor and available rings share the first page, used ring the second.
+        Local2 = PCON (2)
+        If (!Local2) { Return (Zero) }
+        VQUE = Local2 + HHDO
         Local2 = PALC ()
-        If (!Local2 || (VQUE - HHDO) >> 44) { Return (Zero) }
+        If (!Local2) { Return (Zero) }
         VDMA = Local2 + HHDO
-        XCLR (VQUE)
-        XCLR (VQUE + PGSZ)
         XCLR (VDMA)
         // Header/status occupy unused space beyond the available ring.
         XSTQ (VQUE, VQUE - HHDO + 0xC00)

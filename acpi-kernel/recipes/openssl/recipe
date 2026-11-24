@@ -1,0 +1,28 @@
+version=3.5.9
+revision=1
+cross_compile=yes
+tarball_url=https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz
+tarball_sha256=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+builddeps=musl-cxx
+
+# OpenSSL 3.5 (LTS) as shared libraries for dynamically linked programs
+# (curl). Built with the shared-library musl toolchain; certificates live in
+# /etc/ssl (see the ca-certificates recipe).
+openssl_env() {
+    export PATH="$sysroot/opt/acpi-musl-cxx/bin:$PATH"
+}
+configure() {
+    openssl_env
+    "$source_dir/Configure" linux-x86_64 --cross-compile-prefix=x86_64-buildroot-linux-musl- \
+        --prefix=/usr --libdir=lib --openssldir=/etc/ssl shared no-static-engine \
+        no-tests no-docs no-afalgeng -O2 $APP_CPU_FLAGS
+}
+build() { openssl_env; make -j"$parallelism"; }
+package() {
+    openssl_env
+    make DESTDIR="$dest_dir" install_sw install_ssldirs
+    rm -f "$dest_dir"/usr/lib/*.a "$dest_dir/etc/ssl/misc/"*.pl "$dest_dir/etc/ssl/misc/tsget"
+    rm -rf "$dest_dir/usr/bin/c_rehash"
+    x86_64-buildroot-linux-musl-strip --strip-unneeded "$dest_dir"/usr/lib/*.so.* \
+        "$dest_dir"/usr/lib/engines-3/*.so "$dest_dir"/usr/lib/ossl-modules/*.so "$dest_dir/usr/bin/openssl"
+}

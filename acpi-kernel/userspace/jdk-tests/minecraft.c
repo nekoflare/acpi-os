@@ -1,15 +1,15 @@
-// F4: Minecraft 1.20.1 in offline mode on Xvfb, with the arguments of
+// F4: Minecraft 1.21.11 in offline mode on Xvfb, with the arguments of
 // config/minecraft. Passes when the game finishes loading its resources
 // (the last texture atlas) and is still running a minute later. It then
 // grabs the screen with a raw X11 GetImage into /tmp/minecraft.ppm on the
 // test disk, for a human to look at. The files come from
 // scripts/fetch-minecraft.sh and scripts/fetch-lwjgl.sh.
-// disk: openjdk musl-runtime alsa-lib xvfb xorg-keymap mesa libx11-shared libxext-shared libxcb-shared libxau-shared libxdmcp-shared libxrender-shared libxrandr lwjgl lwjgl-glfw lwjgl-openal lwjgl-jemalloc
+// disk: openjdk musl-runtime alsa-lib xvfb xorg-keymap mesa libx11-shared libxext-shared libxcb-shared libxau-shared libxdmcp-shared libxrender-shared libxrandr lwjgl lwjgl-glfw lwjgl-openal lwjgl-jemalloc lwjgl-freetype
 // disk-rw
 // prepare: scripts/fetch-lwjgl.sh
 // prepare: scripts/fetch-minecraft.sh
-// disk-dir: opt/lwjgl=../target/lwjgl-3.3.1
-// disk-dir: opt/minecraft=../target/minecraft-1.20.1
+// disk-dir: opt/lwjgl=../target/lwjgl-3.3.3
+// disk-dir: opt/minecraft=../target/minecraft-1.21.11
 // timeout: 900
 #define _GNU_SOURCE
 #include <errno.h>
@@ -176,9 +176,9 @@ int main(void)
         "-cp", "/opt/minecraft/client.jar:/opt/minecraft/libraries/*:/opt/lwjgl/*",
         "net.minecraft.client.main.Main", "--username", "Player",
         "--uuid", "a01e3843-e521-3998-958a-f459800e4d11", "--accessToken", "0",
-        "--userType", "legacy", "--version", "1.20.1", "--versionType", "release",
+        "--userType", "legacy", "--version", "1.21.11", "--versionType", "release",
         "--gameDir", "/tmp/minecraft", "--assetsDir", "/opt/minecraft/assets",
-        "--assetIndex", "5", NULL,
+        "--assetIndex", "29", NULL,
     };
     int pipe_fds[2];
     if (pipe(pipe_fds)) { printf("FAIL pipe\n"); return 1; }
