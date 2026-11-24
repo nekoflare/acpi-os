@@ -117,7 +117,7 @@ if [ -f "$output" ]; then
                 path != "" && /File not found by ext2_lookup/ { state = "missing" }
                 function finish() {
                     if (path == "") return
-                    if (state == "missing") printf "mkdir \"/%s\"\n", path
+                    if (state == "missing") printf "mkdir \"%s\"\n", path
                     else if (state != "dir") { print "Packaged directory conflicts with /" path > "/dev/stderr"; bad = 1 }
                     path = ""; state = ""
                 }
