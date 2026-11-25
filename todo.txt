@@ -1,1 +1,4 @@
-Investigate the lag during sqlite3-test (its very bad.)
+Further codegen ideas I found but didn't implement:
+- Methods that can't return an integer still return through a memory buffer; that's most of the remaining 1,158 memsets.
+- String literals are copied into a new heap object every time they're evaluated, even when the receiver only reads them.
+- Accesses to fields of fixed regions with known offsets could become a direct host callback instead of the generic bit-by-bit field code.

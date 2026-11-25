@@ -77,7 +77,15 @@ if [ -f "$output" ]; then
     dd if="$work/old-disk.img" of="$work/apps.img" bs=1M skip=65 count="$old_apps_size" conv=sparse status=none
     rm -f "$work/old-disk.img"
     [ "$(blkid -p -s LABEL -o value "$work/apps.img")" = acpi-apps ]
-    e2fsck -fn "$work/apps.img"
+    # The guest volume has no journal. Its create and unlink order their
+    # writes so a VM killed mid-operation only leaks an inode, which preen
+    # repairs on this copy (exit 1). Anything preen refuses still stops here.
+    status=0
+    e2fsck -fp "$work/apps.img" || status=$?
+    if [ "$status" -gt 1 ]; then
+        echo "e2fsck could not repair the guest volume (exit $status); run e2fsck -f by hand" >&2
+        exit 1
+    fi
     truncate -s "${apps_mib}M" "$work/apps.img"
     resize2fs "$work/apps.img"
 

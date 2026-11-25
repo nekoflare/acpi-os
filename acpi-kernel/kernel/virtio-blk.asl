@@ -66,11 +66,16 @@
         XSTB (Local0 + 3, VSEQ >> 8)
         XSTB (Local0 + 2, VSEQ)
         VBIO (16, 2, Zero)
-        Local1 = 10000000
+        // Give the host 30 s of TSC time, not a loop count: amlaot now inlines
+        // the volatile loads, so 10M polls took milliseconds, and a slow host
+        // write or flush killed the disk for good. CTMH is TSC MHz; before
+        // calibration (fstab mount), assume 5 GHz.
+        Local1 = CTMH
+        If (!Local1) { Local1 = 5000 }
+        Local1 = XTSC () + Local1 * 30000000
         While (ELWD (VQUE + PGSZ, 2, 2) != VSEQ)
         {
-            Decrement (Local1)
-            If (!Local1)
+            If (XTSC () > Local1)
             {
                 VCAP = Zero
                 VBIO (18, One, Zero)

@@ -3,7 +3,7 @@
 JINX := $(abspath ports/jinx)
 # The aac recipe builds the AML AOT compiler from the repository root. Its
 # sources go in the recipe directory, which Jinx fingerprints per package.
-AMLAOT_INPUTS := ../Cargo.toml ../Cargo.lock $(shell find ../src -type f | LC_ALL=C sort)
+AMLAOT_INPUTS := ../Cargo.toml ../Cargo.lock ../build.rs $(shell find ../src -type f | LC_ALL=C sort)
 JINX_INPUTS := $(shell find recipes userspace -type f | LC_ALL=C sort) \
 	Jinxfile ports/jinx ports/Makefile ports/stage.sh config/xorg-default.xkb \
 	$(AMLAOT_INPUTS)
@@ -24,7 +24,7 @@ $(JINX_CONFIG): | $(JINX_INPUTS)
 			cp -R Jinxfile recipes userspace "$$2/"; \
 			cp config/xorg-default.xkb "$$2/config/"; \
 			mkdir -p "$$2/recipes/aac/amlaot"; \
-			cp -R ../Cargo.toml ../Cargo.lock ../src "$$2/recipes/aac/amlaot/"; \
+			cp -R ../Cargo.toml ../Cargo.lock ../build.rs ../src "$$2/recipes/aac/amlaot/"; \
 			cd "$$1"; "$$3" init "$$2" ARCH=x86_64 APP_ARCH="$$4"; \
 		fi' sh "$(@D)" "$(JINX_SOURCE)" "$(JINX)" "$(APP_ARCH)"
 

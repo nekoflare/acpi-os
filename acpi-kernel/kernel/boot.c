@@ -998,12 +998,6 @@ uint64_t acpi_tlb_shootdown(uint64_t root)
     return targets;
 }
 
-uint64_t acpi_invalidate_page(uint64_t address)
-{
-    __asm__ volatile("invlpg (%0)" : : "r"(address) : "memory");
-    return 0;
-}
-
 static bool acpi_byte_mapped(uint64_t address)
 {
     for (uint64_t i = 0; i < boot_memory_map->count; ++i) {
@@ -1080,34 +1074,6 @@ uint64_t acpi_image_copy(uint64_t address, uint64_t offset, uint64_t length)
     for (uint64_t i = 0; i < length; ++i)
         out[i] = file->address[offset + i];
     return 1;
-}
-
-uint64_t acpi_virtual_byte(uint64_t address)
-{
-    return *(const volatile uint8_t *)address;
-}
-
-uint64_t acpi_store_byte(uint64_t address, uint64_t value)
-{
-    *(volatile uint8_t *)address = (uint8_t)value;
-    return 0;
-}
-
-uint64_t acpi_load_qword(uint64_t address)
-{
-    return *(const volatile uint64_t *)address;
-}
-
-uint64_t acpi_store_qword(uint64_t address, uint64_t value)
-{
-    *(volatile uint64_t *)address = value;
-    return 0;
-}
-
-uint64_t acpi_load_tr(uint64_t selector)
-{
-    __asm__ volatile("ltr %0" : : "r"((uint16_t)selector) : "memory");
-    return 0;
 }
 
 extern void acpi_syscall_entry(void);

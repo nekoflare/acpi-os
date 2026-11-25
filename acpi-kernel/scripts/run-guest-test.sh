@@ -1,14 +1,16 @@
 #!/bin/sh
 # Build userspace/<suite>/<name>.c (jdk-tests for the Java port, net-tests for
-# networking) as a static musl program, boot it as the
+# networking, firefox-tests for the Firefox port) as a static musl program, boot it as the
 # init module and print its serial output. The test passes when it exits with
 # status zero and prints "PASS". The program is also packed into the
 # initramfs as /bin/<name>.elf, so it can execute itself.
 #   scripts/run-guest-test.sh mmap-exec [smp]
 # A "// disk: <package>..." line unpacks those jinx packages onto an ext4
 # volume that /etc/fstab mounts at /, for tests that need large files.
-# "// disk-rw" mounts that volume read-write; it is rebuilt on every run.
-# "// disk-file: <path>=<source>" copies a file onto that volume.
+# "// disk-rw" mounts that volume read-write; it is rebuilt on every run and
+# must pass e2fsck afterwards.
+# "// disk-file: <path>=<source>" copies a file (relative to the test's
+# directory, keeping its mode) onto that volume.
 # "// disk-dir: <path>=<directory>" copies a host directory (relative to
 # acpi-kernel/) onto that volume.
 # "// prepare: <command>" runs a host command from acpi-kernel/ first, for
@@ -31,11 +33,12 @@
 # "// tcp-fwd: <port>" forwards a free host port to that guest port and runs
 # scripts/tcp-fwd-client.py against it (needs "// net").
 # Each "// expect: <text>" line must also appear in the serial log.
+# Each "// expect-once: <text>" line must appear on exactly one log line.
 set -eu
 cd "$(dirname "$0")/.."
 name="$1"
 src=
-for suite in jdk-tests net-tests; do
+for suite in jdk-tests net-tests firefox-tests; do
     if [ -f "userspace/$suite/$name.c" ]; then src="userspace/$suite/$name.c"; fi
 done
 [ -n "$src" ] || { echo "no test named $name" >&2; exit 1; }
@@ -100,7 +103,7 @@ if [ -n "$packages" ]; then
         sh -c "$command"
     done
     for spec in $(sed -n 's|^// disk-file: ||p' "$src"); do
-        install -Dm644 "$dir/${spec#*=}" "$root/${spec%%=*}"
+        install -D -m "$(stat -c %a "$dir/${spec#*=}")" "$dir/${spec#*=}" "$root/${spec%%=*}"
     done
     for spec in $(sed -n 's|^// disk-dir: ||p' "$src"); do
         mkdir -p "$root/${spec%%=*}"
@@ -220,6 +223,17 @@ kill "$qemu" 2>/dev/null || true
 wait "$qemu" 2>/dev/null || true
 sed -n '/SMP tasks ran simultaneously/,$p' "$log" | sed 1d
 grep -qa "exited status=0x0000000000000000" "$log" && grep -qa "^PASS" "$log" || exit 1
+# A read-write volume must still pass e2fsck after the kernel wrote to it.
+if [ "${mode:-}" = rw ]; then
+    dd if="$build/$name.disk" of="$build/$name.fsck" bs=1M skip=1 conv=sparse status=none
+    e2fsck -fn "$build/$name.fsck" > "$build/$name.fsck.log" 2>&1 ||
+        { cat "$build/$name.fsck.log"; rm -f "$build/$name.fsck"; echo "e2fsck failed" >&2; exit 1; }
+    rm -f "$build/$name.fsck"
+fi
 sed -n 's|^// expect: ||p' "$src" | while IFS= read -r text; do
     grep -qaF "$text" "$log" || { echo "missing from serial log: $text" >&2; exit 1; }
+done || exit 1
+sed -n 's|^// expect-once: ||p' "$src" | while IFS= read -r text; do
+    n=$(grep -caF "$text" "$log" || true)
+    [ "$n" = 1 ] || { echo "expected once in serial log, found $n: $text" >&2; exit 1; }
 done

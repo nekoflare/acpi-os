@@ -796,6 +796,9 @@
             If (Local1) { XMOV (Local2, XVWD (Arg0 + VNDA, Ones), Local1) }
             EXLE (Local0, 4, Local1, 4)
             EXLE (Local0, 28, Zero, 4)
+            // New inodes carry EXTENTS_FL; a fast symlink must not (e2fsck
+            // rejects it, and Firefox's profile lock is one).
+            EXLE (Local0, 32, ELWD (Local0, 32, 4) & ~0x80000, 4)
             If (!EXBW (EXIB, EXIN)) { Return (Zero - 5) }
             If (!EXSY ()) { Return (Zero - 5) }
             Return (Zero)

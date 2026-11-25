@@ -23,15 +23,22 @@ $(BUILD)/kernel.aml: kernel/kernel.asl $(filter-out kernel/kernel.asl,$(wildcard
 copy-aml: $(BUILD)/kernel.aml
 	cp -- "$<" ./kernel.aml
 
-$(BUILD)/linked.ll: $(BUILD)/kernel.aml ../Cargo.toml ../Cargo.lock $(wildcard ../src/*) | $(BUILD)
-	AMLAOT_CLANG="$(CLANG)" cargo run --locked --manifest-path ../Cargo.toml -- --emit-llvm --freestanding $< > $@
+# Target CPU for the AML kernel. Generated code inherits the runtime's target
+# attributes, so the choice reaches the code through amlaot, not the final
+# compile. The guest runs under KVM with -cpu host; x86-64-v3 adds BMI1/2,
+# LZCNT, and POPCNT, and the general-registers-only flags keep SIMD out.
+AML_MARCH ?= x86-64-v3
+
+$(BUILD)/linked.ll: $(BUILD)/kernel.aml kernel/intrinsics.def kernel/build.mk ../Cargo.toml ../Cargo.lock $(wildcard ../src/*) | $(BUILD)
+	AMLAOT_CLANG="$(CLANG)" AMLAOT_RUNTIME_CFLAGS="$(if $(AML_MARCH),-march=$(AML_MARCH))" cargo run --locked --manifest-path ../Cargo.toml -- --emit-llvm --freestanding --intrinsics kernel/intrinsics.def $< > $@
 
 $(BUILD)/kernel.bc: $(BUILD)/linked.ll kernel/build.mk
 	$(OPT) -force-attribute=noredzone -internalize-public-api-list=aml_context_create_with_host,aml_KERN,aml_SSTP,aml_interrupt_BRKP \
 		-passes='forceattrs,internalize,always-inline,default<O2>,globaldce,verify' $< -o $@
 
-$(BUILD)/aml.o: $(BUILD)/kernel.bc
-	$(CLANG) $(KERNEL_FLAGS) -c $< -o $@
+# kernel.bc is already optimized; run only code generation here.
+$(BUILD)/aml.o: $(BUILD)/kernel.bc kernel/build.mk
+	$(CLANG) $(KERNEL_FLAGS) -Xclang -disable-llvm-passes -c $< -o $@
 
 $(BUILD)/boot.o: kernel/boot.c ../src/runtime.h kernel/build.mk | $(BUILD)
 	$(CLANG) $(BOOT_FLAGS) -c $< -o $@

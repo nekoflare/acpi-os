@@ -857,6 +857,28 @@ static int store(aml_context *ctx, value *dst, value src, unsigned mode, unsigne
     return AML_OK;
 }
 
+/* Inline fast path for the common stores of an integer into a plain slot.
+ * Generated code usually knows the source tag, so after inlining this is a
+ * single type check on the destination. Everything else defers to store(),
+ * which this mirrors exactly for the cases handled here. */
+static inline __attribute__((always_inline))
+int store_value(aml_context *ctx, value *dst, value src, unsigned mode)
+{
+    if (src.type == AML_VALUE_INTEGER) {
+        if (mode == STORE_NAMED && dst->type == AML_VALUE_INTEGER) {
+            uint64_t payload = src.integer_or_length;
+            *dst = integer(ctx->integer_bytes == 4 ? (uint32_t)payload : payload);
+            return AML_OK;
+        }
+        if ((mode == STORE_SLOT || mode == COPY_SLOT) &&
+            (dst->type <= AML_VALUE_PACKAGE || dst->type == UNINITIALIZED)) {
+            *dst = src;
+            return AML_OK;
+        }
+    }
+    return store(ctx, dst, src, mode, 64);
+}
+
 static int compare(value lhs, value rhs, int *result)
 {
     if (lhs.type != rhs.type || lhs.type > AML_VALUE_BUFFER)
@@ -1303,12 +1325,15 @@ int32_t aml_object_op(aml_context *ctx, value *out, uint32_t op,
         *out = x;
         return AML_OK;
     case STORE_SLOT:
-        return store(ctx, out, x, is_reference(*out) ?
-                     (extra ? FOLLOW_COPY : FOLLOW_CAST) : STORE_SLOT, 64);
+        if (is_reference(*out))
+            return store(ctx, out, x, extra ? FOLLOW_COPY : FOLLOW_CAST, 64);
+        return store_value(ctx, out, x, STORE_SLOT);
     case STORE_NAMED:
-        return store(ctx, out, x, STORE_NAMED, 64);
+        return store_value(ctx, out, x, STORE_NAMED);
     case COPY_SLOT:
-        return store(ctx, out, x, extra && is_reference(*out) ? FOLLOW_COPY : COPY_SLOT, 64);
+        if (extra && is_reference(*out))
+            return store(ctx, out, x, FOLLOW_COPY, 64);
+        return store_value(ctx, out, x, COPY_SLOT);
     case STORE_REF:
         if (!is_reference(y))
             return AML_TYPE_MISMATCH;

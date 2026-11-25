@@ -2,15 +2,19 @@ version=0.1.0
 revision=1
 cross_compile=yes
 source_dir=recipes/aac/amlaot
+builddeps="aac-llvm"
 imagedeps="cargo rustc"
 
 configure() {
     copy_source
 }
 
-# Debian ships no musl Rust std, so link glibc statically instead.
+# Debian ships no musl Rust std, so link glibc statically instead, with the
+# glibc LLVM libraries from aac-llvm.
 build() {
     CARGO_HOME="$PWD/cargo-home" \
+    AMLAOT_LLVM_CONFIG="$sysroot/opt/aac-llvm/bin/llvm-config" \
+    AMLAOT_LLVM_LINK=static \
     RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C target-cpu=${JINX_APP_ARCH:-native}" \
         cargo build --offline --locked --release \
             --manifest-path src/Cargo.toml --target-dir target \

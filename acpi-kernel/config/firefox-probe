@@ -1,0 +1,30 @@
+#!/bin/sh
+# P3: run Alpine's prebuilt firefox-esr from /opt/alpine (scripts/fetch-alpine-firefox.py).
+# It uses our /lib/ld-musl-x86_64.so.1 (its PT_INTERP) and Alpine's libraries
+# first. The kernel has no seccomp or namespaces, so every sandbox is off.
+# Profile, cache and settings live on the persistent volume in /firefox
+# (FIREFOX_DIR overrides it). FIREFOX_BIN runs another program in the same
+# environment (the guest tests use it for fc-match).
+#   firefox-probe [firefox arguments]
+a=/opt/alpine
+dir="${FIREFOX_DIR:-/firefox}"
+mkdir -p "$dir/config" "$dir/cache" "$dir/data" "$dir/state" 2>/dev/null || true
+runtime=/tmp/firefox-runtime
+mkdir -p "$runtime" 2>/dev/null && chmod 700 "$runtime" 2>/dev/null || true
+
+export LD_LIBRARY_PATH="$a/usr/lib/firefox-esr:$a/usr/lib:$a/lib"
+export MOZ_DISABLE_CONTENT_SANDBOX=1 MOZ_DISABLE_RDD_SANDBOX=1 \
+    MOZ_DISABLE_SOCKET_PROCESS_SANDBOX=1 MOZ_DISABLE_GMP_SANDBOX=1 \
+    MOZ_DISABLE_UTILITY_SANDBOX=1 MOZ_DISABLE_GPU_SANDBOX=1
+export NO_AT_BRIDGE=1 GDK_BACKEND=x11 MOZ_ENABLE_WAYLAND=0 MOZ_CRASHREPORTER_DISABLE=1
+export HOME="$dir" XDG_CONFIG_HOME="$dir/config" XDG_CACHE_HOME="$dir/cache" \
+    XDG_DATA_HOME="$dir/data" XDG_STATE_HOME="$dir/state" XDG_RUNTIME_DIR="$runtime"
+export XDG_DATA_DIRS="$a/usr/share:/usr/share" XDG_CONFIG_DIRS="$a/etc/xdg"
+export GIO_MODULE_DIR="$a/usr/lib/gio/modules" GSETTINGS_SCHEMA_DIR="$a/usr/share/glib-2.0/schemas"
+# Alpine's fonts.conf plus the desktop's /fonts (config/firefox-fonts.conf);
+# the font cache goes to $XDG_CACHE_HOME/fontconfig.
+export FONTCONFIG_FILE=/etc/fonts/firefox.conf FONTCONFIG_PATH="$a/etc/fonts"
+# ICU looks for its data in /usr/share/icu/<version>; Firefox crashes in
+# JS startup ("ICU4CLibrary::Initialize() failed") without it.
+for icu in "$a"/usr/share/icu/*/; do export ICU_DATA="${icu%/}"; done
+exec "${FIREFOX_BIN:-$a/usr/lib/firefox-esr/firefox-esr}" "$@"

@@ -45,6 +45,16 @@ sed -i '/^set_shell_var ()/,/^}/ {
     /^#endif$/d
 }' "$source/variables.c"
 
+# --enable-minimal-config drops ARRAY_VARS, which leaves `tt` uninitialized
+# before parameter_brace_expand_word's FREE (tt). Clang treats that as
+# unreachable, so every ${name} expansion ran into the next function and
+# crashed in strlen(0x1).
+sed -i '/^	  temp = value_cell (var);$/{
+N
+s|\n#endif$|\n	  tt = (char *)NULL;\n#endif|
+}' "$source/subst.c"
+grep -q '^	  tt = (char \*)NULL;$' "$source/subst.c"
+
 cd "$build/obj"
 printf 'Configuring GNU Bash\n'
 CC="sh $script --cc" CFLAGS="-O2 $app_cpu_flags -fno-pie -std=gnu17" \

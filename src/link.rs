@@ -1,9 +1,16 @@
+//! Links the generated AML module with the C object runtime.
+//!
+//! The runtime (`objects.c`) is compiled to bitcode with clang and merged
+//! into the generated module in-process through the LLVM linker.
+
 use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::{env, fs};
+
+use crate::ir::{Context, Module};
 
 struct TemporaryDirectory(PathBuf);
 
@@ -33,7 +40,7 @@ impl Drop for TemporaryDirectory {
     }
 }
 
-fn run(command: &mut Command) -> Result<Vec<u8>, String> {
+fn run(command: &mut Command) -> Result<(), String> {
     let output = command
         .output()
         .map_err(|error| format!("{command:?}: {error}"))?;
@@ -43,14 +50,14 @@ fn run(command: &mut Command) -> Result<Vec<u8>, String> {
             String::from_utf8_lossy(&output.stderr).trim(),
         ));
     }
-    Ok(output.stdout)
+    Ok(())
 }
 
-pub fn link(module: &str, freestanding: bool) -> Result<Vec<u8>, String> {
+/// Links the runtime into `module` and returns the combined textual IR.
+pub fn link(llvm: &Context, module: Module<'_>, freestanding: bool) -> Result<String, String> {
     let temp = TemporaryDirectory::create()
         .map_err(|error| format!("creating link directory: {error}"))?;
     for (name, contents) in [
-        ("methods.ll", module),
         ("objects.c", include_str!("objects.c")),
         ("runtime.h", include_str!("runtime.h")),
     ] {
@@ -58,7 +65,6 @@ pub fn link(module: &str, freestanding: bool) -> Result<Vec<u8>, String> {
             .map_err(|error| format!("writing {name}: {error}"))?;
     }
     let clang = env::var_os("AMLAOT_CLANG").unwrap_or_else(|| "clang".into());
-    let linker = env::var_os("AMLAOT_LLVM_LINK").unwrap_or_else(|| "llvm-link".into());
     let objects = temp.0.join("objects.bc");
     let mut compiler = Command::new(clang);
     compiler.args(["-std=c17", "-O1", "-emit-llvm", "-c"]);
@@ -70,12 +76,25 @@ pub fn link(module: &str, freestanding: bool) -> Result<Vec<u8>, String> {
             "-mgeneral-regs-only",
         ]);
     }
+    // Generated functions inherit the runtime's target attributes, so a
+    // target such as `-march=x86-64-v3` must be chosen here; `-march` on
+    // the final compile of the linked module cannot override them.
+    if let Some(flags) = env::var_os("AMLAOT_RUNTIME_CFLAGS") {
+        let flags = flags
+            .into_string()
+            .map_err(|_| "AMLAOT_RUNTIME_CFLAGS is not valid UTF-8".to_string())?;
+        compiler.args(flags.split_whitespace());
+    }
     run(compiler
         .arg("-o")
         .arg(&objects)
         .arg(temp.0.join("objects.c")))?;
-    run(Command::new(linker)
-        .args(["-S", "-o", "-"])
-        .arg(objects)
-        .arg(temp.0.join("methods.ll")))
+    let runtime = llvm.parse_bitcode(&objects)?;
+    module.link(runtime)?;
+    // Generated functions must share the runtime's target attributes, or
+    // LLVM will not inline runtime helpers (including the always-inline
+    // freestanding `aml_object_op`) into them.
+    module.inherit_target_attributes("aml_object_op");
+    module.verify()?;
+    Ok(module.print())
 }

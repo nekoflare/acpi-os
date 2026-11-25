@@ -1,0 +1,70 @@
+# Kernel intrinsics: External methods that amlaot lowers inline.
+# Passed to amlaot with --intrinsics; see src/intrinsics.rs for the format.
+# XADR, XGDT, XIDT, XHND, and XBRK are built into amlaot itself.
+
+# Virtual memory access. Loads zero-extend; stores return 0.
+XBYT load  u8  volatile
+XLDW load  u16 volatile
+XLDD load  u32 volatile
+XLDQ load  u64 volatile
+XSTB store u8  volatile
+XSTW store u16 volatile
+XSTD store u32 volatile
+XSQW store u64 volatile
+
+# Sequentially consistent atomics on naturally aligned addresses; each
+# returns the previous value. XCAS (Address, Expected, New).
+XXAD atomic add  u64
+XXCH atomic xchg u64
+XCAS cmpxchg     u64
+
+# Single instructions.
+XTSC asm 0 "rdtsc; shlq $$32, %rdx; orq %rdx, %rax" "={rax},~{rdx}"
+XTRG asm 1 "ltr ${0:w}" "r,~{memory}"
+XINV asm 1 "invlpg ($0)" "r,~{memory}"
+
+# Physical memory, paging, and devices.
+XMEM call 2 acpi_read_memory
+XMAP call 2 acpi_page_range
+XCR3 call 0 acpi_page_root
+XPIO call 3 acpi_port_io
+XDWD call 2 acpi_mmio_dword
+XMOV call 3 acpi_copy_memory
+XCLR call 1 acpi_clear_page
+XCSM call 3 acpi_checksum
+XTLB call 1 acpi_tlb_shootdown
+XMSR call 2 acpi_apic_msr
+
+# Framebuffer.
+XFBQ call 1 acpi_framebuffer_info
+XPRW call 4 acpi_pixel_row
+XFBL call 3 acpi_framebuffer_blit
+XFBM call 3 acpi_framebuffer_copy
+
+# CPU identification. Leaf-1 CPUID varies by CPU, so XCPD stays impure.
+XAPC call 0 acpi_has_apic pure
+XCCH call 2 acpi_cpu_cache_register pure
+XFRQ call 0 acpi_cpu_base_frequency_mhz pure
+XCFL call 1 acpi_cpu_feature_names
+XCID call 1 acpi_cpu_apic_id
+XCPD call 2 acpi_cpuid_register
+XCPU call 0 acpi_online_cpu_count
+XRNG call 1 acpi_random_word
+XIDX call 0 acpi_current_cpu_id
+XFLT call 0 acpi_last_fault_vector
+XFRP call 0 acpi_last_fault_rip
+
+# SMP, scheduling, and tasks.
+XSMP call 4 acpi_smp_initialize
+XSCT call 3 acpi_smp_timer
+XSGO call 0 acpi_smp_release
+XSTP call 0 acpi_schedule_step
+XSUL call 0 acpi_scheduler_unlock
+XSLK call 0 acpi_scheduler_lock
+XLKP call 1 acpi_lock_profile
+XKGN call 0 acpi_kernel_mapping_changed
+XKMK call 0 acpi_lock_mark
+XWAI call 1 acpi_wait_irq
+XRUN call 5 acpi_run_task
+XIMG call 2 acpi_image_word
+XCPY call 3 acpi_image_copy

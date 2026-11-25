@@ -4,3 +4,4 @@
 /acpi-kernel/.jinx-cache/
 /acpi-kernel/sources/
 /acpi-kernel/host-sources/
+__pycache__/

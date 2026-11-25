@@ -182,6 +182,44 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (DEVN, Buffer () {0x64, 0x65, 0x76})
     Name (NULN, Buffer () {0x6E, 0x75, 0x6C, 0x6C})
     Name (NULD, Zero)
+    // /dev/random and /dev/urandom read RDRAND (as getrandom does); /dev/zero
+    // reads zeros. All three discard writes, like /dev/null. NSS (Firefox's
+    // TLS) fails to initialize without /dev/urandom.
+    Name (RNDN, Buffer () {0x72, 0x61, 0x6E, 0x64, 0x6F, 0x6D})
+    Name (URNN, Buffer () {0x75, 0x72, 0x61, 0x6E, 0x64, 0x6F, 0x6D})
+    Name (ZRON, Buffer () {0x7A, 0x65, 0x72, 0x6F})
+    Name (RNDD, Zero)
+    Name (URND, Zero)
+    Name (ZROD, Zero)
+    Name (ZBUF, Buffer (256) {})
+
+    // One for the /dev nodes that are always readable and writable.
+    Method (DVSP, 1, NotSerialized)
+    {
+        If (!Arg0) { Return (Zero) }
+        If (Arg0 == NULD) { Return (One) }
+        If (Arg0 == RNDD) { Return (One) }
+        If (Arg0 == URND) { Return (One) }
+        If (Arg0 == ZROD) { Return (One) }
+        Return (Zero)
+    }
+
+    // read() from /dev/random, /dev/urandom or /dev/zero into user Arg1.
+    Method (DVRD, 4, NotSerialized)
+    {
+        If (Arg3 > 0x7FFFF000) { Arg3 = 0x7FFFF000 }
+        If (Arg0 != ZROD) { Return (SYGR (Arg1, Arg2, Arg3, Zero)) }
+        If (!URNG (Arg1, Arg2, Arg3, WRIT)) { Return (Zero - 14) }
+        Local0 = Zero
+        While (Local0 < Arg3)
+        {
+            Local1 = Arg3 - Local0
+            If (Local1 > SizeOf (ZBUF)) { Local1 = SizeOf (ZBUF) }
+            If (!UCOP (Arg1, Arg2 + Local0, XADR (ZBUF), Local1)) { Return (Zero - 14) }
+            Local0 += Local1
+        }
+        Return (Arg3)
+    }
     Name (FBNM, Buffer () {0x66, 0x62, 0x30})
 
     Method (FINI, 0, NotSerialized)
@@ -1950,6 +1988,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (ITBF, Buffer (32) {}) // Linux x86-64 struct itimerval
     Name (UPNM, Zero) // Boot module basename
     Name (TSFS, 40) // User FS base
+    // User GS base (ARCH_SET_GS; wasm2c's "segue" in Firefox's RLBox
+    // libraries). It goes into IA32_KERNEL_GS_BASE before dispatch, and the
+    // ring-3 return's swapgs makes it the live GS base.
+    Name (TSGS, 848)
     Name (TSFX, 0x1000) // Page-aligned XSAVE or FXSAVE area
     Name (TSPR, 48) // Process record in the direct map, zero for native tasks
     Name (TSMB, 56) // Registered for MEMBARRIER_CMD_PRIVATE_EXPEDITED
@@ -3096,7 +3138,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 Local4 = XVWD (Local0 + MFSL, Ones)
                 If (Local4 & One) { Return (Zero - One) }
-                If (Arg3 & ~7) { Return (Zero - 22) }
+                // SEAL, SHRINK, GROW and EXEC; WRITE is not enforced yet.
+                If (Arg3 & ~0x27) { Return (Zero - 22) }
                 XSTQ (Local0 + MFSL, Local4 | Arg3)
                 Return (Zero)
             }
@@ -3110,8 +3153,86 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (Zero - 22)
     }
 
+    Name (PFDB, Buffer (48) {})
+
+    // Is task Arg0's path Arg1 "/proc/self/fd/<n>" or "/proc/<own pid>/fd/<n>"?
+    // Returns n, or Ones.
+    Method (PFDN, 2, NotSerialized)
+    {
+        Local0 = XADR (PFDB)
+        Local1 = Zero
+        While (Local1 < 47)
+        {
+            Local2 = UPHY (Arg0, Arg1 + Local1, Zero)
+            If (!Local2) { Return (Ones) }
+            Local2 = XBYT (Local2)
+            XSTB (Local0 + Local1, Local2)
+            If (!Local2) { Break }
+            Increment (Local1)
+        }
+        If (Local1 == 47) { Return (Ones) }
+        // "/proc/"
+        If (XBYT (Local0) != 0x2F || XBYT (Local0 + 1) != 0x70 || XBYT (Local0 + 2) != 0x72 ||
+            XBYT (Local0 + 3) != 0x6F || XBYT (Local0 + 4) != 0x63 || XBYT (Local0 + 5) != 0x2F)
+        {
+            Return (Ones)
+        }
+        Local1 = 6
+        If (XBYT (Local0 + 6) == 0x73) // "self"
+        {
+            If (XBYT (Local0 + 7) != 0x65 || XBYT (Local0 + 8) != 0x6C || XBYT (Local0 + 9) != 0x66)
+            {
+                Return (Ones)
+            }
+            Local1 = 10
+        }
+        Else
+        {
+            Local3 = Zero
+            While (XBYT (Local0 + Local1) >= 0x30 && XBYT (Local0 + Local1) <= 0x39)
+            {
+                Local3 = Local3 * 10 + XBYT (Local0 + Local1) - 0x30
+                Increment (Local1)
+            }
+            If (Local1 == 6 || Local3 != SKPD (Arg0)) { Return (Ones) }
+        }
+        // "/fd/"
+        If (XBYT (Local0 + Local1) != 0x2F || XBYT (Local0 + Local1 + 1) != 0x66 ||
+            XBYT (Local0 + Local1 + 2) != 0x64 || XBYT (Local0 + Local1 + 3) != 0x2F)
+        {
+            Return (Ones)
+        }
+        Local1 += 4
+        Local2 = Local1
+        Local3 = Zero
+        While (XBYT (Local0 + Local1) >= 0x30 && XBYT (Local0 + Local1) <= 0x39 && Local3 < 0x10000)
+        {
+            Local3 = Local3 * 10 + XBYT (Local0 + Local1) - 0x30
+            Increment (Local1)
+        }
+        If (Local1 == Local2 || XBYT (Local0 + Local1)) { Return (Ones) }
+        Return (Local3)
+    }
+
     Method (SYOP, 5, NotSerialized)
     {
+        // open("/proc/self/fd/<n>"): Linux opens the file anew; here the new
+        // descriptor shares fd n's open description, so offset and access mode
+        // are shared too (a read-only reopen of a memfd stays writable).
+        // Firefox reopens its shared memory this way to make read-only copies.
+        Local0 = PFDN (Arg0, Arg2)
+        If (Local0 != Ones)
+        {
+            Local1 = UFDL (Arg0, Local0)
+            If (!Local1) { Return (Zero - 2) }
+            If (Arg3 & 0x40)
+            {
+                If (Arg3 & 0x80) { Return (Zero - 17) } // O_CREAT | O_EXCL: it exists
+            }
+            Local2 = FINS (Arg0, Local1, Arg3)
+            If (Local2 < Zero - 4095) { XSTQ (Local1 + 16, XVWD (Local1 + 16, Ones) + One) }
+            Return (Local2)
+        }
         Local0 = UPRS (Arg0, Arg2, Arg1, (Arg3 >> 16) & 2)
         If (Local0 == PCSL) { Return (Zero - 40) }
         If ((Arg3 & 0x10040) == 0x10040 || (Arg3 & 3) == 3) { Return (Zero - 22) }
@@ -3190,7 +3311,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (MSOP) { Return (Zero - 16) }
         }
         Local1 = XVWD (Local0 + VNTY, Ones)
-        If (Local0 == NULD) { Return (Local0) }
+        If (DVSP (Local0)) { Return (Local0) }
         If (Local1 == 10) { Return (Zero - 40) } // ELOOP: unfollowed symlink
         If (Local1 != 4 && (Arg4 & 0x10000)) { Return (Zero - 20) }
         If (Local1 == 4 && (Arg4 & 0x243)) { Return (Zero - 21) }
@@ -3223,6 +3344,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             If ((XVWD (Local0 + 40, Ones) & 3) == One) { Return (Zero - 9) }
             Return (Zero)
+        }
+        If (DVSP (Local1))
+        {
+            If ((XVWD (Local0 + 40, Ones) & 3) == One) { Return (Zero - 9) }
+            Return (DVRD (Local1, Arg0, Arg2, Arg3))
         }
         If (Local1 == XADR (MFND)) { Return (MFIO (Arg0, Local0, Arg2, Arg3, Zero)) }
         If ((XVWD (Local0 + 40, Ones) & 3) == One) { Return (Zero - 9) }
@@ -3507,7 +3633,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (Local0)
         {
             Local1 = XVWD (Local0, Ones)
-            If (Local1 == NULD)
+            If (DVSP (Local1))
             {
                 If ((XVWD (Local0 + 40, Ones) & 3) == Zero) { Return (Zero - 9) }
                 If (Arg3 && !URNG (Arg0, Arg2, Arg3, Zero)) { Return (Zero - 14) }
@@ -3562,6 +3688,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Method (SYWV, 4, NotSerialized)
     {
         If (Arg3 > 1024) { Return (Zero - 22) } // IOV_MAX
+        Local7 = UFDL (Arg0, Arg1)
+        If (MSGT (Local7)) // writev sends one message
+        {
+            Local0 = MSGV (Arg0, Arg2, Arg3)
+            If (Local0 >= Zero - 4095) { Return (Local0) }
+            Return (MSGS (Arg0, Local7, Local0, Zero))
+        }
         If (!URNG (Arg0, Arg2, Arg3 * 16, Zero)) { Return (Zero - 14) }
         Local0 = XADR (WIOV)
         Local1 = Zero
@@ -3655,9 +3788,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (MFMC, 56) // Number of shared mappings
     Name (MFSL, 64) // File seals
 
+    // memfd_create flags: MFD_CLOEXEC 1, MFD_ALLOW_SEALING 2, MFD_NOEXEC_SEAL 8
+    // (sealing allowed, F_SEAL_EXEC set; Firefox's shared memory uses it) and
+    // MFD_EXEC 0x10. Nothing is executable through a memfd path anyway.
     Method (MFON, 3, NotSerialized)
     {
-        If (Arg2 & ~3) { Return (Zero - 22) }
+        If ((Arg2 & ~0x1B) || (Arg2 & 0x18) == 0x18) { Return (Zero - 22) }
         Local0 = Zero
         While (Local0 < 250)
         {
@@ -3675,7 +3811,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         XSTQ (Local0, XADR (MFND))
         XSTQ (Local0 + 16, One)
         XSTQ (Local0 + 40, 2) // O_RDWR
-        If (!(Arg2 & 2)) { XSTQ (Local0 + MFSL, One) } // F_SEAL_SEAL
+        If (Arg2 & 8) { XSTQ (Local0 + MFSL, 0x20) } // F_SEAL_EXEC
+        ElseIf (!(Arg2 & 2)) { XSTQ (Local0 + MFSL, One) } // F_SEAL_SEAL
         Local1 = FINS (Arg0, Local0, (Arg2 & One) << 19)
         If (Local1 >= Zero - 4095) { FREL (Local0) }
         Return (Local1)
@@ -4864,6 +5001,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         XSTQ (Local1 + 14 * 8, Zero) // Child's syscall result
         If (Arg3) { XSTQ (Local1 + 18 * 8, Arg3) } // Child's RSP
         XSTQ (Local0 + TSFS, XVWD (Arg0 + TSFS, Ones))
+        XSTQ (Local0 + TSGS, XVWD (Arg0 + TSGS, Ones))
         XSTQ (Local0 + TSCL, XVWD (TGRL (Arg0) + TSCL, Ones))
         XSTQ (Local0 + TSSS, XVWD (TGRL (Arg0) + TSSS, Ones))
         XSTQ (Local0 + TSWD, VCWD (Arg0))
@@ -4898,6 +5036,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     // Return Ones when a matching child exists and the caller must block.
     Method (SYWT, 2, NotSerialized)
     {
+        // A blocked call still holds its number in RAX; waitid shares the wakeup.
+        If (XVWD (Arg1 + 14 * 8, Ones) == 247) { Return (SYWI (Arg0, Arg1)) }
         Local0 = XVWD (Arg1 + 8 * 8, Ones) & 0xFFFFFFFF
         Local1 = XVWD (Arg1 + 12 * 8, Ones) & 0xFFFFFFFF
         If (Local1 & ~One) { Return (Zero - 22) } // WNOHANG
@@ -4942,6 +5082,87 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         If (!Local4) { Return (Zero - 10) } // ECHILD
         If (Local1) { Return (Zero) }
+        Return (Ones)
+    }
+
+    Name (WSIF, Buffer (128) {}) // Linux siginfo_t for waitid
+
+    Method (WSCL, 0, NotSerialized)
+    {
+        Local0 = Zero
+        While (Local0 < SizeOf (WSIF))
+        {
+            XSTQ (XADR (WSIF) + Local0, Zero)
+            Local0 += 8
+        }
+    }
+
+    // waitid (idtype, id, infop, options, rusage). Only exits are reported
+    // (stopped and continued children never happen here). WNOWAIT leaves
+    // the child to be waited for again; Firefox's process watcher peeks
+    // that way before reaping. Returns Ones when the caller must block.
+    Method (SYWI, 2, NotSerialized)
+    {
+        Local0 = XVWD (Arg1 + 8 * 8, Ones) & 0xFFFFFFFF // idtype
+        Local1 = XVWD (Arg1 + 9 * 8, Ones) & 0xFFFFFFFF // id
+        Local6 = XVWD (Arg1 + 12 * 8, Ones) // infop
+        Local7 = XVWD (Arg1 + 5 * 8, Ones) & 0xFFFFFFFF // options
+        // WNOHANG, WSTOPPED, WEXITED, WCONTINUED, WNOWAIT, __WNOTHREAD/__WALL/__WCLONE
+        If (Local7 & ~0xE100000F) { Return (Zero - 22) }
+        If (!(Local7 & 0xE)) { Return (Zero - 22) }
+        If (Local0 > 2) { Return (Zero - 22) } // P_PIDFD: no pidfds
+        If (Local0 == One && !Local1) { Return (Zero - 22) }
+        // All tasks share the boot process's group.
+        If (Local0 == 2 && Local1 && Local1 != UPID) { Return (Zero - 10) }
+        If (Local6 && !URNG (Arg0, Local6, SizeOf (WSIF), WRIT)) { Return (Zero - 14) }
+        Local2 = XVWD (Arg0 + TSPR, Ones)
+        Local3 = PRHD
+        Local4 = Zero
+        While (Local3)
+        {
+            Local5 = XVWD (Local3 + PRID, Ones)
+            If (XVWD (Local3 + PRPA, Ones) == Local2 && (Local0 != One || Local1 == Local5))
+            {
+                Local4 = One
+                If (!XVWD (Local3 + PRTK, Ones) && (Local7 & 4))
+                {
+                    WSCL ()
+                    If (Local6)
+                    {
+                        Local0 = XVWD (Local3 + PRST, Ones)
+                        // CLD_EXITED with the exit code, or CLD_KILLED with the signal.
+                        Local1 = One
+                        Local2 = (Local0 >> 8) & 0xFF
+                        If (Local0 & 0x7F)
+                        {
+                            Local1 = 2
+                            Local2 = Local0 & 0x7F
+                        }
+                        EXLE (XADR (WSIF), Zero, 17, 4) // SIGCHLD
+                        EXLE (XADR (WSIF), 8, Local1, 4)
+                        EXLE (XADR (WSIF), 16, Local5, 4)
+                        EXLE (XADR (WSIF), 24, Local2, 4)
+                        If (!UCOP (Arg0, Local6, XADR (WSIF), SizeOf (WSIF))) { Return (Zero - 14) }
+                    }
+                    Local0 = XVWD (Arg1 + 7 * 8, Ones) // rusage
+                    If (Local0 && !UCOP (Arg0, Local0, XADR (WRUS), SizeOf (WRUS)))
+                    {
+                        Return (Zero - 14)
+                    }
+                    If (!(Local7 & 0x01000000)) { PRDL (Local3) }
+                    Return (Zero)
+                }
+            }
+            Local3 = XVWD (Local3, Ones)
+        }
+        If (!Local4) { Return (Zero - 10) } // ECHILD
+        If (Local7 & One)
+        {
+            // WNOHANG with nothing to report: si_pid 0.
+            WSCL ()
+            If (Local6 && !UCOP (Arg0, Local6, XADR (WSIF), SizeOf (WSIF))) { Return (Zero - 14) }
+            Return (Zero)
+        }
         Return (Ones)
     }
 
@@ -5720,6 +5941,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         XMOV (Arg0 + TSAS, XADR (EXZR), 24)
         XSTQ (Arg0 + TSMB, Zero)
         XSTQ (Arg0 + TSFS, Zero)
+        XSTQ (Arg0 + TSGS, Zero)
         XCLR (Arg0 + TSFX)
         XSTQ (Arg0 + TSFX, 0x037F)
         XSTQ (Arg0 + TSFX + 24, 0x1F80)
@@ -6062,7 +6284,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (!Local0) { Return (0x20) } // POLLNVAL
         If (XVWD (Local0, Ones) == XADR (SKND)) { Return (SKRD (Local0)) }
         If (XVWD (Local0, Ones) == XADR (INND)) { Return (INRD (Local0)) }
-        If (XVWD (Local0, Ones) == NULD) { Return (0x145) }
+        If (DVSP (XVWD (Local0, Ones))) { Return (0x145) }
         If (XVWD (Local0, Ones) == XADR (EPND))
         {
             If (EPSN (Arg0, Local0, Zero, One, One)) { Return (0x41) }
@@ -6299,7 +6521,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             XMOV (Local5, XADR (EXZR), 32)
             // Trailing free entries no longer need scanning.
             Local7 = XVWD (Arg1 + EPHW, Ones)
-            While (Local7 && !XVWD (Local2 + (Local7 - One) * 32, Ones)) { Decrement (Local7) }
+            // && does not short-circuit: test Local7 first, or the read at
+            // index -1 faults when the table starts a mapping.
+            While (Local7)
+            {
+                If (XVWD (Local2 + (Local7 - One) * 32, Ones)) { Break }
+                Decrement (Local7)
+            }
             XSTQ (Arg1 + EPHW, Local7)
             Return (Zero)
         }
@@ -6466,6 +6694,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Name (STWS, 2352) // Slave's struct winsize (8 bytes)
     Name (SKAH, 2360) // First queued descriptor record
     Name (SKAT, 2368) // Last queued descriptor record
+    // Socket type: 0 byte stream; 2 (SOCK_DGRAM pair) or 5 (SOCK_SEQPACKET)
+    // keep message boundaries. Each message sits in the receive ring behind an
+    // 8-byte header: little-endian length, then the sender's pid; see MSGS
+    // and MSGR.
+    Name (SKTY, 2384)
+    Name (SKPC, 2392) // SO_PASSCRED
+    Name (SKOW, 2400) // Creator's pid, reported to the peer by SO_PEERCRED
     Name (STDF, Buffer (36)
     {
         0x00, 0x05, 0x00, 0x00, // ICRNL | IXON
@@ -6646,6 +6881,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         XSTQ (Local1 + SKST, 2)
         XSTQ (Local0 + SKPR, Local1)
         XSTQ (Local1 + SKPR, Local0)
+        XSTQ (Local0 + SKOW, SKPD (Arg0))
+        XSTQ (Local1 + SKOW, SKPD (Arg0))
+        If ((Arg1 & 0xF) != One) // SOCK_DGRAM or SOCK_SEQPACKET
+        {
+            XSTQ (Local0 + SKTY, Arg1 & 0xF)
+            XSTQ (Local1 + SKTY, Arg1 & 0xF)
+        }
         XSTQ (XADR (SKPF), Local2 | (Local3 << 32))
         If (!UCOP (Arg0, Arg2, XADR (SKPF), 8))
         {
@@ -6702,10 +6944,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     {
         If (Arg1 == 2) { Return (INSO (Arg0, Arg2, Arg3)) } // AF_INET
         If (Arg1 != One) { Return (Zero - 97) } // AF_UNIX
-        If ((Arg2 & ~0x80800) != One) { Return (Zero - 94) } // SOCK_STREAM
+        Local2 = Arg2 & ~0x80800
+        If (Local2 != One && Local2 != 5) { Return (Zero - 94) } // SOCK_STREAM, SOCK_SEQPACKET
         If (Arg3) { Return (Zero - 93) }
         Local0 = SKNW (Arg2)
         If (!Local0) { Return (Zero - 12) }
+        If (Local2 == 5) { XSTQ (Local0 + SKTY, 5) }
+        XSTQ (Local0 + SKOW, SKPD (Arg0))
         Local1 = FINS (Arg0, Local0, Arg2)
         If (Local1 >= Zero - 4095) { SKUP (Local0) }
         Return (Local1)
@@ -6795,10 +7040,13 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Return (Zero - 111)
         }
         If (XVWD (Local2 + SKST, Ones) != One) { Return (Zero - 111) }
+        If (XVWD (Local2 + SKTY, Ones) != XVWD (Local0 + SKTY, Ones)) { Return (Zero - 91) } // EPROTOTYPE
         Local3 = XVWD (Local2 + SKQN, Ones)
         If (Local3 >= XVWD (Local2 + SKQM, Ones)) { Return (Zero - 11) }
         Local4 = SKNW (Zero)
         If (!Local4) { Return (Zero - 12) }
+        XSTQ (Local4 + SKTY, XVWD (Local0 + SKTY, Ones))
+        XSTQ (Local4 + SKOW, XVWD (Local2 + SKOW, Ones)) // The listener's creator
         XSTQ (Local0 + SKST, 2)
         XSTQ (Local4 + SKST, 2)
         XSTQ (Local0 + SKPR, Local4)
@@ -6864,11 +7112,271 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         Return (Local2)
     }
 
+    // Message sockets (SKTY set). Segment lists live in SKQV as Linux iovecs;
+    // MSGV loads them from user memory, single-buffer callers write one.
+    Name (SKQV, Buffer (1024) {}) // Up to 64 iovecs per message
+    Name (MSGF, Zero) // MSG_TRUNC (0x20) when the last MSGR dropped bytes
+    Name (MSGN, Zero) // Ring bytes the last MSGR consumed (header included)
+    Name (MSGP, Zero) // Sender pid of the last MSGR message
+    Name (MSGL, Zero) // recvmsg's msg_controllen before SKRM fills it
+    Name (SKCR, Buffer (32) {}) // Option value or SCM_CREDENTIALS message
+    Name (SKCN, Buffer (8) {}) // Option length
+
+    // Arg0's pid (the thread group's), zero for native tasks.
+    Method (SKPD, 1, NotSerialized)
+    {
+        Local0 = XVWD (Arg0 + TSPR, Ones)
+        If (!Local0) { Return (Zero) }
+        Return (XVWD (Local0 + PRID, Ones))
+    }
+
+    // After SKRM: append SCM_CREDENTIALS {MSGP, uid 0, gid 0} to the recvmsg
+    // control buffer described by SKMH, or flag MSG_CTRUNC if it does not fit.
+    Method (MSCR, 1, NotSerialized)
+    {
+        Local0 = XADR (SKMH)
+        Local1 = XVWD (Local0 + 40, Ones) // Control bytes used so far
+        If ((Local1 & 7) || MSGL < Local1 + 28)
+        {
+            XSTQ (Local0 + 48, XVWD (Local0 + 48, Ones) | 8)
+            Return (Zero)
+        }
+        Local2 = XADR (SKCR)
+        XSTQ (Local2, 28) // cmsg_len
+        XSTQ (Local2 + 8, 0x200000001) // SOL_SOCKET, SCM_CREDENTIALS
+        XSTQ (Local2 + 16, MSGP) // pid, uid 0
+        XSTQ (Local2 + 24, Zero) // gid 0
+        If (!UCOP (Arg0, XVWD (Local0 + 32, Ones) + Local1, Local2, 28)) { Return (Zero - 14) }
+        Local1 += 28
+        If (Local1 + 4 <= MSGL) { Local1 += 4 }
+        XSTQ (Local0 + 40, Local1)
+        Return (Zero)
+    }
+
+    // setsockopt (Arg2 Zero) or getsockopt on AF_UNIX endpoint Arg1; Arg3
+    // level, Arg4 name, Arg5 value, Arg6 length (getsockopt: its address).
+    Method (SKOP, 7, NotSerialized)
+    {
+        If (Arg3 != One) { Return (Zero - 92) } // ENOPROTOOPT
+        Local2 = XADR (SKCR)
+        If (!Arg2)
+        {
+            If ((Arg6 >> 31) || Arg6 < 4) { Return (Zero - 22) }
+            XSTQ (Local2, Zero)
+            If (!UCPY (Arg0, Local2, Arg5, 4)) { Return (Zero - 14) }
+            If (Arg4 == 16) // SO_PASSCRED
+            {
+                Local0 = Zero
+                If (ELWD (Local2, Zero, 4)) { Local0 = One }
+                XSTQ (Arg1 + SKPC, Local0)
+                Return (Zero)
+            }
+            // SO_REUSEADDR, SO_SNDBUF, SO_RCVBUF: the ring has a fixed size.
+            If (Arg4 == 2 || Arg4 == 7 || Arg4 == 8) { Return (Zero) }
+            Return (Zero - 92)
+        }
+        Local3 = XADR (SKCN)
+        XSTQ (Local3, Zero)
+        If (!UCPY (Arg0, Local3, Arg6, 4)) { Return (Zero - 14) }
+        Local1 = ELWD (Local3, Zero, 4)
+        If (Local1 >> 31) { Return (Zero - 22) }
+        XSTQ (Local2, Zero)
+        XSTQ (Local2 + 8, Zero)
+        Local4 = 4
+        If (Arg4 == 3) // SO_TYPE
+        {
+            Local0 = XVWD (Arg1 + SKTY, Ones)
+            If (!Local0) { Local0 = One }
+            XSTQ (Local2, Local0)
+        }
+        ElseIf (Arg4 == 7 || Arg4 == 8) { XSTQ (Local2, SKMS + One) } // SO_SNDBUF, SO_RCVBUF
+        ElseIf (Arg4 == 16) { XSTQ (Local2, XVWD (Arg1 + SKPC, Ones)) } // SO_PASSCRED
+        ElseIf (Arg4 == 17) // SO_PEERCRED: pid, uid 0, gid 0
+        {
+            Local0 = XVWD (Arg1 + SKPR, Ones)
+            If (Local0) { XSTQ (Local2, XVWD (Local0 + SKOW, Ones)) }
+            Local4 = 12
+        }
+        ElseIf (Arg4 == 30) // SO_ACCEPTCONN
+        {
+            If (XVWD (Arg1 + SKST, Ones) == One) { XSTQ (Local2, One) }
+        }
+        ElseIf (Arg4 == 39) { XSTQ (Local2, One) } // SO_DOMAIN: AF_UNIX
+        ElseIf (Arg4 != 4 && Arg4 != 38) { Return (Zero - 92) } // SO_ERROR, SO_PROTOCOL: 0
+        If (Local1 > Local4) { Local1 = Local4 }
+        If (Local1 && !UCOP (Arg0, Arg5, Local2, Local1)) { Return (Zero - 14) }
+        XSTQ (Local3, Local1)
+        If (!UCOP (Arg0, Arg6, Local3, 4)) { Return (Zero - 14) }
+        Return (Zero)
+    }
+
+    // Arg0 is an open description: is it a message socket?
+    Method (MSGT, 1, NotSerialized)
+    {
+        If (!Arg0) { Return (Zero) }
+        If (XVWD (Arg0, Ones) != XADR (SKND)) { Return (Zero) }
+        If (XVWD (Arg0 + SKTY, Ones)) { Return (One) }
+        Return (Zero)
+    }
+
+    // Load Arg2 user iovecs at Arg1 into SKQV; returns the count or an error.
+    Method (MSGV, 3, NotSerialized)
+    {
+        If (Arg2 > 64) { Return (Zero - 90) } // EMSGSIZE
+        If (!Arg2) { Return (Zero) }
+        If (!URNG (Arg0, Arg1, Arg2 * 16, Zero) ||
+            !UCPY (Arg0, XADR (SKQV), Arg1, Arg2 * 16)) { Return (Zero - 14) }
+        Return (Arg2)
+    }
+
+    // Allocate endpoint Arg0's receive ring on first use; returns its address.
+    Method (SKRA, 1, NotSerialized)
+    {
+        Local0 = XVWD (Arg0 + SKRB, Ones)
+        If (!Local0)
+        {
+            Local0 = WRIT
+            If (XNXE ()) { Local0 |= NOEX }
+            Local0 = VALL (SKMS + One, Local0)
+            If (Local0) { XSTQ (Arg0 + SKRB, Local0) }
+        }
+        Return (Local0)
+    }
+
+    // Send the Arg2 segments in SKQV from endpoint Arg1 as one message.
+    // Arg3: MSG_DONTWAIT 0x40, MSG_NOSIGNAL 0x4000. All or nothing: Ones
+    // blocks until the whole message fits.
+    Method (MSGS, 4, NotSerialized)
+    {
+        If (XVWD (Arg1 + SKST, Ones) != 2) { Return (Zero - 107) } // ENOTCONN
+        Local1 = XVWD (Arg1 + SKPR, Ones)
+        If (!Local1)
+        {
+            If (!(Arg3 & 0x4000)) { SGQI (Arg0, 13, Zero, SGSN (Arg0)) }
+            Return (Zero - 32) // EPIPE
+        }
+        Local0 = XADR (SKQV)
+        Local2 = Zero // Total length
+        Local3 = Zero
+        While (Local3 < Arg2)
+        {
+            Local4 = XVWD (Local0 + Local3 * 16 + 8, Ones)
+            If (Local4 > SKMS) { Return (Zero - 90) }
+            Local2 += Local4
+            Increment (Local3)
+        }
+        If (Local2 + 8 > SKMS) { Return (Zero - 90) } // EMSGSIZE
+        Local5 = XVWD (Local1 + SKRT, Ones)
+        Local4 = SKMS - ((Local5 - XVWD (Local1 + SKRH, Ones)) & SKMS) // Free bytes
+        If (Local4 < Local2 + 8)
+        {
+            If ((Arg3 & 0x40) || XVWD (Arg1 + SKFL, Ones)) { Return (Zero - 11) }
+            Return (Ones)
+        }
+        Local6 = SKRA (Local1)
+        If (!Local6) { Return (Zero - 12) }
+        Local7 = Local2 | (SKPD (Arg0) << 32)
+        Local3 = Zero
+        While (Local3 < 8)
+        {
+            XSTB (Local6 + ((Local5 + Local3) & SKMS), (Local7 >> (Local3 * 8)) & 0xFF)
+            Increment (Local3)
+        }
+        XSTQ (Local1 + SKRT, (Local5 + 8) & SKMS)
+        Local3 = Zero
+        While (Local3 < Arg2)
+        {
+            Local4 = XVWD (Local0 + Local3 * 16 + 8, Ones)
+            If (Local4)
+            {
+                Local7 = SKRW (Arg0, Arg1, XVWD (Local0 + Local3 * 16, Ones), Local4,
+                    0x1001 | (Arg3 & 0x4000))
+                If (Local7 != Local4)
+                {
+                    XSTQ (Local1 + SKRT, Local5) // Withdraw the partial message.
+                    If (Local7 >= Zero - 4095 && Local7 != Ones) { Return (Local7) }
+                    Return (Zero - 14)
+                }
+            }
+            Increment (Local3)
+        }
+        SKCH = One
+        Return (Local2)
+    }
+
+    // Receive one message on endpoint Arg1 into the Arg2 segments in SKQV.
+    // Arg3: MSG_PEEK 2, MSG_TRUNC 0x20 (return the full length), MSG_DONTWAIT
+    // 0x40, 0x200 keeps the message's descriptor records for SKRM (otherwise
+    // they are discarded). Bytes past the buffers are dropped; MSGF reports it.
+    Method (MSGR, 4, NotSerialized)
+    {
+        MSGF = Zero
+        MSGN = Zero
+        If (XVWD (Arg1 + SKST, Ones) != 2) { Return (Zero - 107) }
+        Local5 = XVWD (Arg1 + SKRH, Ones)
+        If (Local5 == XVWD (Arg1 + SKRT, Ones))
+        {
+            If (!XVWD (Arg1 + SKPR, Ones)) { Return (Zero) } // EOF
+            If ((Arg3 & 0x40) || XVWD (Arg1 + SKFL, Ones)) { Return (Zero - 11) }
+            Return (Ones)
+        }
+        Local6 = XVWD (Arg1 + SKRB, Ones)
+        Local2 = Zero // Message length, then the sender's pid
+        Local3 = Zero
+        While (Local3 < 8)
+        {
+            Local2 |= XBYT (Local6 + ((Local5 + Local3) & SKMS)) << (Local3 * 8)
+            Increment (Local3)
+        }
+        MSGP = Local2 >> 32
+        Local2 &= 0xFFFFFFFF
+        XSTQ (Arg1 + SKRH, (Local5 + 8) & SKMS)
+        Local0 = XADR (SKQV)
+        Local1 = Zero // Copied
+        Local7 = Zero // First error
+        Local3 = Zero
+        While (Local3 < Arg2 && Local1 < Local2)
+        {
+            Local4 = XVWD (Local0 + Local3 * 16 + 8, Ones)
+            If (Local4 > Local2 - Local1) { Local4 = Local2 - Local1 }
+            If (Local4)
+            {
+                Local4 = SKRW (Arg0, Arg1, XVWD (Local0 + Local3 * 16, Ones), Local4, 0x1200)
+                If (Local4 >= Zero - 4095)
+                {
+                    Local7 = Local4
+                    Break
+                }
+                Local1 += Local4
+            }
+            Increment (Local3)
+        }
+        If (Arg3 & 2) { XSTQ (Arg1 + SKRH, Local5) } // MSG_PEEK
+        Else
+        {
+            XSTQ (Arg1 + SKRH, (Local5 + 8 + Local2) & SKMS)
+            MSGN = Local2 + 8
+            If (!(Arg3 & 0x200)) { SKDR (Arg1, Local5, Local2 + 8) }
+            SKCH = One
+        }
+        If (Local1 < Local2) { MSGF = 0x20 }
+        If (Local7 && !Local1) { Return (Local7) }
+        If (Arg3 & 0x20) { Return (Local2) }
+        Return (Local1)
+    }
+
     // Read or write a contiguous segment of the receive ring.
     Method (SKRW, 5, NotSerialized)
     {
         If (!Arg1) { Return (Zero - 9) } // Closed while blocked
         If (XVWD (Arg1, Ones) == XADR (EFND)) { Return (EFIO (Arg0, Arg1, Arg2, Arg3, Arg4 & One)) }
+        If (!(Arg4 & 0x1000) && XVWD (Arg1 + SKTY, Ones)) // One message per call
+        {
+            XSTQ (XADR (SKQV), Arg2)
+            XSTQ (XADR (SKQV) + 8, Arg3)
+            If (Arg4 & One) { Return (MSGS (Arg0, Arg1, One, Arg4 & 0x4040)) }
+            Return (MSGR (Arg0, Arg1, One, Arg4 & 0x262))
+        }
         Local6 = XVWD (Arg1 + SKPI, Ones)
         If ((Arg4 & One) && Local6 == One) { Return (Zero - 9) }
         If (!(Arg4 & One) && Local6 == 2) { Return (Zero - 9) }
@@ -6994,6 +7502,15 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
     Method (SKRV, 5, NotSerialized)
     {
         If (Arg3 > 1024) { Return (Zero - 22) }
+        Local7 = Arg1
+        If (Arg4 & 0x100) { Local7 = UFDL (Arg0, Arg1) } // readv passes a descriptor
+        If (MSGT (Local7)) // The whole vector is one message.
+        {
+            Local0 = MSGV (Arg0, Arg2, Arg3)
+            If (Local0 >= Zero - 4095) { Return (Local0) }
+            If (Arg4 & One) { Return (MSGS (Arg0, Local7, Local0, Arg4 & 0x4040)) }
+            Return (MSGR (Arg0, Local7, Local0, Arg4 & 0x262))
+        }
         If (!URNG (Arg0, Arg2, Arg3 * 16, Zero)) { Return (Zero - 14) }
         Local0 = XADR (WIOV)
         Local1 = Zero
@@ -7068,12 +7585,15 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Method (SKAR, 3, NotSerialized)
     {
-        If (Arg2 < 20 || Arg2 > 1032) { Return (Zero - 22) }
+        If (Arg2 < 16 || Arg2 > 1032) { Return (Zero - 22) }
         If (!URNG (Arg0, Arg1, Arg2, Zero) || !UCPY (Arg0, XADR (SKCM), Arg1, 16))
         {
             Return (Zero - 14)
         }
         Local0 = XVWD (XADR (SKCM), Ones)
+        // An SCM_RIGHTS with no descriptors is accepted and carries nothing,
+        // as on Linux (Rust's nix sends one for messages without handles).
+        If (Local0 == 16 && XVWD (XADR (SKCM) + 8, Ones) == 0x100000001) { Return (Zero) }
         If (Local0 < 20 || Local0 > Arg2 || ((Local0 - 16) & 3) ||
             Arg2 > ((Local0 + 7) & ~7) ||
             XVWD (XADR (SKCM) + 8, Ones) != 0x100000001)
@@ -7101,12 +7621,9 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 SKAF (Local1)
                 Return (Zero - 9)
             }
-            // Socket rights require cycle collection for unreachable peers.
-            If (XVWD (Local3, Ones) == XADR (SKND))
-            {
-                SKAF (Local1)
-                Return (Zero - 95)
-            }
+            // Sockets may travel too (Firefox's crash helper passes its
+            // connectors). Without cycle collection, a socket queued inside
+            // its own peer's ring and never received leaks until reboot.
             XSTQ (Local3 + 16, XVWD (Local3 + 16, Ones) + One)
             XSTQ (Local1 + 24 + Local2 * 8, Local3)
             Increment (Local2)
@@ -7130,7 +7647,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Local3 = SKAR (Arg0, XVWD (Local2 + 32, Ones), XVWD (Local2 + 40, Ones))
             If (Local3 >= Zero - 4095) { Return (Local3) }
-            XSTQ (Local3 + 8, XVWD (Local4 + SKRT, Ones))
+            If (Local3) { XSTQ (Local3 + 8, XVWD (Local4 + SKRT, Ones)) }
         }
         Local5 = SKRV (Arg0, Local0, XVWD (Local2 + 16, Ones), XVWD (Local2 + 24, Ones),
             One | Local1)
@@ -7211,13 +7728,18 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         If (XVWD (Arg1 + 14 * 8, Ones) == 45) // recvfrom
         {
             Local3 = XVWD (Arg1 + 5 * 8, Ones) & 0xFFFFFFFF
-            If ((Local3 & ~0x40) || XVWD (Arg1 + 7 * 8, Ones)) { Return (Zero - 95) }
+            Local4 = ~0x40
+            If (XVWD (Local0 + SKTY, Ones)) { Local4 = ~0x62 } // PEEK, TRUNC on messages
+            If ((Local3 & Local4) || XVWD (Arg1 + 7 * 8, Ones)) { Return (Zero - 95) }
             Return (SKRW (Arg0, Local0, Local1, Local2, Local3))
         }
 
-        // recvmsg on a byte stream.
+        // recvmsg on a byte stream or a message socket.
         Local2 &= 0xFFFFFFFF
-        If (Local2 & ~0x40000040) { Return (Zero - 95) }
+        Local6 = XVWD (Local0 + SKTY, Ones)
+        Local4 = ~0x40000040
+        If (Local6) { Local4 = ~0x40000062 } // MSG_PEEK, MSG_TRUNC
+        If (Local2 & Local4) { Return (Zero - 95) }
         Local3 = XADR (SKMH)
         If (!URNG (Arg0, Local1, 56, WRIT) || !UCPY (Arg0, Local3, Local1, 56))
         {
@@ -7230,9 +7752,25 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         }
         Local5 = XVWD (Local0 + SKRH, Ones)
         Local4 = SKRV (Arg0, Local0, XVWD (Local3 + 16, Ones), XVWD (Local3 + 24, Ones),
-            0x200 | (Local2 & 0x40))
+            0x200 | (Local2 & 0x62))
         If (Local4 >= Zero - 4095) { Return (Local4) }
-        SKRM (Arg0, Local0, (Local2 >> 11) & 0x80000, Local5, Local4)
+        If (!Local6) { SKRM (Arg0, Local0, (Local2 >> 11) & 0x80000, Local5, Local4) }
+        Else
+        {
+            Local7 = MSGF
+            If (Local2 & 2) // A peek leaves the descriptors queued.
+            {
+                XSTQ (Local3 + 40, Zero)
+                XSTQ (Local3 + 48, Zero)
+            }
+            Else
+            {
+                MSGL = XVWD (Local3 + 40, Ones)
+                SKRM (Arg0, Local0, (Local2 >> 11) & 0x80000, Local5, MSGN)
+                If (XVWD (Local0 + SKPC, Ones) && MSGN) { MSCR (Arg0) }
+            }
+            XSTQ (Local3 + 48, XVWD (Local3 + 48, Ones) | Local7)
+        }
         If (!UCOP (Arg0, Local1 + 8, XADR (SKZE), 4) ||
             !UCOP (Arg0, Local1 + 40, Local3 + 40, 12)) { Return (Zero - 14) }
         Return (Local4)
@@ -7315,11 +7853,49 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
 
     Name (RLBV, Buffer (16) {})
 
-    // Report the fixed stack and descriptor limits to libc.
+    Name (PCNB, Buffer (16) {})
+
+    // prctl(Arg1, Arg2): the options Firefox and GLib use. Unknown ones stay
+    // ENOSYS so the syscall gap logger reports them (Linux says EINVAL).
+    Method (SYPC, 3, NotSerialized)
+    {
+        Arg1 &= 0xFFFFFFFF
+        If (Arg1 == 15) { Return (Zero) } // PR_SET_NAME: thread names are not kept yet (K1)
+        If (Arg1 == 16) // PR_GET_NAME: the process name
+        {
+            Local0 = XADR (PCNB)
+            XSTQ (Local0, Zero)
+            XSTQ (Local0 + 8, Zero)
+            Local1 = XVWD (Arg0 + TSPR, Ones)
+            If (Local1) { XMOV (Local0, Local1 + PRNM, 15) }
+            If (!UCOP (Arg0, Arg2, Local0, 16)) { Return (Zero - 14) }
+            Return (Zero)
+        }
+        If (Arg1 == 2) // PR_GET_PDEATHSIG
+        {
+            XSTQ (XADR (PCNB), Zero)
+            If (!UCOP (Arg0, Arg2, XADR (PCNB), 4)) { Return (Zero - 14) }
+            Return (Zero)
+        }
+        If (Arg1 == 3) { Return (One) } // PR_GET_DUMPABLE
+        // PR_SET_PDEATHSIG (not delivered), PR_SET_DUMPABLE, PR_SET_NO_NEW_PRIVS
+        // (nothing is setuid), PR_SET_PTRACER (no Yama; there is no ptrace).
+        If (Arg1 == One || Arg1 == 4 || Arg1 == 38 || Arg1 == 0x59616D61) { Return (Zero) }
+        If (Arg1 == 21 || Arg1 == 39) { Return (Zero) } // PR_GET_SECCOMP, PR_GET_NO_NEW_PRIVS
+        // PR_SET_SECCOMP and PR_SET_VMA: as on a kernel built without them.
+        If (Arg1 == 22 || Arg1 == 0x53564D41) { Return (Zero - 22) }
+        Return (Zero - 38)
+    }
+
+    // Report the fixed stack and descriptor limits to libc. The kernel
+    // enforces no others: RLIMIT_CORE, NICE and RTPRIO read 0, the rest
+    // RLIM_INFINITY (SpiderMonkey reads RLIMIT_AS while starting up).
     Method (SYRL, 3, NotSerialized)
     {
         If (Arg1 == 3) { Local1 = USSZ } // RLIMIT_STACK
         ElseIf (Arg1 == 7) { Local1 = FDLM } // RLIMIT_NOFILE
+        ElseIf (Arg1 == 4 || Arg1 == 13 || Arg1 == 14) { Local1 = Zero }
+        ElseIf (Arg1 <= 15) { Local1 = Ones }
         Else { Return (Zero - 22) }
         Local0 = XADR (RLBV)
         XSTQ (Local0, Local1)
@@ -7596,11 +8172,36 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             PNUM (" RIP=0x", Local3)
             If (Local0 == 14) { PNUM (" address=0x", Local2) }
             PUTS ("")
+            UXCR (Arg0, Local3)
         }
         Local7 = Arg0 + TSSI + (Local4 - One) * 16
         XSTQ (Local7, Local5)
         XSTQ (Local7 + 8, Local6)
         XSTQ (Arg0 + TSPE, XVWD (Arg0 + TSPE, Ones) | (One << (Local4 - One)))
+    }
+
+    // After an unhandled user exception, print the mapping that holds RIP
+    // Arg1 and the code bytes there. File mappings keep no file name, so
+    // scripts/find-crash-code.py finds the library from these bytes.
+    Method (UXCR, 2, NotSerialized)
+    {
+        Local0 = UREC (Arg0, Arg1)
+        If (!Local0) { Return () }
+        PNUM ("  range=0x", XVWD (Local0 + 8, Ones))
+        PNUM (" end=0x", XVWD (Local0 + 16, Ones))
+        PUTS ("")
+        NSYP ("  code=")
+        Local1 = Arg1
+        While (Local1 < Arg1 + 32)
+        {
+            Local2 = UPHY (Arg0, Local1, Zero)
+            If (!Local2) { Break }
+            Local2 = XBYT (Local2)
+            SPUT (DerefOf (Index (HEXD, Local2 >> 4)))
+            SPUT (DerefOf (Index (HEXD, Local2 & 15)))
+            Increment (Local1)
+        }
+        PUTS ("")
     }
 
     // si_code for an x87 (#MF) or SIMD (#XM) floating-point exception: the
@@ -8082,6 +8683,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         XSTQ (Local0 + TSPN, XVWD (Arg0 + TSPN, Ones))
         XSTQ (Local0 + TSMA, XVWD (Arg0 + TSMA, Ones))
         XSTQ (Local0 + TSFS, XVWD (Arg0 + TSFS, Ones))
+        XSTQ (Local0 + TSGS, XVWD (Arg0 + TSGS, Ones))
         If (Arg2 & 0x80000) { XSTQ (Local0 + TSFS, XVWD (Arg1 + 7 * 8, Ones)) } // CLONE_SETTLS
         If (Arg2 & 0x200000) { XSTQ (Local0 + TSCT, XVWD (Arg1 + 5 * 8, Ones)) } // CLONE_CHILD_CLEARTID
         Local4 = PNID
@@ -8143,6 +8745,206 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If (Local0 != Arg0 && SGPN (Local0)) { SGWK (Local0) }
         }
         Return (Zero)
+    }
+
+    // Syscall gap logger (FIREFOX_PORT.md P1). Every unsupported syscall,
+    // or rejected ioctl/fcntl/prctl/socket/sockopt sub-code, is printed to
+    // the serial port once per (process name, number, sub-code). Set NSYL to
+    // Zero to silence it.
+    Name (NSYL, One)
+    // Diagnostics: with NSYV One, log every failing syscall (except EAGAIN,
+    // EINTR, ETIMEDOUT, EINPROGRESS) once per (process, number, second
+    // argument, errno), not only unsupported ones.
+    Name (NSYV, Zero)
+    Name (NSYT, Buffer (8192) {}) // 1024 hashed keys, open addressing
+
+    Method (NSYD, 1, NotSerialized)
+    {
+        Local0 = One
+        While (Arg0 / Local0 >= 10) { Local0 *= 10 }
+        While (Local0)
+        {
+            SPUT (0x30 + (Arg0 / Local0) % 10)
+            Local0 /= 10
+        }
+    }
+
+    Method (NSYP, 1, NotSerialized)
+    {
+        Local0 = Zero
+        While (Local0 < SizeOf (Arg0))
+        {
+            SPUT (DerefOf (Index (Arg0, Local0)))
+            Increment (Local0)
+        }
+    }
+
+    // The user path argument of syscall Arg1 (frame Arg0), or Zero.
+    Method (NSYA, 2, NotSerialized)
+    {
+        // open, stat, lstat, access, chdir, mkdir, rmdir, unlink, readlink, execve
+        If (Arg1 == 2 || Arg1 == 4 || Arg1 == 6 || Arg1 == 21 || Arg1 == 80 || Arg1 == 83 ||
+            Arg1 == 84 || Arg1 == 87 || Arg1 == 89 || Arg1 == 59)
+        {
+            Return (XVWD (Arg0 + 8 * 8, Ones))
+        }
+        // openat, mkdirat, newfstatat, unlinkat, readlinkat, faccessat, statx, faccessat2
+        If (Arg1 == 257 || Arg1 == 258 || Arg1 == 262 || Arg1 == 263 || Arg1 == 267 ||
+            Arg1 == 269 || Arg1 == 332 || Arg1 == 439)
+        {
+            Return (XVWD (Arg0 + 9 * 8, Ones))
+        }
+        Return (Zero)
+    }
+
+    // Hash (Arg2 Zero) or print up to 120 bytes of task Arg0's string at Arg1.
+    Method (NSYU, 3, NotSerialized)
+    {
+        Local0 = 0xCBF29CE484222325
+        Local1 = Zero
+        While (Local1 < 120)
+        {
+            Local2 = UPHY (Arg0, Arg1 + Local1, Zero)
+            If (!Local2) { Break }
+            Local2 = XBYT (Local2)
+            If (!Local2) { Break }
+            If (Arg2) { SPUT (Local2) }
+            Local0 = (Local0 ^ Local2) * 0x100000001B3
+            Increment (Local1)
+        }
+        Return (Local0)
+    }
+
+    // Arg0 task, Arg1 register frame, Arg2 syscall number, Arg3 result.
+    Method (NSYC, 4, NotSerialized)
+    {
+        Local7 = Zero - Arg3
+        Local4 = Zero
+        If (NSYV) // Every error; the sub-code is the second argument.
+        {
+            // EAGAIN, EINTR, ETIMEDOUT and EINPROGRESS are routine.
+            If (Local7 == 11 || Local7 == 4 || Local7 == 110 || Local7 == 115) { Return (Zero) }
+            Local4 = XVWD (Arg1 + 9 * 8, Ones)
+        }
+        Else
+        {
+            If (Local7 == 38)
+            {
+                If (Arg2 == 157) { Local4 = XVWD (Arg1 + 8 * 8, Ones) } // prctl option
+                ElseIf (Arg2 == 16 || Arg2 == 72) // ioctl request, fcntl command
+                {
+                    Local4 = XVWD (Arg1 + 9 * 8, Ones) & 0xFFFFFFFF
+                }
+                ElseIf (Arg2 == 54 || Arg2 == 55) // setsockopt, getsockopt: level, name
+                {
+                    Local4 = ((XVWD (Arg1 + 9 * 8, Ones) & 0xFFFFFFFF) << 32) |
+                        (XVWD (Arg1 + 12 * 8, Ones) & 0xFFFFFFFF)
+                }
+            }
+            ElseIf (Arg2 == 16 || Arg2 == 72) // ioctl, fcntl
+            {
+                If (Local7 != 25 && Local7 != 22) { Return (Zero) }
+                Local4 = XVWD (Arg1 + 9 * 8, Ones) & 0xFFFFFFFF
+            }
+            ElseIf (Arg2 == 41 || Arg2 == 53) // socket, socketpair
+            {
+                If (Local7 < 93 || Local7 > 97)
+                {
+                    If (Local7 != 22) { Return (Zero) }
+                }
+                Local4 = ((XVWD (Arg1 + 8 * 8, Ones) & 0xFFFFFFFF) << 32) |
+                    (XVWD (Arg1 + 9 * 8, Ones) & 0xFFFFFFFF)
+            }
+            ElseIf (Arg2 == 54 || Arg2 == 55) // setsockopt, getsockopt
+            {
+                If (Local7 != 92) { Return (Zero) }
+                Local4 = ((XVWD (Arg1 + 9 * 8, Ones) & 0xFFFFFFFF) << 32) |
+                    (XVWD (Arg1 + 12 * 8, Ones) & 0xFFFFFFFF)
+            }
+            Else { Return (Zero) }
+        }
+
+        Local5 = XVWD (Arg0 + TSPR, Ones)
+        Local0 = (Arg2 << 1) ^ 0x9E3779B97F4A7C15 ^ Local4 ^ (Local7 << 52)
+        If (Local5)
+        {
+            Local1 = Zero
+            While (Local1 < 16)
+            {
+                Local2 = XBYT (Local5 + PRNM + Local1)
+                If (!Local2) { Break }
+                Local0 = ((Local0 << 7) | (Local0 >> 57)) ^ Local2
+                Increment (Local1)
+            }
+        }
+        Local0 = ((Local0 << 13) | (Local0 >> 51)) ^ Local4 ^ (Arg2 << 40)
+        If (NSYV)
+        {
+            Local1 = NSYA (Arg1, Arg2)
+            If (Local1) { Local0 ^= NSYU (Arg0, Local1, Zero) }
+        }
+        If (!Local0) { Local0 = One }
+
+        Local6 = XADR (NSYT)
+        Local1 = (Local0 ^ (Local0 >> 20)) & 1023
+        Local2 = Zero
+        While (Local2 < 1024)
+        {
+            Local3 = XVWD (Local6 + Local1 * 8, Ones)
+            If (Local3 == Local0) { Return (Zero) }
+            If (!Local3)
+            {
+                XSTQ (Local6 + Local1 * 8, Local0)
+                Break
+            }
+            Local1 = (Local1 + 1) & 1023
+            Increment (Local2)
+        }
+
+        NSYP ("nosys: ")
+        If (Local5)
+        {
+            Local1 = Zero
+            While (Local1 < 16)
+            {
+                Local2 = XBYT (Local5 + PRNM + Local1)
+                If (!Local2) { Break }
+                SPUT (Local2)
+                Increment (Local1)
+            }
+            NSYP (" pid=")
+            NSYD (XVWD (Local5 + PRID, Ones))
+        }
+        Else { NSYP ("<kernel>") }
+        NSYP (" nr=")
+        NSYD (Arg2)
+        If (Local4 || Arg2 == 16 || Arg2 == 72) // ioctl/fcntl print 0 too
+        {
+            NSYP (" sub=0x")
+            Local1 = 64
+            While (Local1)
+            {
+                Local1 -= 4
+                If ((Local4 >> Local1) || !Local1)
+                {
+                    SPUT (DerefOf (Index (HEXD, (Local4 >> Local1) & 0xF)))
+                }
+            }
+        }
+        If (NSYV)
+        {
+            Local1 = NSYA (Arg1, Arg2)
+            If (Local1)
+            {
+                NSYP (" path=")
+                NSYU (Arg0, Local1, One)
+            }
+        }
+        NSYP (" err=")
+        NSYD (Local7)
+        SPUT (0x0D)
+        SPUT (0x0A)
+        Return (One)
     }
 
     Method (SYSC, 1, NotSerialized)
@@ -8374,6 +9176,17 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Local3 = VSLK (Arg0, XVWD (Local0 + 9 * 8, Ones), Local2,
                 XVWD (Local0 + 12 * 8, Ones))
         }
+        ElseIf (Local1 == 86 || Local1 == 265) // link, linkat
+        {
+            // The ext4 writer has no hard links. EPERM is what Linux returns
+            // for a filesystem without them, and callers fall back on it
+            // (fontconfig's cache lock retries with mkdir).
+            Local3 = Zero - One // EPERM
+        }
+        ElseIf (Local1 == 221) // fadvise64: advice only, nothing to do
+        {
+            Local3 = Zero
+        }
         ElseIf (Local1 == 35) // nanosleep
         {
             Local3 = SYNS (Arg0, Local2)
@@ -8501,7 +9314,8 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             If ((Local2 & 0xFFFFFFFF) == One)
             {
                 Local3 = Zero - 94 // ESOCKTNOSUPPORT
-                If ((Local4 & ~0x80800) == One)
+                Local5 = Local4 & ~0x80800
+                If (Local5 == One || Local5 == 2 || Local5 == 5) // STREAM, DGRAM, SEQPACKET
                 {
                     Local3 = Zero - 93 // EPROTONOSUPPORT
                     If (!(XVWD (Local0 + 12 * 8, Ones) & 0xFFFFFFFF))
@@ -8614,7 +9428,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             PLAT (Arg0, Local1, Local4)
             If (!Local3) { Return (One) }
         }
-        ElseIf (Local1 == 61) // wait4
+        ElseIf (Local1 == 61 || Local1 == 247) // wait4, waitid (SYWT reads RAX)
         {
             Local3 = SYWT (Arg0, Local0)
             If (Local3 == Ones)
@@ -8745,6 +9559,19 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
                 XSTQ (Arg0 + TSFS, Local4)
                 Local3 = Zero
             }
+            ElseIf (Local2 == 0x1001 && Local4 < USTP) // ARCH_SET_GS
+            {
+                XSTQ (Arg0 + TSGS, Local4)
+                Local3 = Zero
+            }
+            ElseIf (Local2 == 0x1003 || Local2 == 0x1004) // ARCH_GET_FS, ARCH_GET_GS
+            {
+                Local5 = TSFS
+                If (Local2 == 0x1004) { Local5 = TSGS }
+                XSTQ (XADR (SKCN), XVWD (Arg0 + Local5, Ones))
+                Local3 = Zero - 14
+                If (UCOP (Arg0, Local4, XADR (SKCN), 8)) { Local3 = Zero }
+            }
         }
         ElseIf (Local1 == 39 || Local1 == 186 || Local1 == 218) // getpid / gettid / set_tid_address
         {
@@ -8766,6 +9593,10 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
         {
             Local3 = SGTK (Arg0, XVWD (Local0 + 9 * 8, Ones) & 0xFFFFFFFF,
                 XVWD (Local0 + 12 * 8, Ones) & 0xFFFFFFFF, Local2 & 0xFFFFFFFF)
+        }
+        ElseIf (Local1 == 157) // prctl
+        {
+            Local3 = SYPC (Arg0, Local2, XVWD (Local0 + 9 * 8, Ones))
         }
         ElseIf (Local1 == 102 || Local1 == 104 || Local1 == 107 || Local1 == 108)
         {
@@ -8837,6 +9668,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Local3 = SYPP (Arg0, Local0)
             If (Local3 == Ones) { Return (Zero) }
         }
+        If (NSYL && (Local3 >> 63)) { NSYC (Arg0, Local0, Local1, Local3) }
         XSTQ (Local0 + 14 * 8, Local3)
         Return (One)
     }
@@ -9074,6 +9906,7 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 UKRN (Local0, Local4)
                 XMSR (0xC0000100, XVWD (Local0 + TSFS, Ones))
+                If (XVWD (Local0 + TSGS, Ones)) { XMSR (0xC0000102, XVWD (Local0 + TSGS, Ones)) }
             }
             Increment (SACT)
             XKMK ()
@@ -9081,7 +9914,11 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             Local6 = XTSC ()
             Local1 = XRUN (Local3, Local0 + TSFR, Local2, Local4, Local0 + TSFX)
             Local7 = XTSC ()
-            If (Local4) { XMSR (0xC0000100, Zero) }
+            If (Local4)
+            {
+                XMSR (0xC0000100, Zero)
+                XMSR (0xC0000102, Zero) // Unconditional: the run may have cleared TSGS.
+            }
             XSLK ()
             If (KPRF && Local4)
             {
@@ -9648,6 +10485,12 @@ DefinitionBlock ("", "DSDT", 2, "AMLAOT", "ACPIKRNL", 1)
             {
                 NULD = VNOD (Local0, XADR (NULN), SizeOf (NULN), 0)
                 If (NULD) { XSTQ (NULD + VNMD, 0x21B6) }
+                RNDD = VNOD (Local0, XADR (RNDN), SizeOf (RNDN), 0)
+                If (RNDD) { XSTQ (RNDD + VNMD, 0x21B6) }
+                URND = VNOD (Local0, XADR (URNN), SizeOf (URNN), 0)
+                If (URND) { XSTQ (URND + VNMD, 0x21B6) }
+                ZROD = VNOD (Local0, XADR (ZRON), SizeOf (ZRON), 0)
+                If (ZROD) { XSTQ (ZROD + VNMD, 0x21B6) }
                 VNOD (Local0, XADR (FBNM), SizeOf (FBNM), 12)
                 KSND = VNOD (Local0, XADR (KSNM), SizeOf (KSNM), 2)
                 MSND = VNOD (Local0, XADR (MSNM), SizeOf (MSNM), 2)

@@ -267,6 +267,15 @@ XORG_TLS_FILES := $(foreach lib,$(XORG_TLS_LIBS),usr/lib/$(lastword $(subst :, ,
 	etc/ssl/openssl.cnf=$(XORG_BUILD)/tls/openssl.cnf \
 	etc/ssl/certs/ca-certificates.crt=$(XORG_BUILD)/tls/ca-certificates.crt \
 	'etc/ssl/cert.pem->certs/ca-certificates.crt'
+# Firefox probe (FIREFOX_PORT.md P3): Alpine's prebuilt firefox-esr and its
+# dependencies in /opt/alpine (scripts/fetch-alpine-firefox.py), started by
+# `firefox-probe`. Replaced by the source build in phase F.
+XORG_ALPINE := $(abspath ../target/alpine-firefox)
+XORG_ALPINE_DEPS := $(XORG_ALPINE)/.fetched config/firefox-probe config/firefox-fonts.conf config/firefox-prefs.js config/ld-musl-x86_64.path
+XORG_ALPINE_FILES := opt/alpine=$(XORG_ALPINE)/root bin/firefox-probe=config/firefox-probe \
+	etc/fonts/firefox.conf=config/firefox-fonts.conf \
+	opt/alpine/usr/lib/firefox-esr/browser/defaults/preferences/acpi-os.js=config/firefox-prefs.js \
+	etc/ld-musl-x86_64.path=config/ld-musl-x86_64.path
 # Web browser: NetSurf's framebuffer frontend in an X11 window (recipes/netsurf).
 XORG_NETSURF_DEPS := $(XORG_BUILD)/netsurf $(XORG_BUILD)/netsurf-res
 XORG_NETSURF_FILES := bin/netsurf=$(XORG_BUILD)/netsurf usr/share/netsurf=$(XORG_BUILD)/netsurf-res
@@ -305,6 +314,10 @@ $(XORG_LWJGL_JARS)/.fetched: scripts/fetch-lwjgl.sh
 
 $(XORG_MINECRAFT)/.fetched: scripts/fetch-minecraft.sh
 	scripts/fetch-minecraft.sh $(XORG_MINECRAFT)
+	touch $@
+
+$(XORG_ALPINE)/.fetched: scripts/fetch-alpine-firefox.py
+	python3 -I scripts/fetch-alpine-firefox.py
 	touch $@
 $(eval $(call jinx_artifact,$(XORG_BUILD)/xsetroot,xsetroot,usr/bin/xsetroot))
 $(eval $(call jinx_artifact,$(XORG_BUILD)/xwallpaper,xwallpaper,usr/bin/xwallpaper))
@@ -415,9 +428,9 @@ $(XORG_BUILD)/hello-dynamic: userspace/hello-dynamic.c $(XORG_MUSL_SHARED)
 		"$$(gcc -print-libgcc-file-name)" "$(XORG_BUILD)/musl-shared/lib/crtn.o" -o $@
 
 $(XORG_DISK): scripts/pack-xorg-disk.sh $(XORG_DESKTOP_BUILD)/kernel.elf $(LIMINE_DIR)/BOOTX64.EFI \
-	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_BUILD)/uacpi-tests config/uacpi-run-tests config/bashrc $(XORG_BUILD)/python-lib $(XORG_BUILD)/lite-xl-data $(XORG_BUILD)/openjdk $(XORG_BUILD)/libasound.so.2 $(BASH_BUILD)/bash.elf $(XORG_BUILD)/git-upload-pack $(XORG_BUILD)/git-template-description $(XORG_DATA) $(XORG_BUILD)/magic.mgc $(XORG_BUILD)/XCalc.ad $(XORG_BUILD)/clang-resource $(XORG_BUILD)/libc-include $(XORG_BUILD)/musl-runtime config/clang.cfg config/pthread-test.c $(XORG_BUILD)/pci.ids config/picom.conf config/lua-test.lua config/sqlite3-test.sh config/acpi-example.asl config/python-test.py config/python-static-modules.txt $(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) $(addprefix $(XORG_BUILD)/,$(XORG_DEJAVU_FONTS)) $(XORG_MUSL_SHARED) $(XORG_BUILD)/hello-dynamic $(XORG_GL_DEPS) $(XORG_LWJGL_DEPS) $(XORG_MINECRAFT_DEPS) $(XORG_TLS_DEPS) $(XORG_NETSURF_DEPS) catflare.gif Makefile
+	$(XORG_DISK_CONFIG) $(XORG_APPS) $(XORG_BUILD)/uacpi-tests config/uacpi-run-tests config/bashrc $(XORG_BUILD)/python-lib $(XORG_BUILD)/lite-xl-data $(XORG_BUILD)/openjdk $(XORG_BUILD)/libasound.so.2 $(BASH_BUILD)/bash.elf $(XORG_BUILD)/git-upload-pack $(XORG_BUILD)/git-template-description $(XORG_DATA) $(XORG_BUILD)/magic.mgc $(XORG_BUILD)/XCalc.ad $(XORG_BUILD)/clang-resource $(XORG_BUILD)/libc-include $(XORG_BUILD)/musl-runtime config/clang.cfg config/pthread-test.c $(XORG_BUILD)/pci.ids config/picom.conf config/lua-test.lua config/sqlite3-test.sh config/acpi-example.asl config/python-test.py config/python-static-modules.txt $(XORG_WALLPAPER) $(XORG_WALLPAPER_CREDIT) $(XORG_TERMINFO) $(XORG_FS_TOOLS) $(XORG_LS) $(XORG_FONT) $(addprefix $(XORG_BUILD)/,$(XORG_DEJAVU_FONTS)) $(XORG_MUSL_SHARED) $(XORG_BUILD)/hello-dynamic $(XORG_GL_DEPS) $(XORG_LWJGL_DEPS) $(XORG_MINECRAFT_DEPS) $(XORG_TLS_DEPS) $(XORG_NETSURF_DEPS) $(XORG_ALPINE_DEPS) catflare.gif Makefile
 	sh $< "$@" "$(XORG_DESKTOP_BUILD)/kernel.elf" "$(LIMINE_DIR)/BOOTX64.EFI" \
-		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_BASH) $(XORG_DATA) $(XORG_PICOM_CONFIG) $(XORG_CONKY_CONFIG) .bashrc=config/bashrc $(XORG_LUA_TEST) $(XORG_IASL_EXAMPLE) $(XORG_UACPI_TESTS) bin/uacpi-run-tests=config/uacpi-run-tests bin/sqlite3-test=config/sqlite3-test.sh $(XORG_PYTHON_LIB) $(XORG_PYTHON_TEST) $(XORG_PYTHON_MARKER) $(XORG_FILE_MAGIC) $(XORG_XCALC_APPDEFAULTS) $(XORG_CLANG_FILES) $(XORG_DYNAMIC_FILES) $(XORG_PCI_IDS) $(XORG_LITE_XL_DATA) $(XORG_JDK_FILES) $(XORG_GL_FILES) $(XORG_LWJGL_FILES) $(XORG_MINECRAFT_FILES) $(XORG_TLS_FILES) $(XORG_NETSURF_FILES) $(XORG_WALLPAPER_FILES) usr/libexec/git-core/git-upload-pack=$(XORG_BUILD)/git-upload-pack usr/share/git-core/templates/description=$(XORG_BUILD)/git-template-description usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
+		"$(XORG_DISK_CONFIG)" $(call guest_bins,$(XORG_APPS)) $(XORG_BASH) $(XORG_DATA) $(XORG_PICOM_CONFIG) $(XORG_CONKY_CONFIG) .bashrc=config/bashrc $(XORG_LUA_TEST) $(XORG_IASL_EXAMPLE) $(XORG_UACPI_TESTS) bin/uacpi-run-tests=config/uacpi-run-tests bin/sqlite3-test=config/sqlite3-test.sh $(XORG_PYTHON_LIB) $(XORG_PYTHON_TEST) $(XORG_PYTHON_MARKER) $(XORG_FILE_MAGIC) $(XORG_XCALC_APPDEFAULTS) $(XORG_CLANG_FILES) $(XORG_DYNAMIC_FILES) $(XORG_PCI_IDS) $(XORG_LITE_XL_DATA) $(XORG_JDK_FILES) $(XORG_GL_FILES) $(XORG_LWJGL_FILES) $(XORG_MINECRAFT_FILES) $(XORG_TLS_FILES) $(XORG_NETSURF_FILES) $(XORG_ALPINE_FILES) $(XORG_WALLPAPER_FILES) usr/libexec/git-core/git-upload-pack=$(XORG_BUILD)/git-upload-pack usr/share/git-core/templates/description=$(XORG_BUILD)/git-template-description usr/share/terminfo/s/st-256color=$(XORG_TERMINFO) \
 		bin/ls=$(XORG_LS) $(foreach cmd,$(XORG_FS_COMMANDS),bin/$(cmd)=$(XORG_FS_TOOLS)) \
 		fonts/dwm-font.ttf="$(XORG_FONT)" $(XORG_FONT_FILES) catflare.gif=catflare.gif
 
@@ -433,7 +446,8 @@ run-xorg-uefi: private SMP_CPUS = 6
 run-xorg-uefi: xorg-desktop-image
 	@echo "X.Org VM: accel=$(XORG_ACCEL) cpu=$(XORG_CPU) vcpus=$(SMP_CPUS)"
 	@echo "X.Org serial log: $(XORG_DESKTOP_BUILD)/serial.log"
-	flock -n "$(XORG_DISK).lock" $(QEMU) -m 8G -accel $(XORG_ACCEL) -cpu $(XORG_CPU) -smp $(SMP_CPUS) -monitor none -no-reboot \
+	flock -n "$(XORG_DISK).lock" $(QEMU) -m 8G -accel $(XORG_ACCEL) -cpu $(XORG_CPU) -smp $(SMP_CPUS) -no-reboot \
+		-monitor unix:"$(XORG_DESKTOP_BUILD)/monitor.sock",server=on,wait=off \
 		$(if $(XORG_DISPLAY),-display $(XORG_DISPLAY)) \
 		$(if $(XORG_VGAMEM),-global VGA.vgamem_mb=$(XORG_VGAMEM)) \
 		-chardev stdio,id=serial,logfile="$(XORG_DESKTOP_BUILD)/serial.log",logappend=off -serial chardev:serial \

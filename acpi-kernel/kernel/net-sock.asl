@@ -663,7 +663,13 @@
         Local1 = Local2
         If (XVWD (Local1, Ones) != XADR (INND))
         {
-            If (XVWD (Local1, Ones) == XADR (SKND)) { Return (Zero - 38) }
+            If (XVWD (Local1, Ones) == XADR (SKND))
+            {
+                If (Local0 == 48) { Return (Zero - 38) } // shutdown
+                Return (SKOP (Arg0, Local1, Local0 == 55, XVWD (Arg1 + 9 * 8, Ones) & 0xFFFFFFFF,
+                    XVWD (Arg1 + 12 * 8, Ones) & 0xFFFFFFFF, XVWD (Arg1 + 5 * 8, Ones),
+                    XVWD (Arg1 + 7 * 8, Ones)))
+            }
             Return (Zero - 88) // ENOTSOCK
         }
         Local2 = XVWD (Arg1 + 9 * 8, Ones) & 0xFFFFFFFF
